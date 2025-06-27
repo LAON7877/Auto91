@@ -1,21 +1,53 @@
-# API 技術參考
+# API 參考文檔
 
-## 主要 API 一覽
+## 交易日狀態 API
 
-- `/api/login`：登入系統
-- `/api/logout`：登出系統
-- `/api/account/status`：查詢帳戶狀態
-- `/api/position/status`：查詢持倉狀態
-- `/api/trading/status`：查詢交易日/交割日/開市狀態
-- `/api/ngrok/status`：查詢 ngrok 狀態
-- `/api/ngrok/update`：ngrok 自動更新
-- `/api/sinopac/status`：查詢永豐 API 狀態
-- `/api/sinopac/update`：shioaji 自動更新
-- `/api/close_application`：關閉主程式
+### GET /api/trading/status
+**重要**：這是交易日判斷的核心API，所有前端都依賴此API
 
-## 回傳格式
-所有 API 回傳皆為 JSON 格式，包含 status、data、error 等欄位。
+#### 回應格式
+```json
+{
+  "status": "success",
+  "current_datetime": "2025/01/XX XX:XX:XX",
+  "weekday": "週X",
+  "trading_day_status": "交易日|非交易日",
+  "delivery_day_status": "交割日|非交割日", 
+  "market_status": "開市|關市",
+  "is_trading_day": true|false,
+  "is_delivery_day": true|false,
+  "is_market_open": true|false
+}
+```
+
+#### 交易日判斷邏輯
+- **源頭**：`main.py` 中的 `is_trading_day_advanced()` 函數
+- **週日**：固定為非交易日
+- **週一至週六**：預設為交易日（週六有夜盤）
+- **特殊日期**：根據 `holidaySchedule_XXX.csv` 檔案（民國年格式）
+
+#### 交易時段判斷
+- **早盤**：08:45-13:45
+- **夜盤**：14:50-次日05:00
+- **週六夜盤**：到週六凌晨05:00結束
+
+## 其他 API
+
+### GET /api/account/status
+帳戶狀態查詢
+
+### GET /api/position/status  
+持倉狀態查詢
+
+### POST /api/login
+登入永豐API
+
+### POST /api/logout
+登出永豐API
+
+### GET /api/ngrok/status
+ngrok 狀態查詢
 
 ---
 
-詳細參數與範例請參考原始碼與前端 main.js。 
+**注意**：所有交易日相關判斷都統一使用 `/api/trading/status` API 

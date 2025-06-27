@@ -733,10 +733,10 @@ class HolidayCalendar:
         
         date_str = date.strftime('%Y-%m-%d')
         
-        # 週六日固定為非交易日
-        if date.weekday() >= 5:
+        # 週日固定為非交易日（週六有夜盤交易到凌晨05:00，所以週六是交易日）
+        if date.weekday() == 6:  # 週日
             if log_result:
-                logger.info(f"{date_str} 為週末，非交易日")
+                logger.info(f"{date_str} 為週日，非交易日")
             return False
         
         # 檢查假期表

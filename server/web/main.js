@@ -1741,9 +1741,9 @@ async function shouldUpdateAccountStatus() {
         return data.is_trading_day;
     } catch (error) {
         console.error('獲取交易日狀態失敗：', error);
-        // API失敗時，快速檢查：週末直接返回false
+        // API失敗時，快速檢查：週日直接返回false（週六有夜盤交易到凌晨05:00，所以週六是交易日）
         const dayOfWeek = now.getDay(); // 0=週日, 6=週六
-        return !(dayOfWeek === 0 || dayOfWeek === 6);
+        return !(dayOfWeek === 0); // 只有週日是非交易日
     }
 }
 

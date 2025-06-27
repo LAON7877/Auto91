@@ -14,6 +14,7 @@ import platform
 import zipfile
 import shutil
 from datetime import datetime, timezone, timedelta
+import csv
 
 # 永豐API相關
 try:
@@ -1473,30 +1474,33 @@ def api_trading_status():
         
         today = datetime.now()
         
-        # 判斷交易日 - 完全參考TXserver邏輯
+        # 判斷交易日 - 直接調用TXserver中的源頭方法
         def is_trading_day_advanced(check_date=None):
-            """交易日判斷邏輯，完全參考TXserver實現"""
+            """交易日判斷邏輯，獨立實現"""
             if check_date is None:
                 check_date = today.date()
             
-            # 週六日固定為非交易日
-            if check_date.weekday() >= 5:
+            # 週日固定為非交易日（週六有夜盤交易到凌晨05:00，所以週六是交易日）
+            if check_date.weekday() == 6:  # 週日
                 return False
             
-            # 檢查假期表 - 尋找今年度的holidaySchedule_XXX.csv檔案
+            # 檢查假期表 - 尋找當年度的holidaySchedule_XXX.csv檔案（民國年）
             try:
                 holiday_dir = os.path.join(os.path.dirname(__file__), 'holiday')
                 if os.path.exists(holiday_dir):
+                    # 轉換西元年為民國年（民國年 = 西元年 - 1911）
                     current_year = check_date.year
-                    # 尋找當年度的假期檔案
+                    roc_year = current_year - 1911
+                    
+                    # 尋找當年度的假期檔案（民國年格式）
                     holiday_files = [f for f in os.listdir(holiday_dir) 
                                    if f.startswith('holidaySchedule_') and f.endswith('.csv')]
                     
-                    # 嘗試找到包含當年度的檔案
+                    # 嘗試找到包含當年民國年的檔案
                     target_file = None
                     for filename in holiday_files:
-                        # 檔案名稱可能包含年份資訊
-                        if str(current_year) in filename:
+                        # 檔案名稱可能包含民國年資訊（如 holidaySchedule_114.csv）
+                        if str(roc_year) in filename:
                             target_file = filename
                             break
                     
