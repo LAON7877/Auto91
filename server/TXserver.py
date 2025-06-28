@@ -733,11 +733,27 @@ class HolidayCalendar:
         
         date_str = date.strftime('%Y-%m-%d')
         
-        # 週日固定為非交易日（週六有夜盤交易到凌晨05:00，所以週六是交易日）
+        # 週日固定為非交易日
         if date.weekday() == 6:  # 週日
             if log_result:
                 logger.info(f"{date_str} 為週日，非交易日")
             return False
+        
+        # 週六白天為非交易日，但週六晚上有夜盤交易
+        if date.weekday() == 5:  # 週六
+            current_time = datetime.now().time()
+            # 週六晚上 14:50 到隔天 05:01 有夜盤交易
+            night_start = datetime.strptime("14:50", "%H:%M").time()
+            night_end = datetime.strptime("05:01", "%H:%M").time()
+            
+            if current_time >= night_start or current_time <= night_end:
+                if log_result:
+                    logger.info(f"{date_str} 為週六夜盤交易時段，視為交易日")
+                return True
+            else:
+                if log_result:
+                    logger.info(f"{date_str} 為週六白天，非交易日")
+                return False
         
         # 檢查假期表
         if date in self.holidays:
@@ -1385,12 +1401,16 @@ def handle_futures_deal(deal):
             f"成交價格：{deal_data['price']:.0f}\n"
         )
         
-        success = send_telegram(msg)
-        if success:
-            # 移除詳細的成交日誌訊息，send_telegram函數內已有基本的成功訊息
-            pass
-        else:
-            logger.error(f"Telegram 訊息發送失敗｜成交單號：{trade_id}")
+        # 延遲3秒發送成交通知
+        def send_delayed_notification():
+            success = send_telegram(msg)
+            if success:
+                # 移除詳細的成交日誌訊息，send_telegram函數內已有基本的成功訊息
+                pass
+            else:
+                logger.error(f"Telegram 訊息發送失敗｜成交單號：{trade_id}")
+        
+        threading.Timer(3.0, send_delayed_notification).start()
     except Exception as e:
         logger.exception("[handle_futures_deal] 處理成交事件失敗 traceback：")
         send_telegram(f"❌ 處理成交通知失敗：{str(e)[:100]}")
@@ -2441,6 +2461,7 @@ def clear_old_order_octype():
     state.order_octype_map.clear()
 
 def generate_report(period='', date_str=None, trades=None):
+    global order_octype_map
     try:
         if period == 'daily':
             yesterday = (datetime.now() - timedelta(days=1)).date()
@@ -2544,9 +2565,19 @@ def generate_report(period='', date_str=None, trades=None):
             action_display = get_action_display_by_rule(octype, direction)
             order_type_display = get_order_type_display(price_type, order_type)
             
-            # 獲取成交相關的字段
-            exchange_seq = raw_data.get('exchange_seq', '') or order_info.get('exchange_seq', '')
-            ordno = raw_data.get('ordno', '') or order_info.get('ordno', '')
+            # 獲取成交相關的字段 - 直接從成交記錄的raw_data中獲取
+            exchange_seq = raw_data.get('exchange_seq', '')
+            ordno = raw_data.get('ordno', '')
+            
+            # 如果成交記錄中沒有，才嘗試從order_info_map獲取
+            if not exchange_seq:
+                exchange_seq = order_info.get('exchange_seq', '')
+            if not ordno:
+                ordno = order_info.get('ordno', '')
+            
+            # 添加調試日誌
+            logger.info(f"[DEBUG] trade_id={trade_id} raw_exchange_seq={raw_data.get('exchange_seq', 'None')} final_exchange_seq={exchange_seq}")
+            logger.info(f"[DEBUG] trade_id={trade_id} raw_ordno={raw_data.get('ordno', 'None')} final_ordno={ordno}")
             
             if octype == 'New':
                 open_trades[trade_id] = {
@@ -2585,8 +2616,8 @@ def generate_report(period='', date_str=None, trades=None):
                             'profit_loss': profit_loss,
                             'deal_time': datetime.fromtimestamp(raw_data.get('ts', 0)).strftime('%Y/%m/%d %H:%M'),
                             'time_ms': raw_data.get('ts', 0) if raw_data.get('ts') else 0,
-                            'exchange_seq': exchange_seq or open_trade.get('exchange_seq', '') or "未知",
-                            'ordno': ordno or open_trade.get('ordno', '') or "未知",
+                            'exchange_seq': exchange_seq if exchange_seq else (open_trade.get('exchange_seq', '') or "未知"),
+                            'ordno': ordno if ordno else (open_trade.get('ordno', '') or "未知"),
                             'contract_name': contract_name
                         })
                         del open_trades[open_trade_id]
@@ -2608,6 +2639,15 @@ def generate_report(period='', date_str=None, trades=None):
                 # 移除此日誌，因為不需要顯示
                 # logger.warning(f"df_trades 中缺少 time_ms 欄位，跳過刪除")
                 pass
+            
+            # 添加調試日誌檢查DataFrame中的值
+            if not df_trades.empty:
+                logger.info(f"[DEBUG DataFrame] paired_trades count: {len(paired_trades)}")
+                for i, trade in enumerate(paired_trades):
+                    logger.info(f"[DEBUG DataFrame] trade {i}: exchange_seq='{trade.get('exchange_seq', 'None')}' ordno='{trade.get('ordno', 'None')}'")
+                logger.info(f"[DEBUG DataFrame] df_trades columns: {list(df_trades.columns)}")
+                for idx, row in df_trades.iterrows():
+                    logger.info(f"[DEBUG DataFrame] row {idx}: exchange_seq='{row.get('exchange_seq', 'None')}' ordno='{row.get('ordno', 'None')}'")
 
         if period == 'daily':
             update_balance_cache(force_update=True)
@@ -2819,23 +2859,28 @@ def generate_report(period='', date_str=None, trades=None):
                     ordno = open_trade.get('ordno', '') or "未知"
                     actual_trade_id = trade_id
                 else:
-                    # 如果open_trades中沒有，則從當天交易記錄中查找
+                    # 如果open_trades中沒有，則從當天交易記錄中查找最新一筆符合合約與方向的成交
                     today = datetime.now().strftime("%Y%m%d")
                     filename = f"{LOG_DIR}/trades_{today}.json"
                     if os.path.exists(filename):
                         try:
-                            with open(filename, 'r') as f:
+                            with open(filename, 'r', encoding='utf-8') as f:
                                 today_trades = json.load(f)
-                            # 尋找匹配的成交記錄
-                            for trade_record in today_trades:
-                                if (trade_record.get('type') == 'deal' and 
-                                    trade_record.get('raw_data', {}).get('code') == pos.code and
-                                    trade_record.get('raw_data', {}).get('quantity') == abs(pos.quantity)):
-                                    raw_data = trade_record.get('raw_data', {})
-                                    exchange_seq = raw_data.get('exchange_seq', '') or "未知"
-                                    ordno = raw_data.get('ordno', '') or "未知"
-                                    actual_trade_id = raw_data.get('trade_id', '') or "未知"
-                                    break
+                            # 找出所有符合合約與方向的成交記錄
+                            matched_deals = [
+                                trade_record for trade_record in today_trades
+                                if trade_record.get('type') == 'deal'
+                                and trade_record.get('raw_data', {}).get('code') == pos.code
+                                and ((trade_record.get('raw_data', {}).get('action') == 'Buy' and pos.direction == Action.Buy)
+                                     or (trade_record.get('raw_data', {}).get('action') == 'Sell' and pos.direction == Action.Sell))
+                            ]
+                            # 取最新一筆
+                            if matched_deals:
+                                latest_deal = max(matched_deals, key=lambda d: d.get('raw_data', {}).get('ts', 0))
+                                raw_data = latest_deal.get('raw_data', {})
+                                exchange_seq = raw_data.get('exchange_seq', '') or "未知"
+                                ordno = raw_data.get('ordno', '') or "未知"
+                                actual_trade_id = raw_data.get('trade_id', '') or "未知"
                         except Exception:
                             pass  # 如果讀取失敗，使用預設值"未知"
                 
@@ -3093,14 +3138,14 @@ def monitor_connection():
 # run_scheduler
 def run_scheduler():
     # 每日 00:00 重置交易追蹤計數器，清除當日交易記錄
-    schedule.every().day.at("00:00").do(reset_trade_counter)
+    schedule.every().day.at("00:10").do(reset_trade_counter)
     # pending_deals 功能已移除，改為立即發送通知模式
     # 每日 00:02 清除舊的訂單開平記錄（order_octype_map）- 延後到報表生成後
-    schedule.every().day.at("00:02").do(clear_old_order_octype)
+    schedule.every().day.at("00:15").do(clear_old_order_octype)
    # 每日 14:50 若為交易日，更新保證金需求（margin_requirements），若有變動發送 Telegram 通知
     schedule.every().day.at("14:50").do(lambda: update_margin_requirements(is_scheduled=True) if holiday_calendar.is_trading_day(log_result=False) else None)
     # 每日 00:01 生成前一日交易日報，包含交易統計、帳戶狀態和持倉資訊
-    schedule.every().day.at("00:01").do(lambda: auto_daily_report() if was_yesterday_trading_day() else logger.info("📅 昨日非交易日，跳過日報"))
+    schedule.every().day.at("00:00").do(lambda: auto_daily_report() if was_yesterday_trading_day() else logger.info("📅 昨日非交易日，跳過日報"))
     # 每日 08:30 若為交易日，發送系統啟動訊息（非重啟模式），包含帳戶和持倉狀態
     schedule.every().day.at("08:30").do(lambda: send_startup_message(is_reboot=False) if holiday_calendar.is_trading_day(log_result=False) else None)
     # 每日 08:00 執行 TOKEN 重連（登出後重新登入），更新餘額，記錄日誌，無 Telegram 通知

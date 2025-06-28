@@ -960,20 +960,20 @@ function updateNgrokStatus(statusData) {
         // 只有在運行狀態才更新延遲時間和TTL
         if (!window.latencyInterval) {
             updateLatency(); // 立即更新一次
-            // 每10秒更新一次Latency
-            window.latencyInterval = setInterval(updateLatency, 10000);
+            // 每30秒更新一次Latency（與頁面初始化保持一致）
+            window.latencyInterval = setInterval(updateLatency, 30000);
         }
         if (!window.ttlInterval) {
             updateTTL(); // 立即更新一次
-            // 每10秒更新一次TTL
-            window.ttlInterval = setInterval(updateTTL, 10000);
+            // 每30秒更新一次TTL（與頁面初始化保持一致）
+            window.ttlInterval = setInterval(updateTTL, 30000);
         }
         
         // 更新請求日誌
         updateRequestsLog();
-        // 每5秒更新一次請求日誌
+        // 每10秒更新一次請求日誌（與頁面初始化保持一致）
         if (!window.requestsInterval) {
-            window.requestsInterval = setInterval(updateRequestsLog, 5000);
+            window.requestsInterval = setInterval(updateRequestsLog, 10000);
         }
     } else {
         // offline 或其他狀態，立即獲取一次延遲時間和TTL
@@ -1187,6 +1187,15 @@ function addSystemLog(message, type = 'info') {
     
     // 更新顯示
     updateSystemLogsDisplay();
+    
+    // 發送日誌到後端API（靜默處理，不阻塞前端）
+    fetch('/api/system_log', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: message, type: type })
+    }).catch(() => {
+        // 靜默處理錯誤，不影響前端功能
+    });
 }
 
 function updateSystemLogsDisplay() {
@@ -1282,18 +1291,38 @@ async function updateSinopacApiStatus() {
         
         const statusElement = document.getElementById('sinopac-api-status');
         const accountElement = document.getElementById('sinopac-account-id');
+        const durationElement = document.getElementById('connection-duration');
         
         if (statusElement && accountElement) {
             // 更新連線狀態 (三種狀態)
             if (data.connected && data.api_ready) {
                 statusElement.textContent = 'API已連線';
                 statusElement.className = 'status-value running';  // 綠色
+                
+                // 顯示連線時長
+                if (durationElement) {
+                    durationElement.style.display = 'inline';
+                    updateConnectionDuration();
+                }
             } else if (data.connected) {
                 statusElement.textContent = 'API連線中';
                 statusElement.className = 'status-value checking';  // 灰色，與ngrok的online狀態一樣
+                
+                // 顯示連線時長（但可能顯示「未連線」）
+                if (durationElement) {
+                    durationElement.style.display = 'inline';
+                    updateConnectionDuration();
+                }
             } else {
                 statusElement.textContent = 'API未連線';
                 statusElement.className = 'status-value stopped';  // 紅色
+                
+                // 顯示連線時長（顯示「-」）
+                if (durationElement) {
+                    durationElement.style.display = 'inline';
+                    durationElement.textContent = '-';
+                    durationElement.style.color = '#6c757d'; // 正常灰色
+                }
             }
             
             // 更新期貨帳號 (三種狀態)
@@ -1304,12 +1333,67 @@ async function updateSinopacApiStatus() {
         // 發生錯誤時顯示未連線
         const statusElement = document.getElementById('sinopac-api-status');
         const accountElement = document.getElementById('sinopac-account-id');
+        const durationElement = document.getElementById('connection-duration');
         
         if (statusElement && accountElement) {
             statusElement.textContent = '未連線';
             statusElement.className = 'status-value stopped';
             accountElement.textContent = '未獲取帳戶';
         }
+        
+        // 顯示連線時長（顯示「-」）
+        if (durationElement) {
+            durationElement.style.display = 'inline';
+            durationElement.textContent = '-';
+            durationElement.style.color = '#6c757d'; // 正常灰色
+        }
+    }
+}
+
+// 更新連線時長
+async function updateConnectionDuration() {
+    try {
+        const response = await fetch('/api/connection/duration');
+        const data = await response.json();
+        
+        const durationElement = document.getElementById('connection-duration');
+        if (durationElement) {
+            if (data.status === 'success') {
+                const durationHours = data.duration_hours;
+                const remainingHours = data.remaining_hours;
+                
+                // 檢查是否未連線
+                if (durationHours === -1) {
+                    durationElement.textContent = '-';
+                    durationElement.style.color = '#6c757d'; // 正常灰色
+                    return;
+                }
+                
+                // 格式化顯示
+                let durationText = `${durationHours.toFixed(1)}H`;
+                
+                // 如果剩餘時間少於1小時，顯示警告顏色
+                if (remainingHours < 1) {
+                    durationElement.style.color = '#FF9800'; // 橙色警告
+                } else {
+                    durationElement.style.color = '#6c757d'; // 正常灰色
+                }
+                
+                durationElement.textContent = durationText;
+            } else {
+                // API返回錯誤狀態
+                durationElement.textContent = '-';
+                durationElement.style.color = '#6c757d'; // 正常灰色
+            }
+        }
+    } catch (error) {
+        // API調用失敗時顯示「-」
+        const durationElement = document.getElementById('connection-duration');
+        if (durationElement) {
+            durationElement.textContent = '-';
+            durationElement.style.color = '#6c757d'; // 正常灰色
+        }
+        console.error('獲取連線時長失敗:', error);
     }
 }
 
@@ -1471,7 +1555,7 @@ function updateCurrentTime() {
             weekdayElement.className = 'ngrok-latency';
         }
         
-        console.log('時間已更新:', datetimeElement.textContent);
+        console.log('現在時間:', datetimeElement.textContent);
     } else {
         console.log('找不到current-datetime元素');
     }
@@ -1591,13 +1675,13 @@ document.addEventListener('DOMContentLoaded', () => {
     
     // 開始定期更新 ngrok 狀態和請求日誌
     refreshNgrokStatus();
-    setInterval(refreshNgrokStatus, 5000);
+    setInterval(refreshNgrokStatus, 30000); // 改為每30秒更新一次
     updateRequestsLog();
-    setInterval(updateRequestsLog, 2000);
+    setInterval(updateRequestsLog, 10000); // 改為每10秒更新一次
     updateLatency();
-    setInterval(updateLatency, 5000);
+    setInterval(updateLatency, 30000); // 改為每30秒更新一次
     updateTTL();
-    setInterval(updateTTL, 5000);
+    setInterval(updateTTL, 30000); // 改為每30秒更新一次
     
     // 初始化系統資訊
     updateSystemInfo();
@@ -1638,6 +1722,14 @@ document.addEventListener('DOMContentLoaded', () => {
     // 添加初始系統日誌
     addSystemLog('Auto91 交易系統已啟動', 'success');
     
+    // 初始化連線時長顯示
+    const durationElement = document.getElementById('connection-duration');
+    if (durationElement) {
+        durationElement.style.display = 'inline';
+        durationElement.textContent = '-';
+        durationElement.style.color = '#6c757d'; // 正常灰色
+    }
+    
     // 智能更新機制：只在登入後且在交易時段內的交易日每五分鐘自動更新
     // 將定時器ID存儲在全局變數中，以便登出時停止
     window.accountUpdateInterval = null;
@@ -1649,6 +1741,9 @@ document.addEventListener('DOMContentLoaded', () => {
             startAccountAutoUpdate();
         }, 3000);
     }
+    
+    // 設置連線時長更新（每分鐘更新一次）
+    setInterval(updateConnectionDuration, 60000);
 });
 
 // 緩存交易日狀態，避免頻繁API請求

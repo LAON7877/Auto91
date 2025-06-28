@@ -47,12 +47,14 @@ ngrok_process = None
 ngrok_status = "stopped"  # stopped, starting, running, error
 ngrok_version = None
 ngrok_update_available = False
+ngrok_auto_restart_timer = None  # 自動重啟定時器
 
 # 永豐API相關變數
 sinopac_api = None
 sinopac_connected = False
 sinopac_account = None
 sinopac_login_status = False
+sinopac_login_time = None  # 新增：記錄登入時間
 
 # 期貨合約相關變數
 futures_contracts = {
@@ -65,6 +67,10 @@ margin_requirements = {
     '小台': 0,
     '微台': 0
 }
+
+# 新增：12小時自動登出相關變數
+AUTO_LOGOUT_HOURS = 12  # 12小時自動登出
+auto_logout_timer = None  # 自動登出定時器
 
 ENV_TEMPLATE = '''# Telegram Bot
 BOT_TOKEN=7202376519:AAF-i3MbuMEpz0W7nFE9KmieqVw7L5s0xK4
@@ -340,6 +346,7 @@ def start_ngrok():
     global ngrok_process, ngrok_status
     
     try:
+        print("開始啟動 ngrok...")
         ngrok_status = "starting"
         ngrok_exe_path = os.path.join(os.path.dirname(__file__), 'ngrok.exe')
         
@@ -353,8 +360,11 @@ def start_ngrok():
         threading.Thread(target=check_update_background, daemon=True).start()
         
         if not os.path.exists(ngrok_exe_path):
+            print(f"ngrok.exe 不存在於路徑: {ngrok_exe_path}")
             ngrok_status = "error"
             return False
+        
+        print(f"找到 ngrok.exe: {ngrok_exe_path}")
         
         # 先檢查是否已經有ngrok在運行
         try:
@@ -374,40 +384,76 @@ def start_ngrok():
                     ngrok_status = "running"
                     print(f"ngrok已啟動，但沒有5002端口的tunnel，共有{len(tunnels)}個tunnel")
                     return True
-        except:
+        except Exception as e:
+            print(f"檢查現有ngrok狀態失敗: {e}")
             pass
         
         # 如果沒有ngrok在運行，啟動新的ngrok進程
+        print("啟動新的 ngrok 進程...")
+        
+        # 在背景運行 ngrok，不使用 CREATE_NEW_CONSOLE
         ngrok_process = subprocess.Popen(
-            [ngrok_exe_path, 'http', '5002', '--log=stdout'],
+            [ngrok_exe_path, 'http', '5002'],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True
         )
         
-        # 等待ngrok啟動並獲取URL
-        time.sleep(3)
+        print(f"ngrok 進程已啟動，PID: {ngrok_process.pid}")
         
-        # 嘗試從ngrok API獲取URL
-        try:
-            response = requests.get('http://localhost:4040/api/tunnels', timeout=5)
-            if response.status_code == 200:
-                tunnels = response.json()['tunnels']
-                if tunnels:
-                    # 找到對應5002端口的tunnel
-                    for tunnel in tunnels:
-                        config_addr = tunnel.get('config', {}).get('addr', '')
-                        if '5002' in config_addr:
-                            print(f"找到對應5002端口的tunnel: {tunnel.get('public_url', 'N/A')}")
-                            ngrok_status = "running"
-                            return True
-        except:
-            pass
+        # 等待ngrok啟動並獲取URL - 增加等待時間
+        print("等待 ngrok 啟動...")
+        time.sleep(5)  # 從3秒增加到5秒
         
-        ngrok_status = "error"
-        return False
+        # 多次嘗試從ngrok API獲取URL
+        max_attempts = 3
+        for attempt in range(max_attempts):
+            try:
+                print(f"第 {attempt + 1} 次嘗試獲取 ngrok tunnel 信息...")
+                response = requests.get('http://localhost:4040/api/tunnels', timeout=5)
+                if response.status_code == 200:
+                    tunnels = response.json()['tunnels']
+                    if tunnels:
+                        # 找到對應5002端口的tunnel
+                        for tunnel in tunnels:
+                            config_addr = tunnel.get('config', {}).get('addr', '')
+                            if '5002' in config_addr:
+                                print(f"ngrok 啟動成功！找到對應5002端口的tunnel: {tunnel.get('public_url', 'N/A')}")
+                                ngrok_status = "running"
+                                return True
+                        print("ngrok 啟動成功，但沒有找到5002端口的tunnel")
+                        ngrok_status = "running"
+                        return True
+                    else:
+                        print("ngrok API 返回空的 tunnels 列表")
+                else:
+                    print(f"ngrok API 返回錯誤狀態碼: {response.status_code}")
+            except Exception as e:
+                print(f"第 {attempt + 1} 次嘗試失敗: {e}")
+                if attempt < max_attempts - 1:
+                    print("等待2秒後重試...")
+                    time.sleep(2)
+        
+        # 檢查進程是否還在運行
+        if ngrok_process.poll() is None:
+            print("ngrok 進程仍在運行，但無法獲取 tunnel 信息")
+            print("請檢查 ngrok 視窗是否有錯誤訊息")
+            ngrok_status = "running"
+            return True
+        else:
+            print(f"ngrok 進程已退出，返回碼: {ngrok_process.returncode}")
+            # 嘗試讀取錯誤輸出
+            try:
+                stderr_output = ngrok_process.stderr.read()
+                if stderr_output:
+                    print(f"ngrok 錯誤輸出: {stderr_output}")
+            except:
+                pass
+            ngrok_status = "error"
+            return False
         
     except Exception as e:
+        print(f"啟動 ngrok 時發生錯誤: {e}")
         ngrok_status = "error"
         return False
 
@@ -423,7 +469,7 @@ def stop_ngrok():
 
 def get_ngrok_status():
     """獲取ngrok狀態"""
-    global ngrok_status
+    global ngrok_status, ngrok_auto_restart_timer
     
     try:
         # 獲取ngrok session狀態
@@ -468,6 +514,11 @@ def get_ngrok_status():
                     tunnel_urls.sort(key=lambda x: extract_local_port(x))
                     
                     ngrok_status = "running"
+                    # 取消自動重啟定時器
+                    if ngrok_auto_restart_timer:
+                        ngrok_auto_restart_timer.cancel()
+                        ngrok_auto_restart_timer = None
+                    
                     return {
                         'status': 'running',
                         'urls': tunnel_urls,
@@ -493,6 +544,11 @@ def get_ngrok_status():
             'message': 'checking ngrok status...'
         }
     else:
+        # 進程已停止，啟動自動重連
+        if ngrok_status == "running" and not ngrok_auto_restart_timer:
+            print("ngrok 進程已停止，啟動自動重連...")
+            start_ngrok_auto_restart()
+        
         # 進程已停止
         ngrok_status = "stopped"
         return {
@@ -518,8 +574,9 @@ def get_ngrok_latency():
                     if 'session' in data and 'legs' in data['session'] and len(data['session']['legs']) > 0:
                         latency = data['session']['legs'][0].get('latency', '0ms')
                         return {'latency': latency}
-    except Exception as e:
-        print(f"DEBUG: Error getting latency: {e}")
+    except Exception:
+        # 靜默處理錯誤，不輸出DEBUG訊息
+        pass
     
     return {'latency': '-'}
 
@@ -527,14 +584,14 @@ def get_ngrok_connections():
     """獲取ngrok連接統計信息"""
     try:
         # 先檢查ngrok狀態
-        status_response = requests.get('http://localhost:4040/api/tunnels', timeout=2)
+        status_response = requests.get('http://localhost:4040/api/tunnels', timeout=3)
         if status_response.status_code == 200:
             tunnels_data = status_response.json()
             tunnels = tunnels_data.get('tunnels', [])
             
             # 只有在有tunnel運行時才獲取連接統計
             if tunnels:
-                response = requests.get('http://localhost:4040/api/status', timeout=2)
+                response = requests.get('http://localhost:4040/api/status', timeout=3)
                 if response.status_code == 200:
                     data = response.json()
                     if 'session' in data and 'legs' in data['session'] and len(data['session']['legs']) > 0:
@@ -549,8 +606,9 @@ def get_ngrok_connections():
                             'p50': connections.get('p50', 0.00),
                             'p90': connections.get('p90', 0.00)
                         }
-    except Exception as e:
-        print(f"DEBUG: Error getting connections: {e}")
+    except Exception:
+        # 靜默處理錯誤，不輸出DEBUG訊息
+        pass
     
     return {
         'ttl': 0,
@@ -564,7 +622,7 @@ def get_ngrok_connections():
 def get_ngrok_requests():
     """獲取ngrok請求日誌"""
     try:
-        response = requests.get('http://localhost:4040/api/requests', timeout=2)
+        response = requests.get('http://localhost:4040/api/requests', timeout=3)
         if response.status_code == 200:
             data = response.json()
             requests_list = data.get('requests', [])
@@ -603,8 +661,9 @@ def get_ngrok_requests():
                 })
             
             return {'requests': formatted_requests}
-    except Exception as e:
-        print(f"DEBUG: Error getting requests: {e}")
+    except Exception:
+        # 靜默處理錯誤，不輸出DEBUG訊息
+        pass
     
     return {'requests': []}
 
@@ -798,235 +857,6 @@ def get_bot_username():
         return jsonify({'username': None})
     except Exception as e:
         return jsonify({'error': f'查詢失敗: {str(e)}'}), 500
-
-@app.route('/<path:path>')
-def static_files(path):
-    if path.startswith('api/'):
-        abort(404)
-    return send_from_directory(app.static_folder, path)
-
-@app.route('/favicon/<path:filename>')
-def serve_favicon(filename):
-    favicon_dir = os.path.join(os.path.dirname(__file__), 'favicon')
-    return send_from_directory(favicon_dir, filename)
-
-def start_flask():
-    app.run(port=5002, threaded=True)
-
-def start_webview():
-    # 創建webview視窗
-    window = webview.create_window(
-        'Auto91－交易系統', 
-        'http://127.0.0.1:5002',
-        width=1280,
-        height=960,
-        min_size=(1280, 960),
-        maximized=True
-    )
-    
-    # 綁定視窗關閉事件
-    def on_window_closing():
-        print("視窗關閉中，正在清理資源...")
-        cleanup_on_exit()
-        return True  # 允許關閉
-    
-    # 使用closing事件來確保在關閉前執行清理
-    window.events.closing += on_window_closing
-    
-    # 啟動webview
-    webview.start(debug=False)
-    
-    # webview關閉後不再重複顯示清理訊息
-
-# 永豐API相關函數
-def init_sinopac_api():
-    global sinopac_api
-    if not SHIOAJI_AVAILABLE:
-        return False
-    
-    try:
-        if sinopac_api is None:
-            sinopac_api = sj.Shioaji()
-        return True
-    except Exception as e:
-        print(f"初始化永豐API失敗: {e}")
-        return False
-
-def update_futures_contracts():
-    """更新期貨合約資訊"""
-    global futures_contracts, sinopac_api, sinopac_connected
-    
-    if not sinopac_api or not sinopac_connected:
-        return False
-    
-    try:
-        # 獲取各期貨合約的最新資訊
-        for code in ['TXF', 'MXF', 'TMF']:
-            contracts = sinopac_api.Contracts.Futures.get(code)
-            if contracts:
-                # 選擇最近的交割日期合約
-                sorted_contracts = sorted(contracts, key=lambda x: x.delivery_date)
-                futures_contracts[code] = sorted_contracts[0]
-        
-        return True
-    except Exception as e:
-        print(f"更新期貨合約失敗: {e}")
-        return False
-
-def update_margin_requirements_from_api():
-    """從台期所API更新保證金資訊"""
-    global margin_requirements
-    
-    try:
-        import requests
-        url = "https://openapi.taifex.com.tw/v1/IndexFuturesAndOptionsMargining"
-        response = requests.get(url)
-        
-        if response.status_code == 200:
-            data = response.json()
-            new_margins = {}
-            
-            for item in data:
-                contract = item.get('Contract', '')
-                margin = int(item.get('InitialMargin', 0))
-                
-                if contract == '臺股期貨':
-                    new_margins['大台'] = margin
-                elif contract == '小型臺指':
-                    new_margins['小台'] = margin  
-                elif contract == '微型臺指期貨':
-                    new_margins['微台'] = margin
-            
-            if new_margins:
-                margin_requirements.update(new_margins)
-                return True
-        
-        return False
-    except Exception as e:
-        print(f"更新保證金失敗: {e}")
-        return False
-
-def login_sinopac():
-    global sinopac_api, sinopac_connected, sinopac_account, sinopac_login_status
-    
-    try:
-        # 使用與main.py相同的方式載入.env設定
-        if DOTENV_AVAILABLE and os.path.exists(ENV_PATH):
-            load_dotenv(ENV_PATH)
-        
-        api_key = os.getenv('API_KEY', '')
-        secret_key = os.getenv('SECRET_KEY', '')
-        person_id = os.getenv('PERSON_ID', '')
-        ca_passwd = os.getenv('CA_PASSWD', '')
-        ca_path = os.getenv('CA_PATH', '')
-        
-        # 初始化API
-        if sinopac_api:
-            try:
-                sinopac_api.logout()
-            except:
-                pass
-        
-        sinopac_api = sj.Shioaji()
-        
-        # API登入
-        sinopac_api.login(api_key=api_key, secret_key=secret_key)
-        
-        # 激活CA憑證
-        cert_file = None
-        if os.path.isfile(ca_path):
-            cert_file = ca_path
-        elif os.path.isdir(ca_path):
-            for file in os.listdir(ca_path):
-                if file.endswith('.pfx'):
-                    cert_file = os.path.join(ca_path, file)
-                    break
-        
-        if cert_file and os.path.exists(cert_file):
-            try:
-                sinopac_api.activate_ca(ca_path=cert_file, ca_passwd=ca_passwd, person_id=person_id)
-            except Exception:
-                # 憑證激活失敗，但繼續使用基本功能
-                pass
-        
-        # 設定期貨帳戶
-        try:
-            accounts = [acc for acc in sinopac_api.list_accounts() if acc.account_type == 'F']
-            if accounts:
-                sinopac_api.futopt_account = accounts[0]
-                sinopac_account = accounts[0].account_id
-            else:
-                sinopac_account = "無期貨帳戶"
-        except Exception:
-            sinopac_account = "帳戶設定失敗"
-        
-        sinopac_connected = True
-        sinopac_login_status = True
-        
-        # 登入成功後更新期貨合約和保證金資訊
-        update_futures_contracts()
-        update_margin_requirements_from_api()
-        
-        print("永豐API 登入成功！！！")
-        return True
-        
-    except Exception as e:
-        sinopac_connected = False
-        sinopac_login_status = False
-        sinopac_account = None
-        print(f"永豐API 登入失敗！！！ 錯誤：{str(e)}")
-        return False
-
-def logout_sinopac():
-    """登出永豐API"""
-    global sinopac_api, sinopac_connected, sinopac_account, sinopac_login_status
-    
-    try:
-        if sinopac_api and sinopac_connected:
-            sinopac_api.logout()
-        
-        sinopac_connected = False
-        sinopac_login_status = False
-        sinopac_account = None
-        print("永豐API登出成功！！！")
-        return True
-        
-    except Exception as e:
-        print(f"永豐API登出失敗: {e}")
-        sinopac_connected = False
-        sinopac_login_status = False
-        sinopac_account = None
-        return False
-
-def get_sinopac_status():
-    """獲取永豐API狀態"""
-    global sinopac_connected, sinopac_account, sinopac_login_status
-    
-    # 處理期貨帳戶顯示
-    if sinopac_account and sinopac_account not in ["無期貨帳戶", "帳戶設定失敗"]:
-        futures_display = sinopac_account  # 真實帳戶號碼
-    elif sinopac_account == "無期貨帳戶":
-        futures_display = "無期貨帳戶"
-    else:
-        futures_display = "未獲取帳戶"  # 包含未獲取和設定失敗的情況
-    
-    return {
-        "connected": sinopac_connected,
-        "status": sinopac_login_status,
-        "futures_account": futures_display,
-        "api_ready": sinopac_connected and sinopac_account is not None and sinopac_account != "無期貨帳戶" and sinopac_account != "帳戶設定失敗"
-    }
-
-def reset_login_flag():
-    update_login_status(0)
-    # 重置LOGIN時停止ngrok
-    stop_ngrok()
-    # 重置時也登出永豐API（如果已經初始化的話）
-    if sinopac_api is not None:
-        logout_sinopac()
-
-# 程式啟動時重置登入狀態
-reset_login_flag()
 
 @app.route('/api/login', methods=['POST'])
 def api_login():
@@ -1609,13 +1439,19 @@ def api_trading_status():
         # 判斷開市/關市狀態
         def is_market_open():
             """判斷是否為開市時間"""
-            # 如果不是交易日，直接返回關市
+            # 如果不是交易日，直接返回休市
             if not is_trading:
                 return False
             
             current_hour = today.hour
             current_minute = today.minute
             current_time = current_hour * 100 + current_minute  # HHMM格式
+            current_weekday = today.weekday()  # 0=週一, 6=週日
+            
+            # 週六特殊處理：週六凌晨05:00後為休市
+            if current_weekday == 5:  # 週六
+                if current_time >= 500:  # 05:00後
+                    return False  # 休市
             
             # 早盤：8:45-13:45
             morning_start = 845
@@ -1645,7 +1481,7 @@ def api_trading_status():
             'weekday': weekday_display,
             'trading_day_status': '交易日' if is_trading else '非交易日',
             'delivery_day_status': '交割日' if is_delivery else '非交割日',
-            'market_status': '開市' if is_open else '關市',
+            'market_status': '開市' if is_open else '休市',
             'is_trading_day': is_trading,
             'is_delivery_day': is_delivery,
             'is_market_open': is_open
@@ -1738,11 +1574,414 @@ def api_position_status():
             'error': f'獲取持倉狀態失敗: {str(e)}'
         }), 500
 
-def cleanup_on_exit():
-    """程式退出時的清理工作"""
-    global sinopac_api, sinopac_connected, sinopac_account, sinopac_login_status
+@app.route('/api/system_log', methods=['POST'])
+def api_system_log():
+    """接收前端系統日誌"""
+    try:
+        data = request.get_json()
+        message = data.get('message', '')
+        log_type = data.get('type', 'info')
+        
+        # 這裡可以添加後端日誌記錄邏輯
+        print(f"前端系統日誌 [{log_type.upper()}]: {message}")
+        
+        return jsonify({'status': 'success'})
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+@app.route('/api/connection/duration', methods=['GET'])
+def api_connection_duration():
+    """獲取連線時長信息"""
+    try:
+        duration_hours = get_connection_duration()
+        login_time = sinopac_login_time.isoformat() if sinopac_login_time else None
+        
+        return jsonify({
+            'status': 'success',
+            'duration_hours': round(duration_hours, 2),
+            'login_time': login_time,
+            'auto_logout_hours': AUTO_LOGOUT_HOURS,
+            'remaining_hours': max(0, AUTO_LOGOUT_HOURS - duration_hours)
+        })
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+@app.route('/api/close_application', methods=['POST'])
+def api_close_application():
+    """關閉整個應用程式"""
+    try:
+        # 執行清理工作
+        cleanup_on_exit()
+        
+        # 延遲一秒後關閉程式，確保清理工作完成
+        def delayed_exit():
+            time.sleep(1)
+            os._exit(0)  # 強制關閉整個程式
+        
+        threading.Thread(target=delayed_exit, daemon=True).start()
+        
+        return jsonify({
+            'status': 'success',
+            'message': '應用程式正在關閉...'
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'status': 'error',
+            'message': f'關閉程式失敗: {str(e)}'
+        }), 500
+
+@app.route('/<path:path>')
+def static_files(path):
+    if path.startswith('api/'):
+        abort(404)
+    return send_from_directory(app.static_folder, path)
+
+@app.route('/favicon/<path:filename>')
+def serve_favicon(filename):
+    favicon_dir = os.path.join(os.path.dirname(__file__), 'favicon')
+    return send_from_directory(favicon_dir, filename)
+
+def start_flask():
+    app.run(port=5002, threaded=True)
+
+def start_webview():
+    # 創建webview視窗
+    window = webview.create_window(
+        'Auto91－交易系統', 
+        'http://127.0.0.1:5002',
+        width=1280,
+        height=960,
+        min_size=(1280, 960),
+        maximized=True
+    )
+    
+    # 綁定視窗關閉事件
+    def on_window_closing():
+        print("視窗關閉中，正在清理資源...")
+        cleanup_on_exit()
+        return True  # 允許關閉
+    
+    # 使用closing事件來確保在關閉前執行清理
+    window.events.closing += on_window_closing
+    
+    # 啟動webview
+    webview.start(debug=False)
+    
+    # webview關閉後不再重複顯示清理訊息
+
+# 永豐API相關函數
+def init_sinopac_api():
+    global sinopac_api
+    if not SHIOAJI_AVAILABLE:
+        return False
     
     try:
+        if sinopac_api is None:
+            sinopac_api = sj.Shioaji()
+        return True
+    except Exception as e:
+        print(f"初始化永豐API失敗: {e}")
+        return False
+
+def update_futures_contracts():
+    """更新期貨合約資訊"""
+    global futures_contracts, sinopac_api, sinopac_connected
+    
+    if not sinopac_api or not sinopac_connected:
+        return False
+    
+    try:
+        # 獲取各期貨合約的最新資訊
+        for code in ['TXF', 'MXF', 'TMF']:
+            contracts = sinopac_api.Contracts.Futures.get(code)
+            if contracts:
+                # 選擇最近的交割日期合約
+                sorted_contracts = sorted(contracts, key=lambda x: x.delivery_date)
+                futures_contracts[code] = sorted_contracts[0]
+        
+        return True
+    except Exception as e:
+        print(f"更新期貨合約失敗: {e}")
+        return False
+
+def update_margin_requirements_from_api():
+    """從台期所API更新保證金資訊"""
+    global margin_requirements
+    
+    try:
+        import requests
+        url = "https://openapi.taifex.com.tw/v1/IndexFuturesAndOptionsMargining"
+        response = requests.get(url)
+        
+        if response.status_code == 200:
+            data = response.json()
+            new_margins = {}
+            
+            for item in data:
+                contract = item.get('Contract', '')
+                margin = int(item.get('InitialMargin', 0))
+                
+                if contract == '臺股期貨':
+                    new_margins['大台'] = margin
+                elif contract == '小型臺指':
+                    new_margins['小台'] = margin  
+                elif contract == '微型臺指期貨':
+                    new_margins['微台'] = margin
+            
+            if new_margins:
+                margin_requirements.update(new_margins)
+                return True
+        
+        return False
+    except Exception as e:
+        print(f"更新保證金失敗: {e}")
+        return False
+
+def login_sinopac():
+    global sinopac_api, sinopac_connected, sinopac_account, sinopac_login_status, sinopac_login_time, auto_logout_timer
+    
+    try:
+        # 使用與main.py相同的方式載入.env設定
+        if DOTENV_AVAILABLE and os.path.exists(ENV_PATH):
+            load_dotenv(ENV_PATH)
+        
+        api_key = os.getenv('API_KEY', '')
+        secret_key = os.getenv('SECRET_KEY', '')
+        person_id = os.getenv('PERSON_ID', '')
+        ca_passwd = os.getenv('CA_PASSWD', '')
+        ca_path = os.getenv('CA_PATH', '')
+        
+        # 初始化API
+        if sinopac_api:
+            try:
+                sinopac_api.logout()
+            except:
+                pass
+        
+        sinopac_api = sj.Shioaji()
+        
+        # API登入
+        sinopac_api.login(api_key=api_key, secret_key=secret_key)
+        
+        # 激活CA憑證
+        cert_file = None
+        if os.path.isfile(ca_path):
+            cert_file = ca_path
+        elif os.path.isdir(ca_path):
+            for file in os.listdir(ca_path):
+                if file.endswith('.pfx'):
+                    cert_file = os.path.join(ca_path, file)
+                    break
+        
+        if cert_file and os.path.exists(cert_file):
+            try:
+                sinopac_api.activate_ca(ca_path=cert_file, ca_passwd=ca_passwd, person_id=person_id)
+            except Exception:
+                # 憑證激活失敗，但繼續使用基本功能
+                pass
+        
+        # 設定期貨帳戶
+        try:
+            accounts = [acc for acc in sinopac_api.list_accounts() if acc.account_type == 'F']
+            if accounts:
+                sinopac_api.futopt_account = accounts[0]
+                sinopac_account = accounts[0].account_id
+            else:
+                sinopac_account = "無期貨帳戶"
+        except Exception:
+            sinopac_account = "帳戶設定失敗"
+        
+        sinopac_connected = True
+        sinopac_login_status = True
+        sinopac_login_time = datetime.now()  # 記錄登入時間
+        
+        # 啟動12小時自動登出定時器
+        start_auto_logout_timer()
+        
+        # 登入成功後更新期貨合約和保證金資訊
+        update_futures_contracts()
+        update_margin_requirements_from_api()
+        
+        print("永豐API 登入成功！！！")
+        return True
+        
+    except Exception as e:
+        sinopac_connected = False
+        sinopac_login_status = False
+        sinopac_account = None
+        sinopac_login_time = None
+        print(f"永豐API 登入失敗！！！ 錯誤：{str(e)}")
+        return False
+
+def logout_sinopac():
+    """登出永豐API"""
+    global sinopac_api, sinopac_connected, sinopac_account, sinopac_login_status, sinopac_login_time, auto_logout_timer
+    
+    try:
+        if sinopac_api and sinopac_connected:
+            sinopac_api.logout()
+        
+        sinopac_connected = False
+        sinopac_login_status = False
+        sinopac_account = None
+        sinopac_login_time = None
+        
+        # 停止自動登出定時器
+        stop_auto_logout_timer()
+        
+        print("永豐API登出成功！！！")
+        return True
+        
+    except Exception as e:
+        print(f"永豐API登出失敗: {e}")
+        sinopac_connected = False
+        sinopac_login_status = False
+        sinopac_account = None
+        sinopac_login_time = None
+        return False
+
+def start_auto_logout_timer():
+    """啟動12小時自動登出定時器"""
+    global auto_logout_timer
+    
+    # 如果已有定時器在運行，先停止它
+    stop_auto_logout_timer()
+    
+    # 計算12小時後的時間
+    logout_time = datetime.now() + timedelta(hours=AUTO_LOGOUT_HOURS)
+    
+    def auto_logout_task():
+        """12小時後自動登出並重新登入"""
+        global sinopac_connected, sinopac_login_status
+        
+        if sinopac_connected and sinopac_login_status:
+            print(f"目前連線已滿{AUTO_LOGOUT_HOURS}個小時，將自動登出並重新登入！")
+            
+            # 發送前端系統日誌
+            try:
+                requests.post('http://127.0.0.1:5002/api/system_log', 
+                            json={'message': f'目前連線已滿{AUTO_LOGOUT_HOURS}個小時，將自動登出並重新登入！', 'type': 'warning'},
+                            timeout=5)
+            except:
+                pass  # 如果前端不可用，靜默處理
+            
+            # 登出
+            logout_sinopac()
+            
+            # 等待1秒後重新登入
+            time.sleep(1)
+            
+            # 重新登入
+            if login_sinopac():
+                print("自動重新登入成功！")
+                # 發送前端系統日誌
+                try:
+                    requests.post('http://127.0.0.1:5002/api/system_log', 
+                                json={'message': '自動重新登入成功！', 'type': 'success'},
+                                timeout=5)
+                except:
+                    pass
+            else:
+                print("自動重新登入失敗！")
+                # 發送前端系統日誌
+                try:
+                    requests.post('http://127.0.0.1:5002/api/system_log', 
+                                json={'message': '自動重新登入失敗！', 'type': 'error'},
+                                timeout=5)
+                except:
+                    pass
+    
+    # 計算延遲時間（秒）
+    delay_seconds = AUTO_LOGOUT_HOURS * 3600
+    
+    # 啟動定時器
+    auto_logout_timer = threading.Timer(delay_seconds, auto_logout_task)
+    auto_logout_timer.daemon = True
+    auto_logout_timer.start()
+    
+    print(f"已啟動{AUTO_LOGOUT_HOURS}小時自動登出定時器，將於 {logout_time.strftime('%Y-%m-%d %H:%M:%S')} 自動登出")
+
+def stop_auto_logout_timer():
+    """停止自動登出定時器"""
+    global auto_logout_timer
+    
+    if auto_logout_timer and auto_logout_timer.is_alive():
+        auto_logout_timer.cancel()
+        auto_logout_timer = None
+        print("已停止自動登出定時器")
+
+def get_connection_duration():
+    """獲取當前連線時長（小時）"""
+    global sinopac_login_time, sinopac_connected
+    
+    if sinopac_login_time and sinopac_connected:
+        duration = datetime.now() - sinopac_login_time
+        return duration.total_seconds() / 3600  # 轉換為小時
+    elif not sinopac_connected:
+        return -1  # 未連線
+    else:
+        return 0  # 連線但沒有登入時間記錄
+
+def get_sinopac_status():
+    """獲取永豐API狀態"""
+    global sinopac_connected, sinopac_account, sinopac_login_status
+    
+    # 處理期貨帳戶顯示
+    if sinopac_account and sinopac_account not in ["無期貨帳戶", "帳戶設定失敗"]:
+        futures_display = sinopac_account  # 真實帳戶號碼
+    elif sinopac_account == "無期貨帳戶":
+        futures_display = "無期貨帳戶"
+    else:
+        futures_display = "未獲取帳戶"  # 包含未獲取和設定失敗的情況
+    
+    return {
+        "connected": sinopac_connected,
+        "status": sinopac_login_status,
+        "futures_account": futures_display,
+        "api_ready": sinopac_connected and sinopac_account is not None and sinopac_account != "無期貨帳戶" and sinopac_account != "帳戶設定失敗"
+    }
+
+def reset_login_flag():
+    update_login_status(0)
+    # 重置LOGIN時停止ngrok
+    stop_ngrok()
+    # 重置時也登出永豐API（如果已經初始化的話）
+    if sinopac_api is not None:
+        logout_sinopac()
+
+# 程式啟動時重置登入狀態
+reset_login_flag()
+
+def cleanup_on_exit():
+    """程式退出時的清理工作"""
+    global sinopac_api, sinopac_connected, sinopac_account, sinopac_login_status, auto_logout_timer, ngrok_process, ngrok_auto_restart_timer
+    
+    try:
+        # 停止自動登出定時器
+        stop_auto_logout_timer()
+        
+        # 停止自動重啟定時器
+        if ngrok_auto_restart_timer and ngrok_auto_restart_timer.is_alive():
+            ngrok_auto_restart_timer.cancel()
+            ngrok_auto_restart_timer = None
+        
+        # 關閉 ngrok 進程
+        if ngrok_process:
+            try:
+                print("正在關閉 ngrok 進程...")
+                ngrok_process.terminate()
+                # 等待最多3秒讓進程正常關閉
+                ngrok_process.wait(timeout=3)
+                print("ngrok 進程已關閉")
+            except subprocess.TimeoutExpired:
+                print("ngrok 進程關閉超時，強制終止...")
+                ngrok_process.kill()
+            except Exception as e:
+                print(f"關閉 ngrok 進程時發生錯誤: {e}")
+            finally:
+                ngrok_process = None
+        
         # 永豐API登出（靜默）
         if sinopac_api and sinopac_connected:
             sinopac_api.logout()
@@ -1896,30 +2135,64 @@ def check_ngrok_update_simple():
         print(f"簡單更新檢查失敗: {e}")
         return None
 
-@app.route('/api/close_application', methods=['POST'])
-def api_close_application():
-    """關閉整個應用程式"""
-    try:
-        # 執行清理工作
-        cleanup_on_exit()
+def start_ngrok_auto_restart():
+    """啟動 ngrok 自動重啟"""
+    global ngrok_auto_restart_timer, ngrok_process
+    
+    # 如果已有重啟定時器在運行，先取消
+    if ngrok_auto_restart_timer and ngrok_auto_restart_timer.is_alive():
+        ngrok_auto_restart_timer.cancel()
+    
+    def auto_restart_task():
+        """自動重啟 ngrok"""
+        global ngrok_process, ngrok_status, ngrok_auto_restart_timer
         
-        # 延遲一秒後關閉程式，確保清理工作完成
-        def delayed_exit():
-            time.sleep(1)
-            os._exit(0)  # 強制關閉整個程式
-        
-        threading.Thread(target=delayed_exit, daemon=True).start()
-        
-        return jsonify({
-            'status': 'success',
-            'message': '應用程式正在關閉...'
-        })
-        
-    except Exception as e:
-        return jsonify({
-            'status': 'error',
-            'message': f'關閉程式失敗: {str(e)}'
-        }), 500
+        try:
+            print("執行 ngrok 自動重啟...")
+            
+            # 確保舊進程已關閉
+            if ngrok_process:
+                try:
+                    ngrok_process.terminate()
+                    ngrok_process.wait(timeout=2)
+                except:
+                    pass
+                ngrok_process = None
+            
+            # 重新啟動 ngrok
+            if start_ngrok():
+                print("ngrok 自動重啟成功！")
+                # 發送前端系統日誌
+                try:
+                    requests.post('http://127.0.0.1:5002/api/system_log', 
+                                json={'message': 'ngrok 自動重啟成功！', 'type': 'success'},
+                                timeout=5)
+                except:
+                    pass
+            else:
+                print("ngrok 自動重啟失敗！")
+                # 發送前端系統日誌
+                try:
+                    requests.post('http://127.0.0.1:5002/api/system_log', 
+                                json={'message': 'ngrok 自動重啟失敗！', 'type': 'error'},
+                                timeout=5)
+                except:
+                    pass
+        except Exception as e:
+            print(f"ngrok 自動重啟時發生錯誤: {e}")
+        finally:
+            ngrok_auto_restart_timer = None
+    
+    # 延遲5秒後重啟，避免頻繁重啟
+    ngrok_auto_restart_timer = threading.Timer(5.0, auto_restart_task)
+    ngrok_auto_restart_timer.daemon = True
+    ngrok_auto_restart_timer.start()
+    print("已啟動 ngrok 自動重啟定時器，5秒後重啟")
+
+def signal_handler(signum, frame):
+    """信號處理函數"""
+    cleanup_on_exit()
+    sys.exit(0)
 
 if __name__ == '__main__':
     # 程式啟動時強制重置LOGIN為0，確保乾淨狀態

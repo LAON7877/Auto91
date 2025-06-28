@@ -1,5 +1,176 @@
 # API 參考文檔
 
+## ngrok 管理 API
+
+### GET /api/ngrok/status
+**ngrok 狀態查詢 API**
+
+#### 回應格式
+```json
+{
+  "status": "running|stopped|checking|error",
+  "urls": [
+    {
+      "name": "unnamed",
+      "url": "https://xxxx.ngrok.io",
+      "local_addr": "http://localhost:5002"
+    }
+  ],
+  "message": "online|offline|checking ngrok status..."
+}
+```
+
+#### 狀態說明
+- **running**：ngrok 正常運行，有可用的 tunnel
+- **stopped**：ngrok 已停止
+- **checking**：正在檢查 ngrok 狀態
+- **error**：ngrok 出現錯誤
+
+#### 自動重啟機制
+- 當狀態為 `stopped` 且之前為 `running` 時，系統會自動啟動重啟定時器
+- 5秒後自動重啟 ngrok 進程
+- 重啟成功後狀態恢復為 `running`
+
+### GET /api/ngrok/latency
+**ngrok 延遲查詢 API**
+
+#### 回應格式
+```json
+{
+  "latency": "15ms"
+}
+```
+
+#### 說明
+- 只有在 ngrok 正常運行時才返回延遲值
+- 無法獲取時返回 `"-"`
+
+### GET /api/ngrok/connections
+**ngrok 連接統計 API**
+
+#### 回應格式
+```json
+{
+  "ttl": 150,
+  "opn": 5,
+  "rt1": 0.15,
+  "rt5": 0.12,
+  "p50": 0.10,
+  "p90": 0.25
+}
+```
+
+#### 統計項目
+- **ttl**：總連接數
+- **opn**：當前開啟連接數
+- **rt1**：1分鐘平均響應時間
+- **rt5**：5分鐘平均響應時間
+- **p50**：50% 分位數響應時間
+- **p90**：90% 分位數響應時間
+
+### GET /api/ngrok/requests
+**ngrok 請求日誌 API**
+
+#### 回應格式
+```json
+{
+  "requests": [
+    {
+      "timestamp": "14:30:25.123 CST",
+      "method": "GET",
+      "uri": "/api/status",
+      "status": 200,
+      "status_text": "OK"
+    }
+  ]
+}
+```
+
+#### 說明
+- 只返回最近的 100 個請求
+- 時間格式為台灣時區 (CST)
+- 包含 HTTP 方法、URI、狀態碼和狀態文字
+
+### GET /api/ngrok/version
+**ngrok 版本信息 API**
+
+#### 回應格式
+```json
+{
+  "current_version": "3.23.3",
+  "update_available": false
+}
+```
+
+### POST /api/ngrok/check_update
+**檢查 ngrok 更新 API**
+
+#### 回應格式
+```json
+{
+  "status": "success",
+  "data": {
+    "update_available": true,
+    "current_version": "3.23.3",
+    "latest_version": "3.24.0",
+    "download_url": "https://..."
+  }
+}
+```
+
+### POST /api/ngrok/update
+**更新 ngrok API**
+
+#### 請求格式
+```json
+{
+  "download_url": "https://..."
+}
+```
+
+#### 回應格式
+```json
+{
+  "status": "success",
+  "message": "正在背景更新ngrok，請稍候..."
+}
+```
+
+#### 說明
+- 在背景執行更新，不阻塞主程式
+- 自動備份舊版本
+- 更新失敗時自動還原備份
+
+### POST /api/ngrok/start
+**手動啟動 ngrok API**
+
+#### 回應格式
+```json
+{
+  "success": true,
+  "status": {
+    "status": "running",
+    "urls": [...],
+    "message": "online"
+  }
+}
+```
+
+### POST /api/ngrok/stop
+**手動停止 ngrok API**
+
+#### 回應格式
+```json
+{
+  "success": true,
+  "status": {
+    "status": "stopped",
+    "urls": [],
+    "message": "offline"
+  }
+}
+```
+
 ## 交易日狀態 API
 
 ### GET /api/trading/status
@@ -31,6 +202,26 @@
 - **夜盤**：14:50-次日05:00
 - **週六夜盤**：到週六凌晨05:00結束
 
+## 系統日誌 API
+
+### POST /api/system_log
+**接收前端系統日誌 API**
+
+#### 請求格式
+```json
+{
+  "message": "系統日誌訊息",
+  "type": "info|warning|error|success"
+}
+```
+
+#### 回應格式
+```json
+{
+  "status": "success"
+}
+```
+
 ## 其他 API
 
 ### GET /api/account/status
@@ -45,9 +236,15 @@
 ### POST /api/logout
 登出永豐API
 
-### GET /api/ngrok/status
-ngrok 狀態查詢
+### GET /api/connection/duration
+獲取連線時長信息
+
+### POST /api/close_application
+關閉整個應用程式
 
 ---
 
-**注意**：所有交易日相關判斷都統一使用 `/api/trading/status` API 
+**注意**：
+1. 所有交易日相關判斷都統一使用 `/api/trading/status` API
+2. ngrok 相關 API 具有自動錯誤恢復機制，4040 API 錯誤會被靜默處理
+3. ngrok 狀態檢查包含自動重啟邏輯，確保服務持續可用 

@@ -1,11 +1,108 @@
 # 生產部署指南
 
-1. 建議使用 Linux 或 Windows Server 部署
-2. 安裝 Python 3.8+、pip、ngrok
-3. 設定環境變數與 .env 檔案
-4. 建立 systemd/service/batch 啟動腳本
-5. 建議定期備份 backup 資料夾與 logs
-6. 重要升級請先測試於測試環境
+## 系統要求
+
+1. **作業系統**：建議使用 Linux 或 Windows Server 部署
+2. **Python**：Python 3.8+ 與 pip
+3. **網路**：穩定的網路連線，支援 ngrok 服務
+4. **硬碟空間**：至少 1GB 可用空間
+
+## 部署流程
+
+### 1. 環境準備
+```bash
+# 安裝 Python 依賴
+pip install -r requirements.txt
+
+# 確保 ngrok.exe 存在於 server/ 目錄
+# 程式會自動檢查並下載最新版本
+```
+
+### 2. 設定配置
+```bash
+# 設定環境變數與 .env 檔案
+# 包含永豐 API 憑證、Telegram Bot 設定等
+```
+
+### 3. 啟動腳本設定
+```bash
+# Linux systemd 服務
+sudo systemctl enable autotx
+sudo systemctl start autotx
+
+# Windows 服務
+# 使用 NSSM 或 Task Scheduler 設定開機自啟
+```
+
+## ngrok 自動管理
+
+### 重要說明
+- **無需手動管理**：ngrok 由程式自動啟動、停止、重啟
+- **自動啟動**：程式啟動時自動啟動 ngrok 背景進程
+- **自動重啟**：檢測到 ngrok 異常時自動重啟（5秒延遲）
+- **自動關閉**：程式退出時自動清理 ngrok 進程
+- **自動升級**：背景檢查並支援 ngrok 版本自動更新
+
+### 部署注意事項
+1. **防火牆設定**：確保 5002 端口可被 ngrok 訪問
+2. **網路穩定性**：ngrok 需要穩定的網路連線
+3. **進程管理**：程式會自動管理 ngrok 進程，無需手動干預
+4. **資源清理**：程式退出時會自動清理所有資源
+
+### 監控建議
+- 定期檢查 `shioaji.log` 中的錯誤訊息
+- 監控 ngrok 狀態 API：`/api/ngrok/status`
+- 檢查前端系統日誌和 ngrok 請求日誌
+- 監控系統資源使用情況
+
+## 備份策略
+
+### 重要檔案備份
+- `backup/` 資料夾與所有文檔
+- `server/config/.env` 設定檔
+- `server/holiday/` 假期檔案
+- `server/certificate/` 憑證檔案
+- `shioaji.log` 交易日誌
+
+### 定期備份
+- 建議每日備份重要設定檔
+- 每週備份完整系統
+- 重要升級前進行完整備份
+
+## 升級流程
+
+### 重要升級注意事項
+1. **測試環境**：重要升級請先測試於測試環境
+2. **備份**：升級前進行完整備份
+3. **ngrok 管理**：升級後 ngrok 會自動重新啟動
+4. **版本檢查**：程式會自動檢查並更新 ngrok 版本
+
+### 升級步驟
+```bash
+# 1. 備份現有系統
+cp -r AutoTX AutoTX_backup_$(date +%Y%m%d)
+
+# 2. 更新程式碼
+git pull origin main
+
+# 3. 重啟服務
+sudo systemctl restart autotx
+
+# 4. 檢查狀態
+curl http://localhost:5002/api/ngrok/status
+```
+
+## 故障排除
+
+### 常見部署問題
+- **ngrok 無法啟動**：檢查網路連線和防火牆設定
+- **API 連線失敗**：檢查永豐 API 憑證和網路
+- **進程殘留**：確保程式正常退出，檢查 `cleanup_on_exit()` 執行
+
+### 緊急處理
+- 程式異常時會自動重啟 ngrok
+- 如需手動重啟，使用 `/api/ngrok/restart` API
+- 嚴重問題可重啟整個系統
 
 ---
 
