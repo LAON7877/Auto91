@@ -15,6 +15,9 @@ import zipfile
 import shutil
 from datetime import datetime, timezone, timedelta
 import csv
+import logging
+from flask_cors import CORS
+from logging.handlers import TimedRotatingFileHandler
 
 # 永豐API相關
 try:
@@ -40,7 +43,8 @@ except ImportError as e:
     except ImportError:
         DOTENV_AVAILABLE = False
 
-app = Flask(__name__, static_folder='web', static_url_path='')
+app = Flask(__name__, static_folder='web')
+CORS(app)
 
 # ngrok相關變數
 ngrok_process = None
@@ -372,17 +376,17 @@ def start_ngrok():
             if response.status_code == 200:
                 tunnels = response.json()['tunnels']
                 if tunnels:
-                    # 檢查是否有對應5002端口的tunnel
+                    # 檢查是否有對應當前端口的tunnel
                     for tunnel in tunnels:
                         config_addr = tunnel.get('config', {}).get('addr', '')
-                        if '5002' in config_addr:
-                            print(f"找到對應5002端口的tunnel: {tunnel.get('public_url', 'N/A')}")
+                        if str(CURRENT_PORT) in config_addr:
+                            print(f"找到對應{CURRENT_PORT}端口的tunnel: {tunnel.get('public_url', 'N/A')}")
                             ngrok_status = "running"
                             return True
                     
-                    # 如果沒有5002端口的tunnel，但有其他tunnel在運行，認為ngrok已經啟動
+                    # 如果沒有當前端口的tunnel，但有其他tunnel在運行，認為ngrok已經啟動
                     ngrok_status = "running"
-                    print(f"ngrok已啟動，但沒有5002端口的tunnel，共有{len(tunnels)}個tunnel")
+                    print(f"ngrok已啟動，但沒有{CURRENT_PORT}端口的tunnel，共有{len(tunnels)}個tunnel")
                     return True
         except Exception as e:
             print(f"檢查現有ngrok狀態失敗: {e}")
@@ -393,7 +397,7 @@ def start_ngrok():
         
         # 在背景運行 ngrok，不使用 CREATE_NEW_CONSOLE
         ngrok_process = subprocess.Popen(
-            [ngrok_exe_path, 'http', '5002'],
+            [ngrok_exe_path, 'http', str(CURRENT_PORT)],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True
@@ -401,54 +405,29 @@ def start_ngrok():
         
         print(f"ngrok 進程已啟動，PID: {ngrok_process.pid}")
         
-        # 等待ngrok啟動並獲取URL - 增加等待時間
-        print("等待 ngrok 啟動...")
-        time.sleep(5)  # 從3秒增加到5秒
+        # 等待 ngrok 啟動
+        time.sleep(3)
         
-        # 多次嘗試從ngrok API獲取URL
-        max_attempts = 3
-        for attempt in range(max_attempts):
-            try:
-                print(f"第 {attempt + 1} 次嘗試獲取 ngrok tunnel 信息...")
-                response = requests.get('http://localhost:4040/api/tunnels', timeout=5)
-                if response.status_code == 200:
-                    tunnels = response.json()['tunnels']
-                    if tunnels:
-                        # 找到對應5002端口的tunnel
-                        for tunnel in tunnels:
-                            config_addr = tunnel.get('config', {}).get('addr', '')
-                            if '5002' in config_addr:
-                                print(f"ngrok 啟動成功！找到對應5002端口的tunnel: {tunnel.get('public_url', 'N/A')}")
-                                ngrok_status = "running"
-                                return True
-                        print("ngrok 啟動成功，但沒有找到5002端口的tunnel")
+        # 檢查是否啟動成功
+        try:
+            response = requests.get('http://localhost:4040/api/tunnels', timeout=5)
+            if response.status_code == 200:
+                tunnels = response.json()['tunnels']
+                for tunnel in tunnels:
+                    config_addr = tunnel.get('config', {}).get('addr', '')
+                    # 找到對應當前端口的tunnel
+                    if str(CURRENT_PORT) in config_addr:
+                        print(f"ngrok 啟動成功！找到對應{CURRENT_PORT}端口的tunnel: {tunnel.get('public_url', 'N/A')}")
                         ngrok_status = "running"
                         return True
-                    else:
-                        print("ngrok API 返回空的 tunnels 列表")
-                else:
-                    print(f"ngrok API 返回錯誤狀態碼: {response.status_code}")
-            except Exception as e:
-                print(f"第 {attempt + 1} 次嘗試失敗: {e}")
-                if attempt < max_attempts - 1:
-                    print("等待2秒後重試...")
-                    time.sleep(2)
-        
-        # 檢查進程是否還在運行
-        if ngrok_process.poll() is None:
-            print("ngrok 進程仍在運行，但無法獲取 tunnel 信息")
-            print("請檢查 ngrok 視窗是否有錯誤訊息")
-            ngrok_status = "running"
-            return True
-        else:
-            print(f"ngrok 進程已退出，返回碼: {ngrok_process.returncode}")
-            # 嘗試讀取錯誤輸出
-            try:
-                stderr_output = ngrok_process.stderr.read()
-                if stderr_output:
-                    print(f"ngrok 錯誤輸出: {stderr_output}")
-            except:
-                pass
+                print("ngrok 啟動成功，但沒有找到當前端口的tunnel")
+                ngrok_status = "running"
+                return True
+            print("ngrok 啟動失敗")
+            ngrok_status = "error"
+            return False
+        except Exception as e:
+            print(f"檢查ngrok啟動狀態失敗: {e}")
             ngrok_status = "error"
             return False
         
@@ -1642,14 +1621,55 @@ def serve_favicon(filename):
     favicon_dir = os.path.join(os.path.dirname(__file__), 'favicon')
     return send_from_directory(favicon_dir, filename)
 
+# 端口設置
+def get_port():
+    """從根目錄的 port.txt 檔案讀取端口設置，若無則自動建立"""
+    try:
+        # 獲取根目錄路徑（server 資料夾的上一層）
+        root_dir = os.path.dirname(os.path.dirname(__file__))
+        port_file = os.path.join(root_dir, 'port.txt')
+        
+        if not os.path.exists(port_file):
+            # 自動建立預設 port.txt
+            with open(port_file, 'w', encoding='utf-8') as f:
+                f.write('port:5000\n')
+            return 5000
+        
+        with open(port_file, 'r', encoding='utf-8') as f:
+            content = f.read().strip()
+            # 解析 port:5000 格式
+            if ':' in content:
+                port_str = content.split(':')[1].strip()
+                try:
+                    port = int(port_str)
+                    if 1024 <= port <= 65535:  # 檢查端口範圍
+                        return port
+                except ValueError:
+                    pass
+            
+        # 格式錯誤也自動重建
+        with open(port_file, 'w', encoding='utf-8') as f:
+            f.write('port:5000\n')
+        return 5000
+    except Exception as e:
+        print(f"讀取端口設置失敗: {e}，使用預設端口 5000")
+        return 5000
+
+# 獲取當前端口
+CURRENT_PORT = get_port()
+
 def start_flask():
-    app.run(port=5002, threaded=True)
+    # 禁用 Flask 和 Werkzeug 的 GET 請求日誌輸出
+    log = logging.getLogger('werkzeug')
+    log.setLevel(logging.ERROR)  # 只顯示錯誤級別的日誌
+    
+    app.run(port=CURRENT_PORT, threaded=True)
 
 def start_webview():
     # 創建webview視窗
     window = webview.create_window(
         'Auto91－交易系統', 
-        'http://127.0.0.1:5002',
+        f'http://127.0.0.1:{CURRENT_PORT}',
         width=1280,
         height=960,
         min_size=(1280, 960),
@@ -1860,9 +1880,11 @@ def start_auto_logout_timer():
             
             # 發送前端系統日誌
             try:
-                requests.post('http://127.0.0.1:5002/api/system_log', 
-                            json={'message': f'目前連線已滿{AUTO_LOGOUT_HOURS}個小時，將自動登出並重新登入！', 'type': 'warning'},
-                            timeout=5)
+                requests.post(
+                    f'http://127.0.0.1:{CURRENT_PORT}/api/system_log',
+                    json={'message': f'目前連線已滿{AUTO_LOGOUT_HOURS}個小時，將自動登出並重新登入！', 'type': 'warning'},
+                    timeout=5
+                )
             except:
                 pass  # 如果前端不可用，靜默處理
             
@@ -1877,18 +1899,22 @@ def start_auto_logout_timer():
                 print("自動重新登入成功！")
                 # 發送前端系統日誌
                 try:
-                    requests.post('http://127.0.0.1:5002/api/system_log', 
-                                json={'message': '自動重新登入成功！', 'type': 'success'},
-                                timeout=5)
+                    requests.post(
+                        f'http://127.0.0.1:{CURRENT_PORT}/api/system_log',
+                        json={'message': '自動重新登入成功！', 'type': 'success'},
+                        timeout=5
+                    )
                 except:
                     pass
             else:
                 print("自動重新登入失敗！")
                 # 發送前端系統日誌
                 try:
-                    requests.post('http://127.0.0.1:5002/api/system_log', 
-                                json={'message': '自動重新登入失敗！', 'type': 'error'},
-                                timeout=5)
+                    requests.post(
+                        f'http://127.0.0.1:{CURRENT_PORT}/api/system_log',
+                        json={'message': '自動重新登入失敗！', 'type': 'error'},
+                        timeout=5
+                    )
                 except:
                     pass
     
@@ -2164,18 +2190,22 @@ def start_ngrok_auto_restart():
                 print("ngrok 自動重啟成功！")
                 # 發送前端系統日誌
                 try:
-                    requests.post('http://127.0.0.1:5002/api/system_log', 
-                                json={'message': 'ngrok 自動重啟成功！', 'type': 'success'},
-                                timeout=5)
+                    requests.post(
+                        f'http://127.0.0.1:{CURRENT_PORT}/api/system_log',
+                        json={'message': 'ngrok 自動重啟成功！', 'type': 'success'},
+                        timeout=5
+                    )
                 except:
                     pass
             else:
                 print("ngrok 自動重啟失敗！")
                 # 發送前端系統日誌
                 try:
-                    requests.post('http://127.0.0.1:5002/api/system_log', 
-                                json={'message': 'ngrok 自動重啟失敗！', 'type': 'error'},
-                                timeout=5)
+                    requests.post(
+                        f'http://127.0.0.1:{CURRENT_PORT}/api/system_log',
+                        json={'message': 'ngrok 自動重啟失敗！', 'type': 'error'},
+                        timeout=5
+                    )
                 except:
                     pass
         except Exception as e:
@@ -2193,6 +2223,42 @@ def signal_handler(signum, frame):
     """信號處理函數"""
     cleanup_on_exit()
     sys.exit(0)
+
+def check_daily_startup_notification():
+    """檢查是否需要發送每日啟動通知"""
+    try:
+        now = datetime.now()
+        current_time = now.hour * 100 + now.minute  # HHMM格式
+        # 只在早上8:30檢查
+        if current_time == 830:
+            # 檢查今天是否為交易日
+            response = requests.get(f'http://127.0.0.1:{CURRENT_PORT}/api/trading/status', timeout=5)
+            if response.status_code == 200:
+                data = response.json()
+                if data.get('is_trading_day', False):
+                    send_daily_startup_notification()
+    except Exception as e:
+        # 靜默處理錯誤
+        pass
+
+def get_version():
+    """獲取當前程式版本號"""
+    try:
+        # 獲取最新的 tag
+        result = subprocess.run(['git', 'describe', '--tags', '--abbrev=0'], 
+                              capture_output=True, text=True, check=True)
+        version = result.stdout.strip()
+        return version
+    except:
+        return 'v1.0.0'  # 如果無法獲取版本號，返回預設值
+
+@app.route('/api/version', methods=['GET'])
+def api_version():
+    """獲取程式版本號"""
+    version = get_version()
+    return jsonify({
+        'version': version
+    })
 
 if __name__ == '__main__':
     # 程式啟動時強制重置LOGIN為0，確保乾淨狀態

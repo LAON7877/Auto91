@@ -2574,3 +2574,94 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }, 3000);
 });
+
+// 重新整理合約資訊
+async function refreshContractInfo() {
+    const refreshBtn = document.getElementById('refresh-contract-btn');
+    
+    // 如果按鈕已經被禁用，直接返回
+    if (refreshBtn.disabled) return;
+    
+    try {
+        // 禁用按鈕並添加loading類
+        refreshBtn.disabled = true;
+        refreshBtn.classList.add('loading');
+
+        // 重新獲取合約資訊
+        const response = await fetch('/api/futures/contracts');
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        const data = await response.json();
+
+        // 更新合約資訊顯示
+        if (data.selected_contracts) {
+            document.getElementById('txf-contract').textContent = data.selected_contracts.TXF || '-';
+            document.getElementById('mxf-contract').textContent = data.selected_contracts.MXF || '-';
+            document.getElementById('tmf-contract').textContent = data.selected_contracts.TMF || '-';
+        }
+
+        // 更新可用合約列表
+        if (data.available_contracts) {
+            updateAvailableContracts('TXF', data.available_contracts.TXF);
+            updateAvailableContracts('MXF', data.available_contracts.MXF);
+            updateAvailableContracts('TMF', data.available_contracts.TMF);
+        }
+    } catch (error) {
+        console.error('更新合約資訊失敗:', error);
+    } finally {
+        // 移除loading類並恢復按鈕狀態
+        refreshBtn.classList.remove('loading');
+        refreshBtn.disabled = false;
+    }
+}
+
+// 獲取並更新版本號
+async function updateVersion() {
+    try {
+        const response = await fetch('/api/version');
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        const data = await response.json();
+        
+        // 更新兩個面板的版本號
+        document.getElementById('settings-version').textContent = data.version;
+        document.getElementById('trade-version').textContent = data.version;
+    } catch (error) {
+        console.error('獲取版本號失敗:', error);
+        // 如果獲取失敗，顯示預設版本號
+        document.getElementById('settings-version').textContent = 'v1.0.0';
+        document.getElementById('trade-version').textContent = 'v1.0.0';
+    }
+}
+
+// 在頁面載入和登入成功後更新版本號
+document.addEventListener('DOMContentLoaded', () => {
+    updateVersion();
+    // ... existing code ...
+});
+
+// 在登入成功後也更新版本號
+async function login() {
+    // ... existing login code ...
+    try {
+        const response = await fetch('/api/login', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            }
+        });
+        
+        if (response.ok) {
+            // ... existing success code ...
+            updateVersion();  // 更新版本號
+        } else {
+            // ... existing error code ...
+        }
+    } catch (error) {
+        // ... existing error handling ...
+    }
+}
+
+// ... existing code ...

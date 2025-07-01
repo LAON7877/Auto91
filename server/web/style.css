@@ -1107,8 +1107,38 @@ button[type="submit"]:hover {
 }
 
 @keyframes spin {
-    from { transform: rotate(0deg); }
-    to { transform: rotate(360deg); }
+    from {
+        transform: rotate(0deg);
+    }
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+.refresh-account-btn svg,
+.refresh-position-btn svg {
+    transition: transform 0.2s ease;
+}
+
+/* 當按鈕被禁用或處於loading狀態時顯示旋轉動畫 */
+.refresh-account-btn:disabled svg,
+.refresh-position-btn:disabled svg,
+.refresh-account-btn.loading svg,
+.refresh-position-btn.loading svg {
+    animation: spin 1s linear infinite;
+}
+
+/* 禁用狀態的按鈕樣式 */
+.refresh-account-btn:disabled,
+.refresh-position-btn:disabled {
+    opacity: 0.7;
+    cursor: not-allowed;
+}
+
+/* 保持loading狀態時的hover效果 */
+.refresh-account-btn.loading:not(:disabled):hover,
+.refresh-position-btn.loading:not(:disabled):hover {
+    background-color: rgba(73, 80, 87, 0.1);
 }
 
 /* 帳戶狀態專用樣式 */
@@ -1935,5 +1965,48 @@ button[type="submit"]:hover {
 }
 
 /* 備用方案：使用 JavaScript 來處理最後一個項目的樣式 */
+
+.contract-title {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.contract-title h4 {
+    margin: 0;
+}
+
+/* 刪除以下樣式
+.refresh-contract-btn {
+    background: none;
+    border: none;
+    padding: 4px;
+    cursor: pointer;
+    color: #495057;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 4px;
+    transition: all 0.2s ease;
+}
+
+.refresh-contract-btn:hover {
+    background-color: rgba(73, 80, 87, 0.1);
+}
+
+.refresh-contract-btn:active {
+    transform: scale(0.95);
+}
+*/
+
+.version-tag {
+    font-size: 14px;
+    font-weight: normal;
+    color: #6c757d;
+    margin-left: 8px;
+    padding: 2px 6px;
+    background-color: rgba(108, 117, 125, 0.1);
+    border-radius: 4px;
+}
 
  
