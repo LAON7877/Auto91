@@ -71,6 +71,34 @@ def cleanup_on_exit():
     # 5. 重置 LOGIN 狀態
 ```
 
+### 端口配置架構
+
+#### 核心設計原則
+- **統一配置**：使用 `port.txt` 作為端口設置的唯一來源
+- **自動管理**：首次啟動時自動創建配置文件
+- **錯誤處理**：完善的端口讀取錯誤處理機制
+- **靈活配置**：支援動態修改端口（重啟後生效）
+
+#### 端口管理流程
+```python
+def get_port():
+    # 1. 檢查 port.txt 是否存在
+    if not os.path.exists('port.txt'):
+        # 2. 不存在則創建，使用預設端口 5000
+        with open('port.txt', 'w') as f:
+            f.write('5000')
+        return 5000
+    
+    try:
+        # 3. 讀取配置的端口
+        with open('port.txt', 'r') as f:
+            port = int(f.read().strip())
+        return port
+    except:
+        # 4. 讀取失敗使用預設值
+        return 5000
+```
+
 ### 交易日判斷架構（重要）
 
 #### 源頭設計
@@ -103,6 +131,61 @@ web/main.js → /api/trading/status → main.py (源頭)
 - `TXserver.py` - 獨立交易服務器
 - `web/main.js` - 前端邏輯，通過API調用後端
 - `holiday/` - 假期檔案目錄（民國年格式）
+
+### 合約資訊管理架構
+
+#### 核心設計原則
+- **即時更新**：支援一鍵重新整理合約資訊
+- **統一介面**：與其他功能區域保持一致的視覺設計
+- **錯誤處理**：完善的錯誤處理和載入狀態管理
+- **按鈕交互**：統一的按鈕動畫和載入效果
+
+#### 前端實現
+```javascript
+async function refreshContractInfo() {
+    // 1. 更新按鈕狀態
+    const btn = document.querySelector('.refresh-account-btn');
+    btn.classList.add('loading');
+    
+    try {
+        // 2. 調用合約資訊 API
+        const response = await fetch('/api/futures/contracts');
+        const data = await response.json();
+        
+        // 3. 更新合約資訊
+        updateContractDisplay(data);
+    } catch (error) {
+        console.error('合約資訊更新失敗:', error);
+    } finally {
+        // 4. 恢復按鈕狀態
+        btn.classList.remove('loading');
+    }
+}
+```
+
+#### 後端實現
+```python
+@app.route('/api/futures/contracts')
+def get_futures_contracts():
+    try:
+        # 1. 獲取合約資訊
+        contracts = {
+            'TXF': get_contract_info('TXF'),
+            'MXF': get_contract_info('MXF'),
+            'TMF': get_contract_info('TMF')
+        }
+        
+        # 2. 返回合約資訊
+        return jsonify({
+            'status': 'success',
+            'data': contracts
+        })
+    except Exception as e:
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
+```
 
 ## 開發規範
 

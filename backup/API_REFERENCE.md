@@ -242,6 +242,48 @@
 ### POST /api/close_application
 關閉整個應用程式
 
+## 端口配置
+
+系統使用 `port.txt` 作為端口配置的唯一來源：
+- 首次啟動時自動創建，預設端口 5000
+- 可手動修改端口號，重啟後生效
+- 所有 API 都使用此端口提供服務
+
+## 合約資訊 API
+
+### GET /api/futures/contracts
+**合約資訊查詢 API**
+
+#### 回應格式
+```json
+{
+  "status": "success",
+  "data": {
+    "TXF": {
+      "code": "TXF",
+      "delivery_date": "2025/07/17",
+      "margin": 150000
+    },
+    "MXF": {
+      "code": "MXF",
+      "delivery_date": "2025/07/17",
+      "margin": 37500
+    },
+    "TMF": {
+      "code": "TMF",
+      "delivery_date": "2025/07/17",
+      "margin": 15000
+    }
+  }
+}
+```
+
+#### 說明
+- 返回所有支援的期貨合約資訊
+- 包含合約代碼、交割日期、保證金
+- 支援大台指(TXF)、小台指(MXF)、微台指(TMF)
+- 資訊可通過前端重新整理按鈕更新
+
 ---
 
 **注意**：

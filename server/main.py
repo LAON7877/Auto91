@@ -16,8 +16,6 @@ import shutil
 from datetime import datetime, timezone, timedelta
 import csv
 import logging
-from flask_cors import CORS
-from logging.handlers import TimedRotatingFileHandler
 
 # 永豐API相關
 try:
@@ -43,8 +41,7 @@ except ImportError as e:
     except ImportError:
         DOTENV_AVAILABLE = False
 
-app = Flask(__name__, static_folder='web')
-CORS(app)
+app = Flask(__name__, static_folder='web', static_url_path='')
 
 # ngrok相關變數
 ngrok_process = None
@@ -2240,25 +2237,6 @@ def check_daily_startup_notification():
     except Exception as e:
         # 靜默處理錯誤
         pass
-
-def get_version():
-    """獲取當前程式版本號"""
-    try:
-        # 獲取最新的 tag
-        result = subprocess.run(['git', 'describe', '--tags', '--abbrev=0'], 
-                              capture_output=True, text=True, check=True)
-        version = result.stdout.strip()
-        return version
-    except:
-        return 'v1.0.0'  # 如果無法獲取版本號，返回預設值
-
-@app.route('/api/version', methods=['GET'])
-def api_version():
-    """獲取程式版本號"""
-    version = get_version()
-    return jsonify({
-        'version': version
-    })
 
 if __name__ == '__main__':
     # 程式啟動時強制重置LOGIN為0，確保乾淨狀態
