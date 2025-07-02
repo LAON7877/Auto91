@@ -222,25 +222,250 @@
 }
 ```
 
-## 其他 API
+## 永豐API相關 API
+
+### GET /api/sinopac/status
+**永豐API連線狀態查詢**
+
+#### 回應格式
+```json
+{
+  "connected": true|false,
+  "status": true|false,
+  "futures_account": "期貨帳戶號碼",
+  "api_ready": true|false
+}
+```
+
+#### 說明
+- **connected**：API是否已連線
+- **status**：登入狀態
+- **futures_account**：期貨帳戶資訊
+- **api_ready**：API是否完全就緒可用
+
+### GET /api/sinopac/version
+**shioaji版本信息查詢**
+
+#### 回應格式
+```json
+{
+  "version": "1.2.6",
+  "available": true
+}
+```
+
+### POST /api/sinopac/check_update
+**檢查shioaji更新**
+
+#### 回應格式
+```json
+{
+  "status": "success",
+  "data": {
+    "update_available": true|false,
+    "current_version": "1.2.6",
+    "latest_version": "1.2.7"
+  }
+}
+```
 
 ### GET /api/account/status
-帳戶狀態查詢
+**帳戶狀態查詢**
 
-### GET /api/position/status  
-持倉狀態查詢
+#### 回應格式
+```json
+{
+  "status": "success",
+  "data": {
+    "權益總值": 1000000,
+    "權益總額": 1000000,
+    "今日餘額": 1000000,
+    "昨日餘額": 950000,
+    "可用保證金": 850000,
+    "原始保證金": 150000,
+    "維持保證金": 112500,
+    "風險指標": 15,
+    "手續費": 500,
+    "期交稅": 200,
+    "本日平倉損益": 5000,
+    "未實現盈虧": -2000
+  },
+  "last_updated": "2025-07-02 14:30:00"
+}
+```
+
+### GET /api/position/status
+**持倉狀態查詢**
+
+#### 回應格式
+```json
+{
+  "status": "success",
+  "data": {
+    "TXF": {
+      "動作": "多單",
+      "數量": "2 口",
+      "均價": "22,500",
+      "市價": "22,480",
+      "未實現盈虧": "-2,000"
+    },
+    "MXF": {
+      "動作": "-",
+      "數量": "-",
+      "均價": "-",
+      "市價": "-",
+      "未實現盈虧": "-"
+    },
+    "TMF": {
+      "動作": "-",
+      "數量": "-",
+      "均價": "-",
+      "市價": "-",
+      "未實現盈虧": "-"
+    }
+  },
+  "total_pnl": "-2,000 TWD",
+  "total_pnl_value": -2000,
+  "has_positions": true,
+  "last_updated": "2025-07-02 14:30:00"
+}
+```
+
+### POST /api/manual/order
+**手動下單API （v1.3.1更新）**
+
+#### 請求格式
+```json
+{
+  "contract_code": "TXF|MXF|TMF",
+  "quantity": 1,
+  "direction": "開多|開空|平多|平空",
+  "price": 22500.0,
+  "price_type": "MKT|LMT",
+  "order_type": "IOC|ROD",
+  "position_type": null|"long"|"short"
+}
+```
+
+#### 回應格式
+```json
+{
+  "status": "success",
+  "message": "手動下單成功",
+  "order": {
+    "contract_code": "TXF",
+    "contract_name": "TXFA5",
+    "order_id": "ORDER123456",
+    "status": "filled"
+  }
+}
+```
+
+### POST /api/webhook/tradingview
+**TradingView Webhook API**
+
+#### 請求格式
+```json
+{
+  "type": "entry|exit",
+  "direction": "開多|開空|平多|平空",
+  "ticker": "TXF",
+  "txf": 2,
+  "mxf": 0,
+  "tmf": 0,
+  "tradeId": "TRADE123",
+  "time": "2025-07-02 14:30:00",
+  "price": "22500"
+}
+```
+
+#### 回應格式
+```json
+{
+  "status": "success",
+  "message": "下單成功",
+  "orders": [
+    {
+      "contract_code": "TXF",
+      "order_id": "ORDER123456",
+      "status": "submitted"
+    }
+  ]
+}
+```
+
+### POST /api/test/telegram
+**測試Telegram通知API （v1.3.1新增）**
+
+#### 請求格式
+```json
+{
+  "type": "submit_success|submit_fail|trade_success",
+  "error_msg": "錯誤訊息（僅在submit_fail時需要）"
+}
+```
+
+#### 回應格式
+```json
+{
+  "status": "success",
+  "message": "測試通知發送成功",
+  "test_message": "實際發送的訊息內容"
+}
+```
+
+#### 說明
+- 用於測試Telegram通知功能是否正常
+- 可測試不同類型的通知訊息
+- 返回實際發送的訊息內容供檢查
+
+## 系統管理 API
 
 ### POST /api/login
-登入永豐API
+**登入永豐API**
+
+#### 說明
+- 自動從.env檔案讀取登入設定
+- 同時啟動ngrok服務
+- 設定12小時自動重新登入機制
 
 ### POST /api/logout
-登出永豐API
+**登出永豐API**
+
+#### 說明
+- 登出永豐API連線
+- 停止ngrok服務
+- 重置系統登入狀態
 
 ### GET /api/connection/duration
-獲取連線時長信息
+**獲取連線時長信息**
+
+#### 回應格式
+```json
+{
+  "status": "success",
+  "duration_hours": 2.5,
+  "login_time": "2025-07-02T12:00:00",
+  "auto_logout_hours": 12,
+  "remaining_hours": 9.5
+}
+```
 
 ### POST /api/close_application
-關閉整個應用程式
+**關閉整個應用程式**
+
+#### 回應格式
+```json
+{
+  "status": "success",
+  "message": "應用程式正在關閉..."
+}
+```
+
+#### 說明
+- 執行完整的清理工作
+- 停止所有背景服務
+- 1秒後強制關閉程式
 
 ## 端口配置
 

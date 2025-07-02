@@ -2586,6 +2586,8 @@ async function refreshContractInfo() {
         // 禁用按鈕並添加loading類
         refreshBtn.disabled = true;
         refreshBtn.classList.add('loading');
+        
+        console.log('開始重新整理合約資訊...');
 
         // 重新獲取合約資訊
         const response = await fetch('/api/futures/contracts');
@@ -2593,6 +2595,8 @@ async function refreshContractInfo() {
             throw new Error(`HTTP error! status: ${response.status}`);
         }
         const data = await response.json();
+
+        console.log('合約資訊更新成功:', data);
 
         // 更新合約資訊顯示
         if (data.selected_contracts) {
@@ -2607,11 +2611,15 @@ async function refreshContractInfo() {
             updateAvailableContracts('MXF', data.available_contracts.MXF);
             updateAvailableContracts('TMF', data.available_contracts.TMF);
         }
+        
     } catch (error) {
         console.error('更新合約資訊失敗:', error);
     } finally {
-        // 移除loading類並恢復按鈕狀態
-        refreshBtn.classList.remove('loading');
-        refreshBtn.disabled = false;
+        // 延遲500ms後移除loading類並恢復按鈕狀態，確保用戶能看到動畫
+        setTimeout(() => {
+            refreshBtn.classList.remove('loading');
+            refreshBtn.disabled = false;
+            console.log('合約資訊更新完成');
+        }, 500);
     }
 }

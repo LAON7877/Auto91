@@ -200,6 +200,97 @@ def get_futures_contracts():
 - **必須**通過 API 調用 `main.py` 的結果
 - **統一**使用民國年假期檔案格式
 
+### 永豐API管理規範（v1.3.1更新）
+
+#### 核心設計原則
+- **分離初始化和callback設置**：避免在API對象未完全初始化時設置callback
+- **降級機制**：如果callback設置失敗，自動使用主動查詢模式
+- **兼容性優先**：支援不同版本的shioaji API
+- **穩定性保證**：確保基本功能不受callback問題影響
+
+#### API初始化流程
+```python
+def init_sinopac_api():
+    """只創建API對象，不設置callback"""
+    global sinopac_api
+    try:
+        if not SHIOAJI_AVAILABLE:
+            return False
+        sinopac_api = sj.Shioaji()  # 僅創建對象
+        return True
+    except Exception as e:
+        print(f"初始化永豐API失敗: {e}")
+        return False
+
+def login_sinopac():
+    """登入成功後才嘗試設置callback"""
+    # 1. API登入
+    sinopac_api.login(api_key=api_key, secret_key=secret_key)
+    
+    # 2. 登入成功後才設置callback（可選）
+    # 如果設置失敗，系統會自動使用主動查詢模式
+```
+
+#### Callback設置規範
+- **時機**：只能在API登入成功後設置
+- **錯誤處理**：設置失敗不應影響主要功能
+- **降級策略**：callback失敗時自動使用 `get_order_status()` 主動查詢
+- **兼容性**：支援不同版本的shioaji裝飾器語法
+
+#### 通知機制架構
+```python
+def send_order_notification(order_info, is_manual=False):
+    """通知發送統一入口"""
+    try:
+        # 1. 主動查詢訂單狀態
+        order_status = get_order_status(order_info['order_id'])
+        
+        # 2. 根據狀態發送不同通知
+        if order_status['status'] == 'failed':
+            send_fail_notification()
+        elif order_status['status'] == 'filled':
+            send_success_and_trade_notification()
+        else:
+            send_submit_notification()
+    except Exception as e:
+        print(f"發送通知失敗: {e}")
+```
+
+#### 錯誤處理規範
+- **初始化錯誤**：不應阻止程式啟動
+- **Callback錯誤**：靜默處理，啟用降級機制
+- **API連線錯誤**：提供清晰的錯誤訊息
+- **模組缺失**：優雅處理shioaji未安裝的情況
+
+#### 開發注意事項
+1. **避免在初始化時設置callback**：
+   ```python
+   # ❌ 錯誤：在初始化時設置
+   sinopac_api = sj.Shioaji()
+   @sinopac_api.on_order_callback  # 可能失敗
+   def callback(): pass
+   
+   # ✅ 正確：在登入後設置
+   sinopac_api.login()
+   # 然後才嘗試設置callback
+   ```
+
+2. **確保降級機制**：
+   ```python
+   # 如果callback失敗，必須有主動查詢作為備用
+   def get_order_status(order_id):
+       # 主動查詢訂單狀態的實現
+       pass
+   ```
+
+3. **兼容性檢查**：
+   ```python
+   if hasattr(sinopac_api, 'on_order_callback'):
+       # 支援callback的版本
+   else:
+       # 使用主動查詢模式
+   ```
+
 ### 錯誤處理規範
 - **4040 API 錯誤**：使用 try-catch 靜默處理
 - **進程管理錯誤**：使用 terminate() + kill() 確保清理
