@@ -123,30 +123,81 @@ def login_sinopac():
         return False
 ```
 
-#### 通知機制架構變更
+#### 通知機制架構變更（v1.3.2重大重構）
+
+##### v1.3.1之前：使用即時callback（已廢棄）
 ```python
-# v1.3.1之前：使用即時callback
 @sinopac_api.on_order_callback
 def order_callback(order_state):
-    # 處理訂單狀態變化
-    
-# v1.3.1之後：使用主動查詢
+    # 處理訂單狀態變化（因為API版本問題廢棄）
+```
+
+##### v1.3.1：使用主動查詢（已廢棄）
+```python
 def send_order_notification(order_info, is_manual=False):
-    """主動查詢模式的通知機制"""
+    """主動查詢模式的通知機制（已廢棄）"""
     try:
-        # 1. 查詢訂單狀態
         order_status = get_order_status(order_info['order_id'])
-        
-        # 2. 根據狀態發送對應通知
-        if order_status['status'] == 'failed':
-            send_failure_notification()
-        elif order_status['status'] == 'filled':
-            send_success_and_trade_notification()
-        else:
-            send_submit_notification()
+        # 根據狀態發送對應通知
     except Exception as e:
         print(f"發送通知失敗: {e}")
 ```
+
+##### v1.3.2：回調事件處理機制（當前架構）
+參考TXserver.py的完善架構重構main.py：
+
+```python
+# 訂單映射管理
+order_octype_map = {}  # 記錄訂單詳細資訊
+global_lock = threading.Lock()  # 線程鎖
+
+def order_callback(state, deal, order=None):
+    """統一的回調事件處理函數"""
+    try:
+        if state == OrderState.FuturesDeal:
+            # 處理成交回調
+            handle_futures_deal_callback(state, deal)
+        elif state in [OrderState.Submitted, OrderState.FuturesOrder]:
+            # 處理訂單提交回調
+            if order:
+                send_formatted_order_notification(order)
+    except Exception as e:
+        print(f"回調處理錯誤: {e}")
+
+def handle_futures_deal_callback(state, deal):
+    """處理期貨成交回調"""
+    with global_lock:
+        seqno = deal.seqno
+        if seqno in order_octype_map:
+            order_info = order_octype_map[seqno]
+            # 發送成交通知
+            message = get_formatted_trade_message(deal, order_info)
+            send_telegram_message(message)
+
+def place_futures_order(action, quantity, price_type):
+    """下單並建立訂單映射"""
+    try:
+        # 下單
+        order = api.place_order(contract, order_obj)
+        
+        # 立即建立訂單映射（關鍵步驟）
+        with global_lock:
+            order_octype_map[order.order.seqno] = {
+                'action': action_text,
+                'quantity': quantity,
+                'contract_code': contract.code,
+                'timestamp': datetime.now().strftime('%H:%M:%S')
+            }
+    except Exception as e:
+        print(f"下單失敗: {e}")
+```
+
+#### 架構優勢
+- **即時響應**：透過shioaji回調機制，訂單狀態變更立即通知
+- **狀態完整**：支援提交成功、提交失敗、成交等所有狀態
+- **錯誤處理**：智能錯誤判斷（如IOC未成交→"價格未滿足"）
+- **訊息統一**：使用標準化格式，提供一致的通知體驗
+- **線程安全**：使用global_lock確保order_octype_map的線程安全
 
 #### 版本兼容性處理
 ```python

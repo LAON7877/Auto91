@@ -498,6 +498,8 @@ window.onload = function() {
         }
     });
     
+    // 初始化token管理
+    initializeTokenManagement();
 }
 
 // 載入已上傳的檔案名稱
@@ -568,6 +570,216 @@ function closeHolidayModal() {
     }
 }
 
+// Token顯示/隱藏切換函數
+function toggleTokenVisibility() {
+    const tokenInput = document.getElementById('ngrok-authtoken');
+    const eyeOpen = document.querySelector('.password-toggle-btn .eye-open');
+    const eyeClosed = document.querySelector('.password-toggle-btn .eye-closed');
+    
+    if (tokenInput.type === 'password') {
+        // 顯示token
+        tokenInput.type = 'text';
+        eyeOpen.style.display = 'none';
+        eyeClosed.style.display = 'block';
+    } else {
+        // 隱藏token
+        tokenInput.type = 'password';
+        eyeOpen.style.display = 'block';
+        eyeClosed.style.display = 'none';
+    }
+}
+
+// 新的ngrok設置函數
+function showNgrokSetupModal() {
+    document.getElementById('ngrok-setup-modal').style.display = 'block';
+    
+    // 短暫延遲確保DOM元素完全可用
+    setTimeout(() => {
+        const tokenInput = document.getElementById('ngrok-authtoken');
+        
+                 // 從服務器載入已儲存的token
+        fetch('/api/ngrok/token/load')
+        .then(res => res.json())
+        .then(data => {
+            if (data.status === 'success' && data.authtoken && tokenInput) {
+                tokenInput.value = data.authtoken;
+            } else {
+                if (tokenInput) {
+                    tokenInput.value = '';
+                }
+            }
+        })
+        .catch(error => {
+            if (tokenInput) {
+                tokenInput.value = '';
+            }
+        });
+        
+        // 重置為隱藏狀態
+        const eyeOpen = document.querySelector('.password-toggle-btn .eye-open');
+        const eyeClosed = document.querySelector('.password-toggle-btn .eye-closed');
+        
+        if (tokenInput) {
+            tokenInput.type = 'password';
+        }
+        if (eyeOpen) eyeOpen.style.display = 'block';
+        if (eyeClosed) eyeClosed.style.display = 'none';
+        
+        const statusDiv = document.getElementById('setup-status');
+        if (statusDiv) {
+            statusDiv.innerHTML = '';
+        }
+    }, 100); // 100ms延遲
+}
+
+function closeNgrokSetupModal() {
+    document.getElementById('ngrok-setup-modal').style.display = 'none';
+    // 關閉modal時更新token狀態顯示
+    updateTokenStatus();
+}
+
+function setupNgrok() {
+    const authtoken = document.getElementById('ngrok-authtoken').value.trim();
+    const statusDiv = document.getElementById('setup-status');
+    const setupBtn = document.getElementById('setup-ngrok-btn');
+    
+    if (!authtoken) {
+        statusDiv.innerHTML = '<div style="color: red;">請輸入有效的authtoken</div>';
+        return;
+    }
+    
+    // 先驗證token格式
+    fetch('/api/ngrok/validate_token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ authtoken: authtoken })
+    })
+    .then(res => res.json())
+    .then(data => {
+        if (data.status === 'error') {
+            statusDiv.innerHTML = `<div style="color: red;">${data.message}</div>`;
+            return;
+        }
+        
+        // 驗證通過，先儲存token到服務器
+        return fetch('/api/ngrok/token/save', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ authtoken: authtoken })
+        });
+    })
+    .then(res => {
+        if (!res) return; // 如果驗證失敗，不繼續
+        return res.json();
+    })
+    .then(data => {
+        if (!data) return; // 如果沒有數據，不繼續
+        
+        if (data.status !== 'success') {
+            statusDiv.innerHTML = `<div style="color: red;">Token保存失敗: ${data.message}</div>`;
+            return;
+        }
+        
+        // Token保存成功，立即更新主面板的狀態顯示
+        updateTokenStatus();
+        
+        // 開始設置
+        setupBtn.disabled = true;
+        setupBtn.textContent = '儲存中...';
+        statusDiv.innerHTML = '<div style="color: blue;">正在儲存並設置ngrok，請稍候...</div>';
+        
+        return fetch('/api/ngrok/setup', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ authtoken: authtoken })
+        });
+    })
+    .then(res => {
+        if (!res) return; // 如果驗證失敗，不繼續
+        return res.json();
+    })
+    .then(data => {
+        if (!data) return; // 如果沒有數據，不繼續
+        
+        if (data.status === 'success') {
+            statusDiv.innerHTML = '<div style="color: green;">儲存並設置成功！ngrok正在啟動中...</div>';
+            
+            // 5秒後檢查狀態並關閉modal
+            setTimeout(() => {
+                refreshNgrokStatus();
+                closeNgrokSetupModal();
+            }, 5000);
+            
+        } else {
+            statusDiv.innerHTML = `<div style="color: red;">儲存失敗: ${data.message}</div>`;
+        }
+    })
+    .catch(error => {
+        statusDiv.innerHTML = '<div style="color: red;">設置失敗：網路錯誤</div>';
+    })
+    .finally(() => {
+        setupBtn.disabled = false;
+        setupBtn.textContent = '儲存並啟動';
+    });
+}
+
+
+
+// Token管理函數
+function clearNgrokToken() {
+    if (confirm('確定要清除已儲存的 ngrok token 嗎？')) {
+        fetch('/api/ngrok/token/clear', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' }
+        })
+        .then(res => res.json())
+        .then(data => {
+            if (data.status === 'success') {
+                updateTokenStatus();
+                alert('Token 已清除');
+            } else {
+                alert('清除失敗: ' + data.message);
+            }
+        })
+        .catch(error => {
+            alert('清除失敗：網路錯誤');
+        });
+    }
+}
+
+function updateTokenStatus() {
+    const statusElement = document.getElementById('current-token-status');
+    
+    if (!statusElement) {
+        return;
+    }
+    
+    // 從服務器載入token狀態
+    fetch('/api/ngrok/token/load')
+    .then(res => res.json())
+    .then(data => {
+        if (data.status === 'success' && data.authtoken) {
+            // 只顯示前4個和後4個字符，中間用*代替
+            const maskedToken = data.authtoken.substring(0, 4) + '***...***' + data.authtoken.substring(data.authtoken.length - 4);
+            statusElement.textContent = `已設置 (${maskedToken})`;
+            statusElement.className = 'token-value saved';
+        } else {
+            statusElement.textContent = '未設置';
+            statusElement.className = 'token-value not-saved';
+        }
+    })
+    .catch(error => {
+        statusElement.textContent = '未設置';
+        statusElement.className = 'token-value not-saved';
+    });
+}
+
+// 頁面載入時更新token狀態
+function initializeTokenManagement() {
+    updateTokenStatus();
+}
+
+// 保留原registerNgrok函數作為備用（開啟註冊頁面）
 function registerNgrok() {
     window.open('https://ngrok.com/signup', '_blank');
 }
@@ -1673,6 +1885,9 @@ document.addEventListener('DOMContentLoaded', () => {
     // 載入已上傳的檔案狀態
     loadUploadedFiles();
     
+    // 初始化token管理狀態
+    initializeTokenManagement();
+    
     // 開始定期更新 ngrok 狀態和請求日誌
     refreshNgrokStatus();
     setInterval(refreshNgrokStatus, 30000); // 改為每30秒更新一次
@@ -2623,3 +2838,5 @@ async function refreshContractInfo() {
         }, 500);
     }
 }
+
+// 測試功能相關函數已移除

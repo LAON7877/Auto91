@@ -1764,6 +1764,14 @@ button[type="submit"]:hover {
     padding: 24px;
 }
 
+.modal-footer {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 12px;
+    padding: 20px;
+}
+
 .update-version-info {
     background: #f8f9fa;
     padding: 16px;
@@ -1987,27 +1995,234 @@ button[type="submit"]:hover {
     margin: 0;
 }
 
-/* 刪除以下樣式
-.refresh-contract-btn {
+/* 測試功能樣式已移除 */
+
+/* ngrok設置模態窗口額外樣式 */
+#ngrok-setup-modal .modal-content {
+    max-width: 500px;
+}
+
+#ngrok-setup-modal .form-group {
+    margin-bottom: 16px;
+}
+
+#ngrok-setup-modal .form-group label {
+    display: block;
+    margin-bottom: 8px;
+    color: #ffffff;
+    font-weight: 500;
+}
+
+/* 密碼輸入容器 */
+.password-input-container {
+    position: relative;
+    display: block; /* 改為block避免flex影響 */
+    margin-bottom: 10px;
+    height: 44px; /* 固定容器高度 */
+}
+
+#ngrok-setup-modal input[type="text"],
+#ngrok-setup-modal input[type="password"] {
+    width: 100%;
+    height: 44px; /* 固定高度避免變化 */
+    padding: 0 50px 0 12px; /* 右邊增加空間給更大的按鈕 */
+    border: 1px solid #404040;
+    border-radius: 4px;
+    background-color: #2a2a2a;
+    color: #ffffff;
+    font-size: 14px;
+    font-family: inherit;
+    letter-spacing: normal;
+    line-height: 44px; /* 與高度相同，確保垂直置中 */
+    box-sizing: border-box;
+}
+
+/* 特別針對password模式調整 */
+#ngrok-setup-modal input[type="password"] {
+    font-size: 18px; /* 稍微調大但不要太大 */
+    line-height: 44px; /* 保持相同行高 */
+}
+
+#ngrok-setup-modal input[type="text"]:focus,
+#ngrok-setup-modal input[type="password"]:focus {
+    outline: none;
+    border-color: #007bff;
+    box-shadow: 0 0 0 2px rgba(0, 123, 255, 0.25);
+}
+
+/* 顯示/隱藏按鈕 */
+.password-toggle-btn {
+    position: absolute;
+    right: 5px;
+    top: 5px;
+    width: 34px; /* 設定按鈕寬度 */
+    height: 34px; /* 設定按鈕高度 */
     background: none;
     border: none;
-    padding: 4px;
+    color: #999999;
     cursor: pointer;
-    color: #495057;
+    border-radius: 4px;
+    transition: none; /* 移除transition避免LAG */
     display: flex;
     align-items: center;
     justify-content: center;
-    border-radius: 4px;
-    transition: all 0.2s ease;
 }
 
-.refresh-contract-btn:hover {
-    background-color: rgba(73, 80, 87, 0.1);
+.password-toggle-btn:hover {
+    color: #ffffff;
+    background-color: rgba(255, 255, 255, 0.15);
 }
 
-.refresh-contract-btn:active {
+.password-toggle-btn:active {
+    background-color: rgba(255, 255, 255, 0.25);
     transform: scale(0.95);
 }
-*/
+
+/* SVG圖示樣式 */
+.password-toggle-btn svg {
+    width: 18px;
+    height: 18px;
+    flex-shrink: 0;
+}
+
+#ngrok-setup-modal small {
+    font-size: 14px;
+    color: #999;
+    margin-top: 8px;
+    display: block;
+}
+
+#ngrok-setup-modal small a {
+    color: #007bff;
+    text-decoration: none;
+}
+
+#ngrok-setup-modal small a:hover {
+    text-decoration: underline;
+}
+
+#setup-status {
+    margin: 12px 0;
+    padding: 8px 12px;
+    border-radius: 4px;
+    font-size: 14px;
+    min-height: 20px;
+}
+
+#setup-status div[style*="color: green"] {
+    background-color: rgba(40, 167, 69, 0.1);
+    border: 1px solid rgba(40, 167, 69, 0.3);
+    color: #28a745;
+}
+
+#setup-status div[style*="color: red"] {
+    background-color: rgba(220, 53, 69, 0.1);
+    border: 1px solid rgba(220, 53, 69, 0.3);
+    color: #dc3545;
+}
+
+#setup-status div[style*="color: blue"] {
+    background-color: rgba(0, 123, 255, 0.1);
+    border: 1px solid rgba(0, 123, 255, 0.3);
+    color: #007bff;
+}
+
+/* ngrok Token 管理區域樣式 */
+.ngrok-token-management {
+    background-color: #2a2a2a;
+    border: 1px solid #404040;
+    border-radius: 6px;
+    padding: 16px;
+    margin-top: 8px;
+}
+
+.token-status {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 12px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid #404040;
+}
+
+.token-label {
+    color: #999999;
+    font-size: 14px;
+    font-weight: 500;
+}
+
+.token-value {
+    color: #ffffff;
+    font-size: 14px;
+    font-family: monospace;
+}
+
+.token-value.saved {
+    color: #28a745;
+}
+
+.token-value.not-saved {
+    color: #6c757d;
+}
+
+.token-actions {
+    display: flex;
+    gap: 12px;
+    justify-content: flex-start;
+}
+
+.token-btn {
+    padding: 8px 16px;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 500;
+    transition: all 0.2s ease;
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.token-btn:not(.secondary) {
+    background-color: #007bff;
+    color: white;
+}
+
+.token-btn:not(.secondary):hover {
+    background-color: #0056b3;
+    transform: translateY(-1px);
+}
+
+.token-btn.secondary {
+    background-color: transparent;
+    color: #dc3545;
+    border: 1px solid #dc3545;
+}
+
+.token-btn.secondary:hover {
+    background-color: #dc3545;
+    color: white;
+    transform: translateY(-1px);
+}
+
+/* 響應式設計 */
+@media (max-width: 600px) {
+    .token-actions {
+        flex-direction: column;
+    }
+    
+    .token-btn {
+        width: 100%;
+        justify-content: center;
+    }
+    
+    .token-status {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 8px;
+    }
+}
 
  

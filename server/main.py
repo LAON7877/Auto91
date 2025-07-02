@@ -42,6 +42,76 @@ except ImportError as e:
     except ImportError:
         DOTENV_AVAILABLE = False
 
+# 創建兼容的常數處理類別
+class SafeConstants:
+    """安全的常數處理類別，避免shioaji版本相容性問題"""
+    
+    @staticmethod
+    def get_action(action_str):
+        """獲取動作常數"""
+        if not SHIOAJI_AVAILABLE:
+            return action_str
+        try:
+            if action_str.upper() == 'BUY':
+                return sj.constant.Action.Buy
+            else:
+                return sj.constant.Action.Sell
+        except AttributeError:
+            return action_str
+    
+    @staticmethod
+    def get_price_type(price_type_str):
+        """獲取價格類型常數"""
+        if not SHIOAJI_AVAILABLE:
+            return price_type_str
+        try:
+            if price_type_str.upper() == 'MKT':
+                return sj.constant.FuturesPriceType.MKT
+            else:
+                return sj.constant.FuturesPriceType.LMT
+        except AttributeError:
+            return price_type_str
+    
+    @staticmethod
+    def get_order_type(order_type_str):
+        """獲取訂單類型常數"""
+        if not SHIOAJI_AVAILABLE:
+            return order_type_str
+        try:
+            if order_type_str.upper() == 'IOC':
+                return sj.constant.FuturesOrderType.IOC
+            else:
+                return sj.constant.FuturesOrderType.ROD
+        except AttributeError:
+            return order_type_str
+    
+    @staticmethod
+    def get_oc_type():
+        """獲取開平倉類型常數"""
+        if not SHIOAJI_AVAILABLE:
+            return 'Auto'
+        try:
+            return sj.constant.FuturesOCType.Auto
+        except AttributeError:
+            return 'Auto'
+    
+    @staticmethod
+    def check_order_status(status, target_status):
+        """檢查訂單狀態"""
+        if not SHIOAJI_AVAILABLE:
+            return str(status).upper() == target_status.upper()
+        try:
+            if target_status.upper() == 'FILLED':
+                return status == sj.constant.OrderStatus.Filled
+            elif target_status.upper() == 'FAILED':
+                return status == sj.constant.OrderStatus.Failed
+            else:
+                return False
+        except AttributeError:
+            return str(status).upper() == target_status.upper()
+
+safe_constants = SafeConstants()
+
 app = Flask(__name__, static_folder='web', static_url_path='')
 
 # ngrok相關變數
@@ -79,6 +149,37 @@ last_margin_requirements = {
     '大台': 0,
     '小台': 0,
     '微台': 0
+}
+
+# 新增：訂單映射管理（參考TXserver.py架構）
+order_octype_map = {}  # 記錄訂單詳細資訊
+global_lock = threading.Lock()  # 線程鎖
+
+# 新增：錯誤訊息翻譯對照表
+OP_MSG_TRANSLATIONS = {
+    "Order not found": "訂單未找到",
+    "Price not satisfied": "價格未滿足",
+    "Insufficient margin": "保證金不足",
+    "Invalid quantity": "無效數量",
+    "Invalid price": "無效價格",
+    "Market closed": "市場已關閉",
+    "非該商品可下單時間": "非交易時間",
+    "可委託金額不足": "保證金不足",
+    "委託價格不符合規範": "委託價格不符合規範",
+    "委託數量不符合規範": "委託數量不符合規範",
+    "帳戶未開啟": "帳戶未開啟",
+    "未開放交易": "未開放交易",
+    "已超過風控限制": "已超過風控限制",
+    "該商品已停止交易": "該商品已停止交易",
+    "無足夠庫存": "無足夠庫存",
+    "委託失敗": "委託失敗",
+    "系統忙碌中": "系統忙碌中",
+    "超過單筆委託數量限制": "超過單筆委託數量限制",
+    "超過單日委託數量限制": "超過單日委託數量限制",
+    "不可做空": "不可做空",
+    "暫停交易": "暫停交易",
+    "漲跌停限制": "漲跌停限制",
+    "未知錯誤": "未知錯誤"
 }
 
 ENV_TEMPLATE = '''# Telegram Bot
@@ -979,6 +1080,206 @@ def api_ngrok_update():
             'message': f'更新失敗: {str(e)}'
         }), 500
 
+@app.route('/api/ngrok/setup', methods=['POST'])
+def api_ngrok_setup():
+    """設置ngrok authtoken並啟動"""
+    try:
+        data = request.get_json() or {}
+        authtoken = data.get('authtoken', '').strip()
+        
+        if not authtoken:
+            return jsonify({
+                'status': 'error',
+                'message': '請提供有效的ngrok authtoken'
+            }), 400
+        
+        # 驗證authtoken格式（基本檢查）
+        if len(authtoken) < 20:
+            return jsonify({
+                'status': 'error',
+                'message': 'authtoken格式不正確'
+            }), 400
+        
+        # 執行ngrok配置
+        def setup_ngrok_background():
+            try:
+                import subprocess
+                import time
+                
+                ngrok_exe_path = os.path.join(os.path.dirname(__file__), 'ngrok.exe')
+                
+                # 1. 設置authtoken
+                print(f"設置ngrok authtoken...")
+                result = subprocess.run(
+                    [ngrok_exe_path, 'config', 'add-authtoken', authtoken],
+                    capture_output=True,
+                    text=True,
+                    timeout=30
+                )
+                
+                if result.returncode != 0:
+                    print(f"設置authtoken失敗: {result.stderr}")
+                    return False
+                    
+                print("authtoken設置成功")
+                
+                # 2. 停止現有ngrok進程
+                global ngrok_process
+                if ngrok_process:
+                    ngrok_process.terminate()
+                    time.sleep(2)
+                
+                # 3. 啟動ngrok
+                print("啟動ngrok tunnel...")
+                start_ngrok()
+                
+                # 4. 驗證啟動成功
+                time.sleep(5)
+                try:
+                    response = requests.get('http://localhost:4040/api/tunnels', timeout=5)
+                    if response.status_code == 200:
+                        tunnels = response.json().get('tunnels', [])
+                        if tunnels:
+                            print("ngrok設置並啟動成功！")
+                            return True
+                except:
+                    pass
+                
+                print("ngrok啟動驗證失敗")
+                return False
+                
+            except Exception as e:
+                print(f"設置ngrok失敗: {e}")
+                return False
+        
+        # 在背景執行設置
+        threading.Thread(target=setup_ngrok_background, daemon=True).start()
+        
+        return jsonify({
+            'status': 'success',
+            'message': '正在設置ngrok，請稍候...'
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'status': 'error',
+            'message': f'設置失敗: {str(e)}'
+        }), 500
+
+@app.route('/api/ngrok/validate_token', methods=['POST'])
+def api_ngrok_validate_token():
+    """驗證ngrok authtoken有效性"""
+    try:
+        data = request.get_json() or {}
+        authtoken = data.get('authtoken', '').strip()
+        
+        if not authtoken:
+            return jsonify({
+                'status': 'error',
+                'message': '請提供authtoken'
+            }), 400
+        
+        # 基本格式驗證
+        if len(authtoken) < 20 or not authtoken.replace('_', '').replace('-', '').isalnum():
+            return jsonify({
+                'status': 'error',
+                'message': 'authtoken格式不正確'
+            }), 400
+        
+        return jsonify({
+            'status': 'success',
+            'message': 'authtoken格式有效'
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'status': 'error',
+            'message': f'驗證失敗: {str(e)}'
+        }), 500
+
+@app.route('/api/ngrok/token/save', methods=['POST'])
+def api_ngrok_token_save():
+    """保存ngrok authtoken到服務器端"""
+    try:
+        data = request.get_json() or {}
+        authtoken = data.get('authtoken', '').strip()
+        
+        if not authtoken:
+            return jsonify({
+                'status': 'error',
+                'message': '請提供authtoken'
+            }), 400
+        
+        # 保存到配置目錄
+        config_dir = os.path.join(os.path.dirname(__file__), 'config')
+        os.makedirs(config_dir, exist_ok=True)
+        
+        token_file = os.path.join(config_dir, 'ngrok_token.txt')
+        with open(token_file, 'w', encoding='utf-8') as f:
+            f.write(authtoken)
+        
+        return jsonify({
+            'status': 'success',
+            'message': 'Token已保存'
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'status': 'error',
+            'message': f'保存失敗: {str(e)}'
+        }), 500
+
+@app.route('/api/ngrok/token/load', methods=['GET'])
+def api_ngrok_token_load():
+    """從服務器端載入ngrok authtoken"""
+    try:
+        config_dir = os.path.join(os.path.dirname(__file__), 'config')
+        token_file = os.path.join(config_dir, 'ngrok_token.txt')
+        
+        if os.path.exists(token_file):
+            with open(token_file, 'r', encoding='utf-8') as f:
+                authtoken = f.read().strip()
+            
+            if authtoken:
+                return jsonify({
+                    'status': 'success',
+                    'authtoken': authtoken
+                })
+        
+        return jsonify({
+            'status': 'not_found',
+            'message': '未找到保存的token'
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'status': 'error',
+            'message': f'載入失敗: {str(e)}'
+        }), 500
+
+@app.route('/api/ngrok/token/clear', methods=['POST'])
+def api_ngrok_token_clear():
+    """清除服務器端保存的ngrok authtoken"""
+    try:
+        config_dir = os.path.join(os.path.dirname(__file__), 'config')
+        token_file = os.path.join(config_dir, 'ngrok_token.txt')
+        
+        if os.path.exists(token_file):
+            os.remove(token_file)
+        
+        return jsonify({
+            'status': 'success',
+            'message': 'Token已清除'
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'status': 'error',
+            'message': f'清除失敗: {str(e)}'
+        }), 500
+
+
+
 @app.route('/api/sinopac/status', methods=['GET'])
 def api_sinopac_status():
     """獲取永豐API連線狀態和期貨帳號"""
@@ -1766,6 +2067,316 @@ def update_margin_requirements_from_api():
         print(f"更新保證金失敗: {e}")
         return False
 
+def order_callback(state, deal, order=None):
+    """訂單回調函數處理（參考TXserver.py架構）"""
+    try:
+        global order_octype_map
+        
+        print(f"收到回調事件: {state}")
+        
+        # 成交回調和訂單回調的數據結構不同，需要分別處理
+        if str(state) == 'OrderState.FuturesDeal':
+            # 成交回調：使用 deal 的直接欄位
+            order_id = deal.get('trade_id', deal.get('order_id', '未知')).strip()
+            contract_code = deal.get('code', '')
+        else:
+            # 訂單回調：使用 order 結構
+            order_id = deal.get('order', {}).get('id', '未知').strip()
+            contract_code = deal.get('contract', {}).get('code', '')
+        
+        # 取得合約名稱
+        contract_name = get_contract_name_from_code(contract_code)
+        
+        # 從映射中獲取訂單詳細資訊
+        octype_info = order_octype_map.get(order_id)
+        if octype_info is None:
+            # 如果找不到映射資訊，嘗試從回調資料推斷
+            octype_info = {
+                'octype': 'New',
+                'direction': deal.get('order', {}).get('action', 'Sell'),
+                'contract_name': contract_name,
+                'order_type': deal.get('order', {}).get('order_type', 'IOC'),
+                'price_type': deal.get('order', {}).get('price_type', 'MKT'),
+                'is_manual': False
+            }
+        
+        octype = octype_info['octype']
+        direction = octype_info['direction']
+        order_type = octype_info['order_type']
+        price_type = octype_info['price_type']
+        is_manual = octype_info.get('is_manual', False)
+        
+        # 獲取訂單數量和操作信息
+        qty = deal.get('order', {}).get('quantity', 0)
+        op_code = deal.get('operation', {}).get('op_code', '00')
+        op_msg = deal.get('operation', {}).get('op_msg', '')
+        op_type = deal.get('operation', {}).get('op_type', '')
+        
+        current_time = datetime.now().strftime('%Y/%m/%d %H:%M')
+        
+        # 處理成交回調
+        if str(state) == 'OrderState.FuturesDeal' and deal.get('code') and deal.get('quantity'):
+            handle_futures_deal_callback(deal, octype_info)
+            
+        # 處理訂單提交回調
+        elif str(state) in ['OrderState.Submitted', 'OrderState.FuturesOrder']:
+            if op_type == 'Cancel' or op_code != '00':
+                # 訂單失敗或取消
+                if op_type == 'Cancel' and order_type == 'IOC' and not op_msg:
+                    fail_reason = "價格未滿足"
+                else:
+                    fail_reason = OP_MSG_TRANSLATIONS.get(op_msg, op_msg or '未知錯誤')
+                
+                price_value = order.get('price', 0.0) if order else deal.get('order', {}).get('price', 0.0)
+                
+                # 發送失敗通知
+                msg = get_formatted_order_message(
+                    is_success=False,
+                    order_id=order_id,
+                    contract_name=contract_name,
+                    qty=qty,
+                    price=price_value,
+                    octype=octype,
+                    direction=direction,
+                    order_type=order_type,
+                    price_type=price_type,
+                    is_manual=is_manual,
+                    reason=fail_reason,
+                    contract_code=contract_code
+                )
+                send_telegram_message(msg)
+                
+                # 清理映射
+                with global_lock:
+                    order_octype_map.pop(order_id, None)
+            else:
+                # 訂單提交成功
+                price_value = order.get('price', 0.0) if order else deal.get('order', {}).get('price', 0.0)
+                
+                # 獲取交割日期
+                delivery_date = None
+                try:
+                    delivery_month = None
+                    if order and order.get('delivery_month'):
+                        delivery_month = order.get('delivery_month')
+                    elif deal and deal.get('contract', {}).get('delivery_month'):
+                        delivery_month = deal.get('contract', {}).get('delivery_month')
+                    
+                    if delivery_month and len(delivery_month) == 6:
+                        year = int(delivery_month[:4])
+                        month = int(delivery_month[4:6])
+                        delivery_date = f"{year}/{month:02d}/16"
+                except:
+                    pass
+                
+                # 發送提交成功通知
+                msg = get_formatted_order_message(
+                    is_success=True,
+                    order_id=order_id,
+                    contract_name=contract_name,
+                    qty=qty,
+                    price=price_value,
+                    octype=octype,
+                    direction=direction,
+                    order_type=order_type,
+                    price_type=price_type,
+                    is_manual=is_manual,
+                    contract_code=contract_code,
+                    delivery_date=delivery_date
+                )
+                send_telegram_message(msg)
+        
+    except Exception as e:
+        print(f"回調函數處理失敗: {e}")
+
+def handle_futures_deal_callback(deal, octype_info):
+    """處理期貨成交回調"""
+    try:
+        order_id = deal.get('trade_id', deal.get('order_id', '未知'))
+        contract_code = deal.get('code', '')
+        contract_name = get_contract_name_from_code(contract_code)
+        
+        deal_price = deal.get('price', 0)
+        deal_quantity = deal.get('quantity', 0)
+        
+        current_time = datetime.now().strftime('%Y/%m/%d %H:%M')
+        
+        # 發送成交通知
+        msg = get_formatted_trade_message(
+            order_id=order_id,
+            contract_name=contract_name,
+            qty=deal_quantity,
+            price=deal_price,
+            octype=octype_info['octype'],
+            direction=octype_info['direction'],
+            order_type=octype_info['order_type'],
+            price_type=octype_info['price_type'],
+            is_manual=octype_info.get('is_manual', False),
+            contract_code=contract_code
+        )
+        send_telegram_message(msg)
+        
+        # 清理映射
+        with global_lock:
+            order_octype_map.pop(order_id, None)
+            
+    except Exception as e:
+        print(f"處理期貨成交回調失敗: {e}")
+
+def get_contract_name_from_code(contract_code):
+    """根據合約代碼獲取合約名稱"""
+    if not contract_code:
+        return "未知"
+    
+    if contract_code.startswith('TXF'):
+        return "大台"
+    elif contract_code.startswith('MXF'):
+        return "小台"
+    elif contract_code.startswith('TMF'):
+        return "微台"
+    else:
+        return "未知"
+
+def get_formatted_order_message(is_success, order_id, contract_name, qty, price, octype, direction, order_type, price_type, is_manual, reason=None, contract_code=None, delivery_date=None):
+    """格式化訂單提交訊息（參考TXserver.py）"""
+    current_time = datetime.now().strftime('%Y/%m/%d %H:%M')
+    
+    # 獲取完整合約資訊
+    try:
+        if contract_code and delivery_date:
+            contract_display = f"{contract_code} ({delivery_date})"
+        elif contract_code:
+            contract_display = f"{contract_code} (日期未知)"
+        else:
+            contract_display = "未知"
+    except:
+        contract_display = "未知"
+    
+    # 訂單類型顯示
+    try:
+        if str(price_type).upper() == 'MKT':
+            price_text = "市價單"
+        else:
+            price_text = "限價單"
+        
+        if str(order_type).upper() == 'IOC':
+            type_text = "IOC"
+        else:
+            type_text = "ROD"
+        
+        order_type_display = f"{price_text}（{type_text}）"
+    except:
+        order_type_display = f"未知 ({order_type})"
+    
+    # 提交類型
+    manual_type = "手動" if is_manual else "自動"
+    octype_display = "開倉" if octype == "New" else "平倉"
+    submit_type = f"{manual_type}{octype_display}"
+    
+    # 提交動作
+    direction_str = str(direction).upper()
+    if 'BUY' in direction_str:
+        if octype == "New":
+            submit_action = "多單買入"
+        else:
+            submit_action = "空單買入"
+    else:
+        if octype == "New":
+            submit_action = "空單賣出"
+        else:
+            submit_action = "多單賣出"
+    
+    # 提交價格
+    if str(price_type).upper() == "MKT":
+        price_display = "市價"
+    else:
+        price_display = f"{price:.0f}"
+    
+    if is_success:
+        msg = (f"⭕ 提交成功（{current_time}）\n"
+               f"選用合約：{contract_display}\n"
+               f"訂單類型：{order_type_display}\n"
+               f"提交單號：{order_id}\n"
+               f"提交類型：{submit_type}\n"
+               f"提交動作：{submit_action}\n"
+               f"提交部位：{contract_name}\n"
+               f"提交數量：{qty} 口\n"
+               f"提交價格：{price_display}")
+    else:
+        msg = (f"❌ 提交失敗（{current_time}）\n"
+               f"選用合約：{contract_display}\n"
+               f"訂單類型：{order_type_display}\n"
+               f"提交單號：{order_id if order_id != '未知' else '未知'}\n"
+               f"提交類型：{submit_type}\n"
+               f"提交動作：{submit_action}\n"
+               f"提交部位：{contract_name}\n"
+               f"提交數量：{qty} 口\n"
+               f"提交價格：{price_display}\n"
+               f"原因：{reason}")
+    
+    return msg
+
+def get_formatted_trade_message(order_id, contract_name, qty, price, octype, direction, order_type, price_type, is_manual, contract_code=None, delivery_date=None):
+    """格式化成交訊息"""
+    current_time = datetime.now().strftime('%Y/%m/%d %H:%M')
+    
+    # 獲取完整合約資訊
+    try:
+        if contract_code and delivery_date:
+            contract_display = f"{contract_code} ({delivery_date})"
+        elif contract_code:
+            contract_display = f"{contract_code} (日期未知)"
+        else:
+            contract_display = "未知"
+    except:
+        contract_display = "未知"
+    
+    # 訂單類型顯示
+    try:
+        if str(price_type).upper() == 'MKT':
+            price_text = "市價單"
+        else:
+            price_text = "限價單"
+        
+        if str(order_type).upper() == 'IOC':
+            type_text = "IOC"
+        else:
+            type_text = "ROD"
+        
+        order_type_display = f"{price_text}（{type_text}）"
+    except:
+        order_type_display = f"未知 ({order_type})"
+    
+    # 成交類型
+    manual_type = "手動" if is_manual else "自動"
+    octype_display = "開倉" if octype == "New" else "平倉"
+    trade_type = f"{manual_type}{octype_display}"
+    
+    # 成交動作
+    direction_str = str(direction).upper()
+    if 'BUY' in direction_str:
+        if octype == "New":
+            trade_action = "多單買入"
+        else:
+            trade_action = "空單買入"
+    else:
+        if octype == "New":
+            trade_action = "空單賣出"
+        else:
+            trade_action = "多單賣出"
+    
+    msg = (f"✅ 成交通知（{current_time}）\n"
+           f"選用合約：{contract_display}\n"
+           f"訂單類型：{order_type_display}\n"
+           f"成交單號：{order_id}\n"
+           f"成交類型：{trade_type}\n"
+           f"成交動作：{trade_action}\n"
+           f"成交部位：{contract_name}\n"
+           f"成交數量：{qty} 口\n"
+           f"成交價格：{price:.0f}")
+    
+    return msg
+
 def login_sinopac():
     global sinopac_api, sinopac_connected, sinopac_account, sinopac_login_status, sinopac_login_time, auto_logout_timer
     
@@ -1792,8 +2403,13 @@ def login_sinopac():
         # API登入
         sinopac_api.login(api_key=api_key, secret_key=secret_key)
         
-        # 暫時跳過callback設置，先讓基本功能正常運作
-        print("API登入成功，暫時跳過callback設置")
+        # 設置回調函數
+        try:
+            sinopac_api.set_order_callback(order_callback)
+            print("回調函數設置成功")
+        except Exception as e:
+            print(f"回調函數設置失敗: {e}")
+            # 回調函數設置失敗，但繼續使用基本功能
         
         # 激活CA憑證
         cert_file = None
@@ -1808,7 +2424,9 @@ def login_sinopac():
         if cert_file and os.path.exists(cert_file):
             try:
                 sinopac_api.activate_ca(ca_path=cert_file, ca_passwd=ca_passwd, person_id=person_id)
-            except Exception:
+                print("憑證激活成功")
+            except Exception as e:
+                print(f"憑證激活失敗: {e}")
                 # 憑證激活失敗，但繼續使用基本功能
                 pass
         
@@ -1847,7 +2465,7 @@ def login_sinopac():
 
 def logout_sinopac():
     """登出永豐API"""
-    global sinopac_api, sinopac_connected, sinopac_account, sinopac_login_status, sinopac_login_time, auto_logout_timer
+    global sinopac_api, sinopac_connected, sinopac_account, sinopac_login_status, sinopac_login_time, auto_logout_timer, order_octype_map
     
     try:
         if sinopac_api and sinopac_connected:
@@ -1861,6 +2479,10 @@ def logout_sinopac():
         # 停止自動登出定時器
         stop_auto_logout_timer()
         
+        # 清理訂單映射（參考TXserver.py架構）
+        with global_lock:
+            order_octype_map.clear()
+        
         print("永豐API登出成功！！！")
         return True
         
@@ -1870,6 +2492,11 @@ def logout_sinopac():
         sinopac_login_status = False
         sinopac_account = None
         sinopac_login_time = None
+        
+        # 即使登出失敗也清理映射
+        with global_lock:
+            order_octype_map.clear()
+        
         return False
 
 def start_auto_logout_timer():
@@ -1992,7 +2619,7 @@ reset_login_flag()
 
 def cleanup_on_exit():
     """程式退出時的清理工作"""
-    global sinopac_api, sinopac_connected, sinopac_account, sinopac_login_status, auto_logout_timer, ngrok_process, ngrok_auto_restart_timer
+    global sinopac_api, sinopac_connected, sinopac_account, sinopac_login_status, auto_logout_timer, ngrok_process, ngrok_auto_restart_timer, order_octype_map
     
     try:
         # 停止自動登出定時器
@@ -2025,6 +2652,11 @@ def cleanup_on_exit():
             sinopac_connected = False
             sinopac_account = None
             sinopac_login_status = False
+        
+        # 清理訂單映射
+        with global_lock:
+            order_octype_map.clear()
+            
     except Exception as e:
         pass  # 靜默處理錯誤
     
@@ -2463,61 +3095,7 @@ def check_night_session_notification():
     except Exception as e:
         print(f"檢查夜盤通知失敗: {e}")
 
-@app.route('/api/test/telegram', methods=['POST'])
-def test_telegram():
-    """測試Telegram通知功能"""
-    try:
-        data = request.get_json() or {}
-        test_type = data.get('type', 'submit_fail')  # submit_fail, submit_success, trade_success
-        
-        # 模擬訂單資訊
-        order_info = {
-            'contract_code': 'TMF',
-            'contract_name': 'TMFA5',
-            'contract_type': '微台指',
-            'delivery_date': '202507',
-            'quantity': 1,
-            'action': 'Sell',
-            'order_id': 'TEST12345',
-            'price': 22500.0,
-            'price_type': 'LMT',
-            'order_type': 'ROD',
-            'status': 'test',
-            'position_type': None
-        }
-        
-        current_time = datetime.now().strftime('%Y/%m/%d')
-        
-        if test_type == 'submit_fail':
-            # 測試失敗通知
-            template = get_notification_template('submit_fail')
-            error_msg = data.get('error_msg', '可委託金額不足')
-            message = format_order_message(template, order_info, current_time, True, error_msg)
-        elif test_type == 'submit_success':
-            # 測試提交成功通知
-            template = get_notification_template('submit_success')
-            message = format_order_message(template, order_info, current_time, True)
-        else:  # trade_success
-            # 測試成交通知
-            template = get_notification_template('trade_success')
-            order_info['deal_price'] = 22480.0
-            order_info['deal_quantity'] = 1
-            message = format_order_message(template, order_info, current_time, True)
-        
-        # 發送測試訊息
-        success = send_telegram_message(message)
-        
-        return jsonify({
-            'status': 'success' if success else 'error',
-            'message': '測試通知發送成功' if success else '測試通知發送失敗',
-            'test_message': message
-        })
-        
-    except Exception as e:
-        return jsonify({
-            'status': 'error',
-            'message': f'測試失敗: {str(e)}'
-        }), 500
+# 測試功能已移除
 
 @app.route('/api/manual/order', methods=['POST'])
 def manual_order():
@@ -2598,19 +3176,19 @@ def manual_order():
 def tradingview_webhook():
     """接收TradingView的webhook信號"""
     try:
-        # 驗證API是否已連線
-        if not sinopac_connected or not sinopac_api:
-            return jsonify({
-                'status': 'error',
-                'message': '永豐API未連線'
-            }), 400
-        
         # 獲取webhook數據
         data = request.get_json()
         if not data:
             return jsonify({
                 'status': 'error',
                 'message': '無效的請求數據'
+            }), 400
+        
+        # 驗證API是否已連線
+        if not sinopac_connected or not sinopac_api:
+            return jsonify({
+                'status': 'error',
+                'message': '永豐API未連線'
             }), 400
         
         # 解析交易信號
@@ -2648,7 +3226,7 @@ def tradingview_webhook():
             if '平' in direction:
                 position_type = 'long' if '多' in direction else 'short'
             
-            # 根據不同合約分別下單
+            # 根據不同合約分別處理
             if txf_size > 0:
                 result = place_futures_order('TXF', txf_size, direction, is_manual=False, position_type=position_type)
                 orders_result.append(result)
@@ -2680,6 +3258,8 @@ def tradingview_webhook():
             'message': f'處理請求失敗: {str(e)}'
         }), 500
 
+# 模擬下單函數已移除
+
 def place_futures_order(contract_code, quantity, direction, price=0, is_manual=False, position_type=None, price_type=None, order_type=None):
     """執行期貨下單
     contract_code: 合約代碼 (TXF, MXF, TMF)
@@ -2702,9 +3282,9 @@ def place_futures_order(contract_code, quantity, direction, price=0, is_manual=F
         
         # 判斷交易動作
         if direction == "開多" or (direction == "平空" and position_type == 'short'):
-            action = sj.constant.Action.Buy
+            action = safe_constants.get_action('BUY')
         elif direction == "開空" or (direction == "平多" and position_type == 'long'):
-            action = sj.constant.Action.Sell
+            action = safe_constants.get_action('SELL')
         else:
             raise Exception(f'無效的交易方向: {direction}')
         
@@ -2712,18 +3292,18 @@ def place_futures_order(contract_code, quantity, direction, price=0, is_manual=F
         if is_manual:
             # 手動下單，使用傳入的參數或根據price判斷
             if price_type is None:
-                final_price_type = sj.constant.FuturesPriceType.MKT if price == 0 else sj.constant.FuturesPriceType.LMT
+                final_price_type = safe_constants.get_price_type('MKT' if price == 0 else 'LMT')
             else:
-                final_price_type = sj.constant.FuturesPriceType.MKT if price_type == 'MKT' else sj.constant.FuturesPriceType.LMT
+                final_price_type = safe_constants.get_price_type(price_type)
             
             if order_type is None:
-                final_order_type = sj.constant.FuturesOrderType.ROD  # 手動預設使用ROD
+                final_order_type = safe_constants.get_order_type('ROD')  # 手動預設使用ROD
             else:
-                final_order_type = sj.constant.FuturesOrderType.IOC if order_type == 'IOC' else sj.constant.FuturesOrderType.ROD
+                final_order_type = safe_constants.get_order_type(order_type)
         else:
             # webhook下單，強制使用市價單IOC
-            final_price_type = sj.constant.FuturesPriceType.MKT
-            final_order_type = sj.constant.FuturesOrderType.IOC
+            final_price_type = safe_constants.get_price_type('MKT')
+            final_order_type = safe_constants.get_order_type('IOC')
             price = 0  # 確保使用市價
         
         # 建立訂單
@@ -2733,7 +3313,7 @@ def place_futures_order(contract_code, quantity, direction, price=0, is_manual=F
             action=action,
             price_type=final_price_type,
             order_type=final_order_type,
-            octype=sj.constant.FuturesOCType.Auto,
+            octype=safe_constants.get_oc_type(),
             account=sinopac_api.futopt_account
         )
         
@@ -2745,252 +3325,76 @@ def place_futures_order(contract_code, quantity, direction, price=0, is_manual=F
             error_msg = trade.operation.get('op_msg')
             print(f"訂單操作訊息: {error_msg}")
             
-            # 準備訂單資訊
-            order_info = {
-                'contract_code': contract_code,
-                'contract_name': target_contract.code,
-                'delivery_date': target_contract.delivery_date.strftime('%Y/%m/%d'),
-                'quantity': quantity,
-                'action': action,
-                'position_type': position_type,
-                'order_id': trade.order.id if trade and trade.order else None,
-                'status': 'failed',  # 直接標記為失敗
-                'contract_type': '大台指' if contract_code == 'TXF' else '小台指' if contract_code == 'MXF' else '微台指',
-                'price': price,
-                'price_type': final_price_type,
-                'order_type': final_order_type
-            }
+            # 準備訂單資訊用於失敗通知
+            contract_name = '大台' if contract_code == 'TXF' else '小台' if contract_code == 'MXF' else '微台'
+            order_id = trade.order.id if trade and trade.order else "未知"
             
             # 發送失敗通知
-            current_time = datetime.now().strftime('%Y/%m/%d')
-            fail_template = get_notification_template('submit_fail')
-            fail_message = format_order_message(fail_template, order_info, current_time, is_manual, error_msg)
+            fail_message = get_formatted_order_message(
+                is_success=False,
+                order_id=order_id,
+                contract_name=contract_name,
+                qty=quantity,
+                price=price,
+                octype="New",
+                direction=str(action),
+                order_type=str(final_order_type),
+                price_type=str(final_price_type),
+                is_manual=is_manual,
+                reason=OP_MSG_TRANSLATIONS.get(error_msg, error_msg),
+                contract_code=target_contract.code,
+                delivery_date=target_contract.delivery_date.strftime('%Y/%m/%d')
+            )
             send_telegram_message(fail_message)
             
             raise Exception(error_msg)
         
-        # 準備訂單資訊
+        # 檢查訂單是否成功提交
+        if not trade or not hasattr(trade, 'order') or not trade.order.id:
+            raise Exception("訂單提交失敗")
+        
+        order_id = trade.order.id
+        contract_name = '大台' if contract_code == 'TXF' else '小台' if contract_code == 'MXF' else '微台'
+        
+        # 建立訂單映射資訊（關鍵：參考TXserver.py架構）
         order_info = {
+            'octype': 'New',  # 目前只處理開倉
+            'direction': str(action),
+            'contract_name': contract_name,
+            'order_type': str(final_order_type),
+            'price_type': str(final_price_type),
+            'is_manual': is_manual
+        }
+        
+        # 將訂單資訊存入映射（使用線程鎖確保線程安全）
+        with global_lock:
+            order_octype_map[order_id] = order_info
+        
+        print(f"訂單提交成功，單號: {order_id}")
+        print(f"訂單映射已建立: {order_info}")
+        
+        # 返回訂單資訊
+        return {
             'contract_code': contract_code,
             'contract_name': target_contract.code,
             'delivery_date': target_contract.delivery_date.strftime('%Y/%m/%d'),
             'quantity': quantity,
             'action': action,
             'position_type': position_type,
-            'order_id': trade.order.id if trade and trade.order else None,
-            'status': trade.status.status if trade else None,
-            'contract_type': '大台指' if contract_code == 'TXF' else '小台指' if contract_code == 'MXF' else '微台指',
+            'order_id': order_id,
+            'status': 'submitted',
+            'contract_type': contract_name,
             'price': price,
             'price_type': final_price_type,
             'order_type': final_order_type
         }
-        
-        # 發送通知
-        send_order_notification(order_info, is_manual)
-        
-        return order_info
         
     except Exception as e:
         raise Exception(f'{contract_code}下單失敗: {str(e)}')
 
 
 
-def get_order_status(order_id):
-    """查詢訂單成交狀態"""
-    try:
-        print(f"開始查詢訂單狀態: {order_id}")
-        # 查詢訂單
-        order = sinopac_api.get_order(order_id)
-        if not order:
-            print(f"找不到訂單: {order_id}")
-            return None
-        
-        print(f"訂單資訊: {order.__dict__}")
-        
-        # 檢查是否有操作訊息
-        if hasattr(order, 'operation') and order.operation.get('op_msg'):
-            error_msg = order.operation.get('op_msg')
-            print(f"發現操作訊息: {error_msg}")
-            return {
-                'status': 'failed',
-                'error': error_msg
-            }
-        
-        # 取得成交資訊
-        if order.status.status == sj.constant.OrderStatus.Filled:
-            print(f"訂單已成交: {order_id}")
-            return {
-                'status': 'filled',
-                'price': order.status.deal_price,
-                'quantity': order.status.deal_quantity
-            }
-        elif order.status.status == sj.constant.OrderStatus.Failed:
-            error_msg = order.status.error_message
-            print(f"訂單失敗: {error_msg}")
-            return {
-                'status': 'failed',
-                'error': error_msg
-            }
-        else:
-            print(f"訂單處理中: {order_id}")
-            return {
-                'status': 'pending',
-                'message': '訂單處理中'
-            }
-    except Exception as e:
-        print(f"查詢訂單狀態失敗: {e}")
-        return None
-
-def get_order_action_text(action, position_type=None):
-    """根據動作和持倉類型取得動作文字
-    action: Buy或Sell（可能是字符串或常數格式）
-    position_type: None(表示開倉), 'long'(持多), 'short'(持空)
-    """
-    # 統一處理action格式
-    action_str = str(action).upper()
-    
-    if position_type is None:  # 開倉
-        if (action == sj.constant.Action.Buy or action_str == 'BUY'):
-            return "多單買入"
-        else:  # Sell
-            return "空單賣出"
-    elif position_type == 'long':  # 持多單
-        if (action == sj.constant.Action.Sell or action_str == 'SELL'):
-            return "多單賣出"
-        else:
-            return "無效動作"
-    elif position_type == 'short':  # 持空單
-        if (action == sj.constant.Action.Buy or action_str == 'BUY'):
-            return "空單買入"
-        else:
-            return "無效動作"
-    return "無效動作"
-
-def get_order_type_text(price_type, order_type):
-    """取得訂單類型文字"""
-    # 處理price_type（支援字符串和常數格式）
-    if (price_type == sj.constant.FuturesPriceType.MKT or 
-        str(price_type).upper() == 'MKT'):
-        price_text = "市價單"
-    else:
-        price_text = "限價單"
-    
-    # 處理order_type（支援字符串和常數格式）
-    if (order_type == sj.constant.FuturesOrderType.IOC or 
-        str(order_type).upper() == 'IOC'):
-        type_text = "IOC"
-    else:
-        type_text = "ROD"
-    
-    return f"{price_text}（{type_text}）"
-
-def get_notification_template(notification_type):
-    """取得通知模板
-    notification_type: submit_success, submit_fail, trade_success
-    """
-    templates = {
-        'submit_success': {
-            'emoji': '⭕️',
-            'title': '提交成功',
-            'prefix': '提交'
-        },
-        'submit_fail': {
-            'emoji': '❌',
-            'title': '提交失敗',
-            'prefix': '提交'
-        },
-        'trade_success': {
-            'emoji': '✅',
-            'title': '成交通知',
-            'prefix': '成交'
-        }
-    }
-    return templates.get(notification_type, {'emoji': '❓', 'title': '未知通知', 'prefix': '未知'})
-
-def format_order_message(template, order_info, current_time, is_manual=False, error_msg=None):
-    """格式化訂單訊息"""
-    prefix = template['prefix']  # 取得前綴（提交/成交）
-    
-    # 取得動作文字
-    action_text = get_order_action_text(order_info['action'], order_info.get('position_type'))
-    
-    # 取得訂單類型文字
-    order_type_text = get_order_type_text(order_info['price_type'], order_info['order_type'])
-    
-    # 取得提交類型
-    submit_type = "手動" if is_manual else "自動"
-    operation_type = "平倉" if order_info.get('position_type') else "開倉"
-    
-    # 構建價格文字
-    if prefix == '成交':
-        price_text = str(order_info.get('deal_price', '市價'))
-    else:
-        # 修復：支援字符串和常數兩種格式的price_type
-        price_type = order_info['price_type']
-        if (price_type == sj.constant.FuturesPriceType.MKT or 
-            str(price_type).upper() == 'MKT' or 
-            order_info['price'] == 0):
-            price_text = "市價"
-        else:
-            price_text = str(order_info['price'])
-    
-    # 基本訊息格式
-    message = (
-        f"{template['emoji']} {template['title']}（{current_time}）\n"
-        f"選用合約：{order_info['contract_name']} ({order_info['delivery_date']})\n"
-        f"訂單類型：{order_type_text}\n"
-        f"{prefix}單號：{order_info['order_id']}\n"
-        f"{prefix}類型：{submit_type}{operation_type}\n"
-        f"{prefix}動作：{action_text}\n"
-        f"{prefix}部位：{order_info['contract_type']}\n"
-        f"{prefix}數量：{order_info.get('deal_quantity', order_info['quantity'])} 口\n"
-        f"{prefix}價格：{price_text}"
-    )
-    
-    # 如果是失敗通知，添加原因
-    if error_msg:
-        translated_error = translate_error_message(error_msg)
-        message += f"\n原因：{translated_error}"
-    
-    return message
-
-def translate_error_message(error_msg):
-    """將錯誤訊息翻譯成中文"""
-    error_translations = {
-        # 英文錯誤訊息
-        "Order not found": "訂單未找到",
-        "Price not satisfied": "價格未滿足",
-        "Insufficient margin": "保證金不足",
-        "Invalid quantity": "無效數量",
-        "Invalid price": "無效價格",
-        "Market closed": "市場已關閉",
-        "Not trading hours": "非交易時間",
-        "Session closed": "交易時段已關閉",
-        "Connection failed": "連線失敗",
-        "API error": "API錯誤",
-        "Unknown error": "未知錯誤",
-        
-        # 永豐API常見中文錯誤訊息
-        "可委託金額不足": "保證金不足",
-        "非該商品可下單時間": "非交易時間",
-        "委託價格不符合規範": "委託價格不符合規範",
-        "委託數量不符合規範": "委託數量不符合規範",
-        "帳戶未開啟": "帳戶未開啟",
-        "未開放交易": "未開放交易",
-        "已超過風控限制": "已超過風控限制",
-        "該商品已停止交易": "該商品已停止交易",
-        "無足夠庫存": "無足夠庫存",
-        "委託失敗": "委託失敗",
-        "系統忙碌中": "系統忙碌中",
-        "超過單筆委託數量限制": "超過單筆委託數量限制",
-        "超過單日委託數量限制": "超過單日委託數量限制",
-        "不可做空": "不可做空",
-        "暫停交易": "暫停交易",
-        "漲跌停限制": "漲跌停限制"
-    }
-    
-    # 如果找不到翻譯，直接返回原始錯誤訊息
-    return error_translations.get(error_msg, error_msg)
+# 移除舊的通知函數，改用新的回調機制
 
 def send_telegram_message(message):
     """發送Telegram訊息"""
@@ -3044,50 +3448,9 @@ def send_telegram_message(message):
         traceback.print_exc()
         return False
 
-def send_order_notification(order_info, is_manual=False):
-    """發送訂單通知"""
-    try:
-        print(f"準備發送訂單通知: {order_info}")
-        current_time = datetime.now().strftime('%Y/%m/%d')
-        
-        # 先查詢訂單狀態
-        order_status = get_order_status(order_info['order_id'])
-        print(f"訂單狀態: {order_status}")
-        
-        if order_status:
-            if order_status['status'] == 'failed':
-                print("準備發送失敗通知")
-                # 發送失敗通知
-                fail_template = get_notification_template('submit_fail')
-                fail_message = format_order_message(fail_template, order_info, current_time, is_manual, order_status['error'])
-                send_telegram_message(fail_message)
-            elif order_status['status'] == 'filled':
-                print("準備發送成交通知")
-                # 先發送提交成功通知
-                submit_template = get_notification_template('submit_success')
-                submit_message = format_order_message(submit_template, order_info, current_time, is_manual)
-                send_telegram_message(submit_message)
-                
-                # 更新訂單資訊
-                order_info['deal_price'] = order_status['price']
-                order_info['deal_quantity'] = order_status['quantity']
-                
-                # 等待5秒後發送成交通知
-                time.sleep(5)
-                
-                # 發送成交通知
-                trade_template = get_notification_template('trade_success')
-                trade_message = format_order_message(trade_template, order_info, current_time, is_manual)
-                send_telegram_message(trade_message)
-            else:  # pending
-                print("準備發送提交通知")
-                # 發送提交成功通知
-                submit_template = get_notification_template('submit_success')
-                submit_message = format_order_message(submit_template, order_info, current_time, is_manual)
-                send_telegram_message(submit_message)
-                
-    except Exception as e:
-        print(f"發送訂單通知失敗: {e}")
+# 模擬通知函數已移除
+
+# 移除舊的send_order_notification函數，新的回調機制會自動處理
 
 if __name__ == '__main__':
     # 在其他初始化代碼之前添加

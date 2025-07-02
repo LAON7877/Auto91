@@ -89,6 +89,46 @@ curl -X POST http://localhost:5002/api/ngrok/start
 - **請求日誌**：最近的 HTTP 請求記錄
 - **版本信息**：當前版本和更新可用性
 
+### ngrok Token 管理（v1.3.2 新增）
+
+#### Token 設置維護
+```bash
+# 檢查 Token 設置狀態
+ls -la server/config/ngrok_token.txt
+
+# 驗證 Token 格式
+curl -X POST http://localhost:5002/api/ngrok/validate_token \
+  -H "Content-Type: application/json" \
+  -d '{"token": "YOUR_TOKEN_HERE"}'
+
+# 設置新 Token
+curl -X POST http://localhost:5002/api/ngrok/setup \
+  -H "Content-Type: application/json" \
+  -d '{"action": "user_setup", "token": "YOUR_TOKEN_HERE"}'
+```
+
+#### Token 檔案維護
+- **存儲位置**：`server/config/ngrok_token.txt`
+- **格式要求**：Token必須以 `1_` 或 `2` 開頭，長度≥10字符
+- **權限檢查**：確保檔案具有適當的讀寫權限
+- **備份建議**：重要Token應定期備份
+
+#### 常見 Token 問題
+1. **Token 格式錯誤**：
+   - 檢查是否以 `1_` 或 `2` 開頭
+   - 確認長度大於等於10字符
+   - 檢查是否包含無效字符
+
+2. **Token 檔案丟失**：
+   - 檢查 `server/config/` 目錄是否存在
+   - 重新設置Token並保存
+   - 檢查檔案權限設置
+
+3. **webview localStorage 失效**：
+   - v1.3.2已改用服務器端存儲解決此問題
+   - 舊版本可能遇到重啟後Token消失
+   - 升級到v1.3.2可徹底解決
+
 ## 交易日判斷維護
 
 ### 重要原則
@@ -179,24 +219,52 @@ curl -X POST http://localhost:5002/api/logout
 curl -X POST http://localhost:5002/api/login
 ```
 
-### 通知系統維護
+### 通知系統維護（v1.3.2 重大重構）
 
-#### 通知機制檢查（v1.3.1變更）
-- **主動查詢模式**：改為查詢訂單狀態後發送通知
-- **通知完整性**：提交成功/失敗/成交通知都正常運作
-- **時間延遲**：通知可能比即時callback延遲1-2秒
+#### 通知機制演進
+- **v1.3.1之前**：即時callback（因API版本問題廢棄）
+- **v1.3.1**：主動查詢模式（已廢棄）
+- **v1.3.2當前**：回調事件處理機制（參考TXserver.py重構）
 
-#### Telegram通知測試
-```bash
-# 測試提交成功通知
-curl -X POST http://localhost:5002/api/test/telegram \
-  -H "Content-Type: application/json" \
-  -d '{"type": "submit_success"}'
+#### 現行通知架構維護
+1. **訂單映射檢查**：
+   ```bash
+   # 檢查order_octype_map狀態
+   # 通過下單後觀察是否正確建立映射
+   ```
 
-# 測試提交失敗通知
-curl -X POST http://localhost:5002/api/test/telegram \
-  -H "Content-Type: application/json" \
-  -d '{"type": "submit_fail", "error_msg": "測試錯誤"}'
+2. **回調函數監控**：
+   ```python
+   # 檢查 order_callback 是否正常註冊
+   # 監控各種 OrderState 的處理
+   ```
+
+3. **通知格式驗證**：
+   ```bash
+   # 檢查提交成功通知格式
+   # 檢查提交失敗通知格式  
+   # 檢查成交通知格式
+   ```
+
+#### 通知系統故障排除
+1. **通知遺漏**：
+   - 檢查 order_octype_map 是否正確建立
+   - 驗證 seqno 是否正確對應
+   - 確認回調函數是否正常觸發
+
+2. **通知延遲**：
+   - v1.3.2使用即時回調，不應有明顯延遲
+   - 如有延遲，檢查線程鎖是否造成阻塞
+
+3. **通知格式錯誤**：
+   - 檢查 get_formatted_order_message() 函數
+   - 檢查 get_formatted_trade_message() 函數
+   - 驗證 OP_MSG_TRANSLATIONS 對照表
+
+#### 測試功能（v1.3.2 已移除）
+- **重要變更**：v1.3.2已移除所有測試功能API
+- **原因**：測試功能容易產生誤導性錯誤，改為直接使用正式功能驗證
+- **替代方案**：通過實際下單操作驗證通知系統功能
 
 # 測試成交通知
 curl -X POST http://localhost:5002/api/test/telegram \

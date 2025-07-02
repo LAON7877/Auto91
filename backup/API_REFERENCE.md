@@ -171,6 +171,59 @@
 }
 ```
 
+### POST /api/ngrok/setup
+**ngrok 自動化設置 API (v1.3.2 新增)**
+
+#### 請求格式
+```json
+{
+  "action": "user_setup",
+  "token": "2nVXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
+}
+```
+
+#### 回應格式
+```json
+{
+  "status": "success",
+  "message": "Token設置成功",
+  "data": {
+    "saved": true,
+    "started": true
+  }
+}
+```
+
+#### 說明
+- 用戶自定義ngrok token設置
+- 自動保存token到 `server/config/ngrok_token.txt`
+- 自動啟動ngrok並建立tunnel
+- 僅支援 `user_setup` 模式
+
+### POST /api/ngrok/validate_token
+**ngrok Token 驗證 API (v1.3.2 新增)**
+
+#### 請求格式
+```json
+{
+  "token": "2nVXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
+}
+```
+
+#### 回應格式
+```json
+{
+  "status": "success",
+  "valid": true|false,
+  "message": "Token格式驗證通過"
+}
+```
+
+#### 驗證規則
+- Token必須以 `1_` 或 `2` 開頭
+- 長度必須大於等於10字符
+- 驗證通過才能進行設置
+
 ## 交易日狀態 API
 
 ### GET /api/trading/status

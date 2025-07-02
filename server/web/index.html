@@ -15,7 +15,7 @@
         <div class="panel-header">
             <h2>帳戶設置面板</h2>
             <div class="button-group">
-                <button id="register-ngrok-btn" type="button" onclick="registerNgrok()">註冊ngrok</button>
+                <button id="register-ngrok-btn" type="button" onclick="showNgrokSetupModal()">設置ngrok</button>
                 <button id="save-btn" type="button" onclick="saveEnv(event)">儲存</button>
                 <button id="login-btn" type="button" onclick="login()" disabled>登入</button>
             </div>
@@ -73,6 +73,22 @@
                 <label for="cert_end">憑證到期日</label>
                 <input type="text" id="cert_end" name="CERT_END" readonly>
             </div>
+            
+            <!-- ngrok Token 管理區域 -->
+            <div class="form-group">
+                <label>ngrok Token 管理</label>
+                <div class="ngrok-token-management">
+                    <div class="token-status" id="token-status">
+                        <span class="token-label">目前狀態:</span>
+                        <span class="token-value" id="current-token-status">未設置</span>
+                    </div>
+                    <div class="token-actions">
+                        <button type="button" class="token-btn" onclick="showNgrokSetupModal()">管理 ngrok Token</button>
+                        <button type="button" class="token-btn secondary" onclick="clearNgrokToken()">清除 Token</button>
+                    </div>
+                </div>
+            </div>
+            
             <span id="save-status"></span>
         </form>
     </div>
@@ -138,6 +154,8 @@
                         </div>
                     </div>
                 </div>
+
+                <!-- 測試功能已移除 -->
             </div>
 
             <!-- 新增的右側容器 -->
@@ -513,6 +531,44 @@
                     <h4>更新日誌：</h4>
                     <pre id="sinopac-update-log"></pre>
                 </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ngrok設置模態窗口 -->
+    <div id="ngrok-setup-modal" class="modal" style="display: none;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>管理 ngrok Token</h3>
+                <span class="close" onclick="closeNgrokSetupModal()">&times;</span>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label for="ngrok-authtoken">ngrok Authtoken:</label>
+                    <div class="password-input-container">
+                        <input type="password" id="ngrok-authtoken" placeholder="輸入您的 ngrok Authtoken">
+                        <button type="button" class="password-toggle-btn" onclick="toggleTokenVisibility()">
+                            <svg class="eye-open" viewBox="0 0 16 16" fill="currentColor">
+                                <path d="M16 8s-3-5.5-8-5.5S0 8 0 8s3 5.5 8 5.5S16 8 16 8zM1.173 8a13.133 13.133 0 0 1 1.66-2.043C4.12 4.668 5.88 3.5 8 3.5c2.12 0 3.879 1.168 5.168 2.457A13.133 13.133 0 0 1 14.828 8c-.058.087-.122.183-.195.288-.335.48-.83 1.12-1.465 1.755C11.879 11.332 10.119 12.5 8 12.5c-2.12 0-3.879-1.168-5.168-2.457A13.134 13.134 0 0 1 1.172 8z"/>
+                                <path d="M8 5.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5zM4.5 8a3.5 3.5 0 1 1 7 0 3.5 3.5 0 0 1-7 0z"/>
+                            </svg>
+                            <svg class="eye-closed" viewBox="0 0 16 16" fill="currentColor" style="display: none;">
+                                <path d="m10.79 12.912-1.614-1.615a3.5 3.5 0 0 1-4.474-4.474l-2.06-2.06C.938 6.278 0 8 0 8s3 5.5 8 5.5a7.029 7.029 0 0 0 2.79-.588zM5.21 3.088A7.028 7.028 0 0 1 8 2.5c5 0 8 5.5 8 5.5s-.939 1.721-2.641 3.238l-2.062-2.062a3.5 3.5 0 0 0-4.474-4.474L5.21 3.089z"/>
+                                <path d="M5.525 7.646a2.5 2.5 0 0 0 2.829 2.829l-2.83-2.829zm4.95.708-2.829-2.83a2.5 2.5 0 0 1 2.829 2.829zm3.171 6-12-12 .708-.708 12 12-.708.708z"/>
+                            </svg>
+                        </button>
+                    </div>
+                    <small style="color: #666;">
+                        還沒有authtoken？ 
+                        <a href="https://ngrok.com/signup" target="_blank" style="color: #007bff;">點此註冊免費帳戶</a>
+                    </small>
+                </div>
+
+                <div id="setup-status" style="margin: 10px 0;"></div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" onclick="setupNgrok()" class="btn-primary" id="setup-ngrok-btn">儲存並啟動</button>
+                <button type="button" onclick="closeNgrokSetupModal()" class="btn-secondary">取消</button>
             </div>
         </div>
     </div>

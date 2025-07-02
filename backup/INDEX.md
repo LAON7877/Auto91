@@ -1,15 +1,15 @@
 # 文檔導航索引
 
-**最新版本：v1.3.1** - 永豐API初始化流程修復 (2025-07-02)
+**最新版本：v1.3.2** - 通知系統重構與ngrok自動化完善 (2025-07-02)
 
-- [README.md](README.md) 系統概況與功能
-- [QUICK_START.md](QUICK_START.md) 5 分鐘快速上手
-- [API_REFERENCE.md](API_REFERENCE.md) API 技術參考
-- [CHANGELOG.md](CHANGELOG.md) 版本變更紀錄 **[已更新]**
-- [TROUBLESHOOTING.md](TROUBLESHOOTING.md) 故障排除 **[已更新]**
+- [README.md](README.md) 系統概況與功能 **[v1.3.2 已更新]**
+- [QUICK_START.md](QUICK_START.md) 5 分鐘快速上手 **[v1.3.2 已更新]**
+- [API_REFERENCE.md](API_REFERENCE.md) API 技術參考 **[v1.3.2 已更新]**
+- [CHANGELOG.md](CHANGELOG.md) 版本變更紀錄 **[v1.3.2 已更新]**
+- [TROUBLESHOOTING.md](TROUBLESHOOTING.md) 故障排除 **[v1.3.2 已更新]**
 - [DEPLOYMENT.md](DEPLOYMENT.md) 生產部署指南
-- [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md) 開發者指南 **[已更新]**
-- [MAINTENANCE.md](MAINTENANCE.md) 維護運營指南 **[已更新]**
+- [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md) 開發者指南 **[v1.3.2 已更新]**
+- [MAINTENANCE.md](MAINTENANCE.md) 維護運營指南 **[v1.3.2 已更新]**
 
 ## 重點功能文檔
 
@@ -24,14 +24,29 @@
 - **民國年支援**：假期檔案使用民國年格式
 - **週六夜盤**：正確處理週六夜盤交易日判斷
 
+### 通知系統（v1.3.2重大重構）
+- **TG通知修復**：參考TXserver.py重構，解決通知系統錯誤
+- **回調事件處理**：實現完整的訂單回調處理機制
+- **訊息格式統一**：標準化提交成功、失敗、成交通知格式
+- **智能錯誤翻譯**：添加OP_MSG_TRANSLATIONS提供友善錯誤訊息
+- **測試功能移除**：移除易錯的測試功能，改用正式功能驗證
+
+### ngrok自動化設置（v1.3.2新增）
+- **用戶Token設置**：支援用戶自定義ngrok token設置
+- **Token記憶功能**：改用服務器端存儲，解決webview環境限制
+- **Token輸入優化**：密碼顯示/隱藏功能，提升安全體驗
+- **自動驗證配置**：Token格式驗證和自動啟動流程
+- **設置持久化**：使用 server/config/ngrok_token.txt 安全存儲
+
 ### 永豐API系統（v1.3.1更新）
 - **安全初始化**：修復callback設置錯誤，確保API正常啟動
 - **穩定連線**：12小時自動重連機制，保持連線穩定
-- **通知系統**：主動查詢模式，確保交易通知可靠性
+- **通知系統**：v1.3.2改用即時回調事件處理機制
 - **版本兼容**：支援不同版本shioaji的兼容性處理
 
 ### API 系統
 - **ngrok 管理 API**：完整的 ngrok 狀態監控和管理
+- **ngrok 設置 API**：v1.3.2新增Token設置和驗證API
 - **交易日狀態 API**：統一的交易日判斷接口
 - **系統日誌 API**：前端日誌與 ngrok 請求日誌整合
-- **永豐API管理**：API狀態監控、版本檢查、通知測試 
+- **永豐API管理**：API狀態監控、版本檢查 

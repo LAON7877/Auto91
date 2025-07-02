@@ -38,6 +38,10 @@ echo 5002 > port.txt
 # 準備 Telegram Bot：
 # - Bot Token
 # - Chat ID
+
+# 準備 ngrok Token (v1.3.2 新要求)：
+# - 註冊 ngrok 帳戶：https://ngrok.com/
+# - 獲取 Authtoken（每個用戶需要自己的 token）
 ```
 
 ### 4. 系統自動初始化
@@ -50,9 +54,15 @@ echo 5002 > port.txt
 
 ### 5. 登入與配置
 1. 用瀏覽器開啟 http://localhost:{port}（port 為配置的端口號）
-2. 填寫永豐 API 憑證和 Telegram Bot 設定
-3. 上傳假期檔案和憑證檔案
-4. 點擊「登入」開始使用
+2. **設置 ngrok Token（v1.3.2 新增）**：
+   - 點擊「設置」標籤頁
+   - 點擊「管理 ngrok Token」按鈕
+   - 輸入您的 ngrok Authtoken
+   - 點擊「儲存並啟動」
+   - 系統會自動驗證並啟動 ngrok tunnel
+3. 填寫永豐 API 憑證和 Telegram Bot 設定
+4. 上傳假期檔案和憑證檔案
+5. 點擊「登入」開始使用
 
 ## ngrok 自動管理說明
 
