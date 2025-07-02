@@ -124,6 +124,103 @@ curl -X POST http://localhost:5002/api/ngrok/start
 - 前端顯示異常：檢查 `/api/trading/status` API 回應
 - ngrok 異常：檢查自動重啟機制和進程狀態
 
+## 永豐API維護（v1.3.1新增）
+
+### API初始化維護
+
+#### 初始化流程檢查
+1. **API對象創建**：檢查 `init_sinopac_api()` 是否成功執行
+2. **登入狀態**：確認 `login_sinopac()` 正常完成
+3. **帳戶設置**：驗證期貨帳戶是否正確設置
+4. **callback狀態**：檢查callback設置是否跳過（v1.3.1暫時移除）
+
+#### 版本兼容性維護
+```bash
+# 檢查shioaji版本
+curl http://localhost:5002/api/sinopac/version
+
+# 檢查更新
+curl -X POST http://localhost:5002/api/sinopac/check_update
+
+# 自動更新（如需要）
+curl -X POST http://localhost:5002/api/sinopac/auto_update
+```
+
+#### callback設置故障排除
+- **v1.3.1修復**：callback設置移至登入成功後
+- **錯誤隔離**：callback設置失敗不影響基本功能
+- **通知機制**：改為主動查詢模式，確保可靠性
+
+### API連線維護
+
+#### 連線狀態監控
+```bash
+# 檢查連線狀態
+curl http://localhost:5002/api/sinopac/status
+
+# 檢查帳戶狀態
+curl http://localhost:5002/api/account/status
+
+# 檢查持倉狀態
+curl http://localhost:5002/api/position/status
+```
+
+#### 12小時自動重連機制
+- **自動登出**：連線滿12小時後自動登出
+- **重新登入**：自動執行重新登入程序
+- **狀態通知**：通過前端系統日誌記錄
+
+#### 手動重新連線
+```bash
+# 登出API
+curl -X POST http://localhost:5002/api/logout
+
+# 重新登入
+curl -X POST http://localhost:5002/api/login
+```
+
+### 通知系統維護
+
+#### 通知機制檢查（v1.3.1變更）
+- **主動查詢模式**：改為查詢訂單狀態後發送通知
+- **通知完整性**：提交成功/失敗/成交通知都正常運作
+- **時間延遲**：通知可能比即時callback延遲1-2秒
+
+#### Telegram通知測試
+```bash
+# 測試提交成功通知
+curl -X POST http://localhost:5002/api/test/telegram \
+  -H "Content-Type: application/json" \
+  -d '{"type": "submit_success"}'
+
+# 測試提交失敗通知
+curl -X POST http://localhost:5002/api/test/telegram \
+  -H "Content-Type: application/json" \
+  -d '{"type": "submit_fail", "error_msg": "測試錯誤"}'
+
+# 測試成交通知
+curl -X POST http://localhost:5002/api/test/telegram \
+  -H "Content-Type: application/json" \
+  -d '{"type": "trade_success"}'
+```
+
+### API維護檢查清單
+- [ ] shioaji版本是否為最新
+- [ ] API初始化是否正常
+- [ ] 登入狀態是否穩定
+- [ ] 期貨帳戶是否正確設置
+- [ ] 12小時自動重連是否運作
+- [ ] 通知功能是否正常
+- [ ] 下單功能是否正常（手動和webhook）
+- [ ] 合約資訊是否能正常獲取
+
+### 常見API問題排除
+1. **初始化錯誤**：檢查shioaji模組是否正確安裝
+2. **登入失敗**：檢查API Key、Secret Key、憑證設置
+3. **callback錯誤**：v1.3.1已修復，確認使用最新版本
+4. **通知異常**：檢查Telegram Bot Token和Chat ID
+5. **帳戶問題**：確認期貨帳戶已開啟並有足夠權限
+
 ## 系統維護
 
 ### 日誌檢查
@@ -132,6 +229,7 @@ curl -X POST http://localhost:5002/api/ngrok/start
 - 檢查交易日判斷日誌
 - 查看前端系統日誌
 - 檢查 ngrok 請求日誌
+- 監控永豐API初始化和callback狀態（v1.3.1新增）
 
 ### 備份策略
 - 定期備份 `.env` 設定檔

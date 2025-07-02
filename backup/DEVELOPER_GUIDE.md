@@ -71,6 +71,96 @@ def cleanup_on_exit():
     # 5. 重置 LOGIN 狀態
 ```
 
+### 永豐API初始化架構（v1.3.1更新）
+
+#### 核心設計原則
+- **安全初始化**：確保API對象完全創建後才設置callback
+- **穩定性優先**：基本功能優先，callback功能其次
+- **錯誤隔離**：callback設置失敗不影響核心交易功能
+- **版本兼容**：適配不同版本shioaji的callback差異
+
+#### API初始化流程（重要變更）
+```python
+def init_sinopac_api():
+    """初始化永豐API對象（僅創建對象，不設置callback）"""
+    try:
+        if not SHIOAJI_AVAILABLE:
+            return False
+        
+        sinopac_api = sj.Shioaji()
+        print("永豐API對象創建成功")
+        return True
+    except Exception as e:
+        print(f"初始化永豐API失敗: {e}")
+        return False
+```
+
+#### 登入後設置callback（修正後流程）
+```python
+def login_sinopac():
+    """登入永豐API並在成功後設置callback"""
+    try:
+        # 1. API登入
+        sinopac_api.login(api_key=api_key, secret_key=secret_key)
+        
+        # 2. 暫時跳過callback設置，確保基本功能正常
+        print("API登入成功，暫時跳過callback設置")
+        
+        # 3. 設置期貨帳戶
+        accounts = [acc for acc in sinopac_api.list_accounts() 
+                   if acc.account_type == 'F']
+        if accounts:
+            sinopac_api.futopt_account = accounts[0]
+        
+        # 4. 更新狀態
+        sinopac_connected = True
+        sinopac_login_status = True
+        sinopac_login_time = datetime.now()
+        
+        return True
+    except Exception as e:
+        print(f"永豐API登入失敗: {e}")
+        return False
+```
+
+#### 通知機制架構變更
+```python
+# v1.3.1之前：使用即時callback
+@sinopac_api.on_order_callback
+def order_callback(order_state):
+    # 處理訂單狀態變化
+    
+# v1.3.1之後：使用主動查詢
+def send_order_notification(order_info, is_manual=False):
+    """主動查詢模式的通知機制"""
+    try:
+        # 1. 查詢訂單狀態
+        order_status = get_order_status(order_info['order_id'])
+        
+        # 2. 根據狀態發送對應通知
+        if order_status['status'] == 'failed':
+            send_failure_notification()
+        elif order_status['status'] == 'filled':
+            send_success_and_trade_notification()
+        else:
+            send_submit_notification()
+    except Exception as e:
+        print(f"發送通知失敗: {e}")
+```
+
+#### 版本兼容性處理
+```python
+# 檢查shioaji版本
+if hasattr(sj, '__version__'):
+    version = sj.__version__
+    if version >= '1.2.6':
+        # 使用新版本的callback設置方式
+        pass
+    else:
+        # 使用舊版本的兼容模式
+        pass
+```
+
 ### 端口配置架構
 
 #### 核心設計原則
@@ -200,11 +290,20 @@ def get_futures_contracts():
 - **必須**通過 API 調用 `main.py` 的結果
 - **統一**使用民國年假期檔案格式
 
+### 永豐API開發規範（v1.3.1新增）
+- **初始化順序**：必須先創建API對象，再登入，最後設置callback
+- **錯誤隔離**：callback設置失敗不能影響基本交易功能
+- **版本兼容**：檢查shioaji版本，使用對應的API方法
+- **通知機制**：優先使用主動查詢模式，確保通知功能可靠性
+- **狀態管理**：正確管理`sinopac_connected`和`sinopac_login_status`
+- **資源清理**：程式退出時正確登出API，避免連線殘留
+
 ### 錯誤處理規範
 - **4040 API 錯誤**：使用 try-catch 靜默處理
 - **進程管理錯誤**：使用 terminate() + kill() 確保清理
 - **網路錯誤**：設置合理的 timeout 值
 - **日誌記錄**：重要錯誤發送到前端系統日誌
+- **API初始化錯誤**：記錄錯誤但不中斷程式運行
 
 ## Debug 指南
 
