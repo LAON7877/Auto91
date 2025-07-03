@@ -735,6 +735,21 @@ function clearNgrokToken() {
         .then(res => res.json())
         .then(data => {
             if (data.status === 'success') {
+                // 立即清空輸入框
+                const tokenInput = document.getElementById('ngrok-authtoken');
+                if (tokenInput) {
+                    tokenInput.value = '';
+                }
+                
+                // 更新設置狀態顯示
+                const setupStatus = document.getElementById('setup-status');
+                if (setupStatus) {
+                    setupStatus.innerHTML = '<div style="color: green;">✓ Token 已成功清除</div>';
+                    setTimeout(() => {
+                        setupStatus.innerHTML = '';
+                    }, 3000);
+                }
+                
                 updateTokenStatus();
                 alert('Token 已清除');
             } else {
@@ -748,30 +763,9 @@ function clearNgrokToken() {
 }
 
 function updateTokenStatus() {
-    const statusElement = document.getElementById('current-token-status');
-    
-    if (!statusElement) {
-        return;
-    }
-    
-    // 從服務器載入token狀態
-    fetch('/api/ngrok/token/load')
-    .then(res => res.json())
-    .then(data => {
-        if (data.status === 'success' && data.authtoken) {
-            // 只顯示前4個和後4個字符，中間用*代替
-            const maskedToken = data.authtoken.substring(0, 4) + '***...***' + data.authtoken.substring(data.authtoken.length - 4);
-            statusElement.textContent = `已設置 (${maskedToken})`;
-            statusElement.className = 'token-value saved';
-        } else {
-            statusElement.textContent = '未設置';
-            statusElement.className = 'token-value not-saved';
-        }
-    })
-    .catch(error => {
-        statusElement.textContent = '未設置';
-        statusElement.className = 'token-value not-saved';
-    });
+    // 原本的token狀態顯示元素已移除，此函數現在主要用於其他元件的狀態同步
+    // 如果需要，可以在此處添加其他需要更新的元素
+    console.log('Token狀態已更新');
 }
 
 // 頁面載入時更新token狀態
@@ -1296,8 +1290,8 @@ function updateRequestsLog() {
         const requestsContainer = document.getElementById('requests-container');
         
         if (data.requests && data.requests.length > 0) {
-            // 限制最多顯示100條記錄
-            const limitedRequests = data.requests.slice(-100);
+            // 限制最多顯示100條記錄，並反轉順序（新的在上面）
+            const limitedRequests = data.requests.slice(-100).reverse();
             
             requestsContainer.innerHTML = '';
             limitedRequests.forEach((req, index) => {
@@ -1317,15 +1311,14 @@ function updateRequestsLog() {
                     <span class="request-timestamp">${req.timestamp}</span>
                     <span class="request-method ${req.method.toLowerCase()}">${req.method}</span>
                     <span class="request-uri">${req.uri}</span>
-                    <span class="request-status ${statusClass}">${req.status}</span>
-                    <span class="request-status-text ${statusClass}">${req.status_text}</span>
+                    <span class="request-status ${statusClass}">${req.status} ${req.status_text}</span>
                 `;
                 
                 requestsContainer.appendChild(requestItem);
             });
             
-            // 自動捲動到最底部顯示最新的記錄
-            requestsContainer.scrollTop = requestsContainer.scrollHeight;
+            // 保持在頂部位置顯示最新的記錄
+            requestsContainer.scrollTop = 0;
         } else {
             requestsContainer.innerHTML = '';
             const noRequestsMsg = document.createElement('div');

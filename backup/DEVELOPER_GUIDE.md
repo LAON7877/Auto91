@@ -192,12 +192,73 @@ def place_futures_order(action, quantity, price_type):
         print(f"下單失敗: {e}")
 ```
 
-#### 架構優勢
-- **即時響應**：透過shioaji回調機制，訂單狀態變更立即通知
-- **狀態完整**：支援提交成功、提交失敗、成交等所有狀態
-- **錯誤處理**：智能錯誤判斷（如IOC未成交→"價格未滿足"）
-- **訊息統一**：使用標準化格式，提供一致的通知體驗
-- **線程安全**：使用global_lock確保order_octype_map的線程安全
+##### v1.3.3：開平倉類型處理機制（最新架構）
+```python
+def get_oc_type(oc_type='Auto'):
+    """根據交易方向判斷開平倉類型"""
+    if oc_type == 'Auto':
+        # 根據交易方向自動判斷
+        if direction in ['開多', '開空']:
+            return 'New'
+        elif direction in ['平多', '平空']:
+            return 'Cover'
+    return oc_type
+
+def place_futures_order(action, quantity, price_type):
+    """下單時的開平倉類型處理"""
+    try:
+        # 判斷開平倉類型
+        oc_type = get_oc_type('Auto')
+        
+        # 建立訂單
+        order_obj = api.Order(
+            action=action,
+            quantity=quantity,
+            price=price,
+            price_type=price_type,
+            octype=oc_type
+        )
+        
+        # 下單並建立映射
+        order = api.place_order(contract, order_obj)
+        with global_lock:
+            order_octype_map[order.order.seqno] = {
+                'action': action_text,
+                'quantity': quantity,
+                'contract_code': contract.code,
+                'octype': oc_type,  # 記錄開平倉類型
+                'timestamp': datetime.now().strftime('%H:%M:%S')
+            }
+            
+        # 發送通知
+        message = get_formatted_order_message(order, oc_type)
+        send_telegram_message(message)
+        
+    except Exception as e:
+        error_msg = get_error_message(e)
+        send_error_notification(error_msg, oc_type)
+
+def get_formatted_order_message(order, oc_type):
+    """格式化訂單通知訊息"""
+    return f"""
+⭕ 提交成功（{datetime.now().strftime('%Y/%m/%d')}）
+選用合約：{contract.code} ({contract.delivery_date})
+訂單類型：限價單（ROD）
+提交單號：{order.order.seqno}
+提交類型：{oc_type}
+提交動作：{action_text}
+提交部位：{position_type}
+提交數量：{quantity} 口
+提交價格：{price}
+"""
+```
+
+#### 開平倉處理的架構優勢
+- **自動判斷**：根據交易方向自動決定開平倉類型
+- **一致性**：統一的開平倉類型處理邏輯
+- **可追蹤**：在訂單映射中記錄開平倉類型
+- **錯誤處理**：完整的錯誤處理和通知機制
+- **通知準確**：確保通知中顯示正確的開平倉類型
 
 #### 版本兼容性處理
 ```python

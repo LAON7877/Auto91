@@ -63,7 +63,10 @@
             </div>
             <div class="form-group">
                 <label for="ca_passwd">憑證密碼</label>
-                <input type="text" id="ca_passwd" name="CA_PASSWD" required placeholder="請輸入您的憑證密碼">
+                <input type="text" id="ca_passwd" name="CA_PASSWD" required placeholder="請輸入您申請憑證時設定的密碼">
+                <div class="input-hint">
+                    ⚠️此密碼為您向永豐證券申請憑證時自行設定的密碼，預設初始密碼通常是身分證字號<br>
+                </div>
             </div>
             <div class="form-group">
                 <label for="cert_start">憑證起始日</label>
@@ -74,20 +77,7 @@
                 <input type="text" id="cert_end" name="CERT_END" readonly>
             </div>
             
-            <!-- ngrok Token 管理區域 -->
-            <div class="form-group">
-                <label>ngrok Token 管理</label>
-                <div class="ngrok-token-management">
-                    <div class="token-status" id="token-status">
-                        <span class="token-label">目前狀態:</span>
-                        <span class="token-value" id="current-token-status">未設置</span>
-                    </div>
-                    <div class="token-actions">
-                        <button type="button" class="token-btn" onclick="showNgrokSetupModal()">管理 ngrok Token</button>
-                        <button type="button" class="token-btn secondary" onclick="clearNgrokToken()">清除 Token</button>
-                    </div>
-                </div>
-            </div>
+
             
             <span id="save-status"></span>
         </form>
@@ -568,6 +558,7 @@
             </div>
             <div class="modal-footer">
                 <button type="button" onclick="setupNgrok()" class="btn-primary" id="setup-ngrok-btn">儲存並啟動</button>
+                <button type="button" onclick="clearNgrokToken()" class="btn-warning" id="clear-token-btn">清除 Token</button>
                 <button type="button" onclick="closeNgrokSetupModal()" class="btn-secondary">取消</button>
             </div>
         </div>

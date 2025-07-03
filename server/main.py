@@ -1,4 +1,5 @@
 from flask import Flask, send_from_directory, request, jsonify, abort
+from flask_cors import CORS
 import threading
 import webview
 import os
@@ -86,14 +87,19 @@ class SafeConstants:
             return order_type_str
     
     @staticmethod
-    def get_oc_type():
+    def get_oc_type(oc_type='Auto'):
         """獲取開平倉類型常數"""
         if not SHIOAJI_AVAILABLE:
-            return 'Auto'
+            return oc_type
         try:
-            return sj.constant.FuturesOCType.Auto
+            if oc_type.upper() == 'NEW':
+                return sj.constant.FuturesOCType.New
+            elif oc_type.upper() == 'COVER':
+                return sj.constant.FuturesOCType.Cover
+            else:
+                return sj.constant.FuturesOCType.Auto
         except AttributeError:
-            return 'Auto'
+            return oc_type
     
     @staticmethod
     def check_order_status(status, target_status):
@@ -113,6 +119,7 @@ class SafeConstants:
 safe_constants = SafeConstants()
 
 app = Flask(__name__, static_folder='web', static_url_path='')
+CORS(app, origins=['*'])  # 允許所有域名的跨域請求
 
 # ngrok相關變數
 ngrok_process = None
@@ -154,6 +161,19 @@ last_margin_requirements = {
 # 新增：訂單映射管理（參考TXserver.py架構）
 order_octype_map = {}  # 記錄訂單詳細資訊
 global_lock = threading.Lock()  # 線程鎖
+
+# TXserver 風格的全域變數和狀態管理
+contract_txf = None
+contract_mxf = None 
+contract_tmf = None
+active_trades = {"txf": None, "mxf": None, "tmf": None}
+recent_signals = set()
+contract_key_map = {"大台": "txf", "小台": "mxf", "微台": "tmf"}
+has_processed_delivery_exit = False
+
+# 自定義請求日誌系統（用於前端顯示）
+custom_request_logs = []
+MAX_CUSTOM_LOGS = 50  # 最多保留50筆記錄
 
 # 新增：錯誤訊息翻譯對照表
 OP_MSG_TRANSLATIONS = {
@@ -200,8 +220,8 @@ PERSON_ID=
 # 台股日曆
 HOLIDAY_DIR=Desktop/AutoTX/holiday
 
-# 憑證檔案
-CA_PATH=Desktop/AutoTX/certificate
+# 憑證檔案 (相對於程式根目錄)
+CA_PATH=server/certificate
 
 # 憑證密碼
 CA_PASSWD=
@@ -704,19 +724,47 @@ def get_ngrok_connections():
         'p90': 0.00
     }
 
+def add_custom_request_log(method, uri, status, extra_info=None):
+    """添加自定義請求記錄"""
+    global custom_request_logs
+    
+    # 建立時間戳（ngrok 格式）
+    now = datetime.now()
+    time_str = now.strftime('%H:%M:%S.%f')[:-3] + ' CST'
+    
+    # 建立請求記錄
+    log_entry = {
+        'timestamp': time_str,
+        'method': method,
+        'uri': uri,
+        'status': status,
+        'status_text': get_status_text(status),
+        'type': 'webhook' if uri == '/webhook' else 'custom',
+        'extra_info': extra_info or {}
+    }
+    
+    # 添加到日誌列表
+    with global_lock:
+        custom_request_logs.append(log_entry)
+        # 保持日誌數量在限制內
+        if len(custom_request_logs) > MAX_CUSTOM_LOGS:
+            custom_request_logs = custom_request_logs[-MAX_CUSTOM_LOGS:]
+
 def get_ngrok_requests():
-    """獲取ngrok請求日誌"""
+    """獲取合併的請求日誌（ngrok + 自定義）"""
+    all_requests = []
+    
+    # 獲取 ngrok 請求日誌
     try:
         response = requests.get('http://localhost:4040/api/requests', timeout=3)
         if response.status_code == 200:
             data = response.json()
             requests_list = data.get('requests', [])
             
-            # 只取最近的100個請求
-            recent_requests = requests_list[-100:] if len(requests_list) > 100 else requests_list
+            # 只取最近的50個 ngrok 請求
+            recent_requests = requests_list[-50:] if len(requests_list) > 50 else requests_list
             
-            # 格式化請求數據
-            formatted_requests = []
+            # 格式化 ngrok 請求數據
             for req in recent_requests:
                 # 格式化時間戳為 ngrok 格式
                 started_at = req.get('started_at', '')
@@ -737,20 +785,38 @@ def get_ngrok_requests():
                 status_code = req.get('status', 200)
                 status_text = get_status_text(status_code)
                 
-                formatted_requests.append({
+                all_requests.append({
                     'timestamp': time_str,
                     'method': req.get('method', 'GET'),
                     'uri': req.get('uri', '/'),
                     'status': status_code,
-                    'status_text': status_text
+                    'status_text': status_text,
+                    'type': 'ngrok'
                 })
-            
-            return {'requests': formatted_requests}
     except Exception:
         # 靜默處理錯誤，不輸出DEBUG訊息
         pass
     
-    return {'requests': []}
+    # 添加自定義請求日誌
+    with global_lock:
+        all_requests.extend(custom_request_logs.copy())
+    
+    # 按時間戳排序（最新的在最後）
+    def parse_time(timestamp):
+        try:
+            if ' CST' in timestamp:
+                time_part = timestamp.replace(' CST', '')
+                return datetime.strptime(time_part, '%H:%M:%S.%f').time()
+        except:
+            pass
+        return datetime.min.time()
+    
+    all_requests.sort(key=lambda x: parse_time(x.get('timestamp', '')))
+    
+    # 只保留最近的100筆記錄
+    recent_requests = all_requests[-100:] if len(all_requests) > 100 else all_requests
+    
+    return {'requests': recent_requests}
 
 def get_status_text(status_code):
     """根據狀態碼獲取狀態文字"""
@@ -901,9 +967,24 @@ def get_uploaded_files():
             if cert_files:
                 cert_file = cert_files[0]  # 取第一個檔案
         
+        # 計算實際使用的憑證路徑（與登入時邏輯一致）
+        ca_path = os.getenv('CA_PATH', '')
+        actual_cert_path = None
+        if ca_path:
+            if os.path.isabs(ca_path):
+                actual_cert_path = ca_path
+            else:
+                program_root = os.path.dirname(os.path.dirname(__file__))
+                actual_cert_path = os.path.join(program_root, ca_path)
+        
         return jsonify({
             'holiday_file': holiday_file,
-            'certificate_file': cert_file
+            'certificate_file': cert_file,
+            'cert_path_info': {
+                'env_value': ca_path,
+                'actual_path': actual_cert_path,
+                'exists': os.path.exists(actual_cert_path) if actual_cert_path else False
+            }
         })
     except Exception as e:
         return jsonify({'error': f'獲取檔案資訊失敗: {str(e)}'}), 500
@@ -1965,9 +2046,12 @@ def get_port():
 CURRENT_PORT = get_port()
 
 def start_flask():
-    # 禁用 Flask 和 Werkzeug 的 GET 請求日誌輸出
+    # 啟用基本的 HTTP 請求日誌輸出（用於 webhook 調試）
     log = logging.getLogger('werkzeug')
-    log.setLevel(logging.ERROR)  # 只顯示錯誤級別的日誌
+    log.setLevel(logging.INFO)  # 顯示所有 HTTP 請求日誌
+    
+    # 如果只想看 POST 請求，可以設置為 WARNING 並在下方添加過濾
+    # log.setLevel(logging.WARNING)
     
     app.run(port=CURRENT_PORT, threaded=True)
 
@@ -2239,7 +2323,7 @@ def get_contract_name_from_code(contract_code):
 
 def get_formatted_order_message(is_success, order_id, contract_name, qty, price, octype, direction, order_type, price_type, is_manual, reason=None, contract_code=None, delivery_date=None):
     """格式化訂單提交訊息（參考TXserver.py）"""
-    current_time = datetime.now().strftime('%Y/%m/%d %H:%M')
+    current_time = datetime.now().strftime('%Y/%m/%d')
     
     # 獲取完整合約資訊
     try:
@@ -2275,16 +2359,16 @@ def get_formatted_order_message(is_success, order_id, contract_name, qty, price,
     
     # 提交動作
     direction_str = str(direction).upper()
-    if 'BUY' in direction_str:
-        if octype == "New":
+    if octype == "New":  # 開倉
+        if 'BUY' in direction_str:
             submit_action = "多單買入"
-        else:
+        else:  # Sell
             submit_action = "空單買入"
-    else:
-        if octype == "New":
-            submit_action = "空單賣出"
-        else:
-            submit_action = "多單賣出"
+    else:  # Cover 平倉
+        if 'BUY' in direction_str:
+            submit_action = "空單賣出"  # 買入平空
+        else:  # Sell
+            submit_action = "多單賣出"  # 賣出平多
     
     # 提交價格
     if str(price_type).upper() == "MKT":
@@ -2318,7 +2402,7 @@ def get_formatted_order_message(is_success, order_id, contract_name, qty, price,
 
 def get_formatted_trade_message(order_id, contract_name, qty, price, octype, direction, order_type, price_type, is_manual, contract_code=None, delivery_date=None):
     """格式化成交訊息"""
-    current_time = datetime.now().strftime('%Y/%m/%d %H:%M')
+    current_time = datetime.now().strftime('%Y/%m/%d')
     
     # 獲取完整合約資訊
     try:
@@ -2354,16 +2438,16 @@ def get_formatted_trade_message(order_id, contract_name, qty, price, octype, dir
     
     # 成交動作
     direction_str = str(direction).upper()
-    if 'BUY' in direction_str:
-        if octype == "New":
+    if octype == "New":  # 開倉
+        if 'BUY' in direction_str:
             trade_action = "多單買入"
-        else:
+        else:  # Sell
             trade_action = "空單買入"
-    else:
-        if octype == "New":
-            trade_action = "空單賣出"
-        else:
-            trade_action = "多單賣出"
+    else:  # Cover 平倉
+        if 'BUY' in direction_str:
+            trade_action = "空單賣出"  # 買入平空
+        else:  # Sell
+            trade_action = "多單賣出"  # 賣出平多
     
     msg = (f"✅ 成交通知（{current_time}）\n"
            f"選用合約：{contract_display}\n"
@@ -2411,23 +2495,71 @@ def login_sinopac():
             print(f"回調函數設置失敗: {e}")
             # 回調函數設置失敗，但繼續使用基本功能
         
-        # 激活CA憑證
+        # 激活CA憑證 - 智能路徑處理
         cert_file = None
-        if os.path.isfile(ca_path):
-            cert_file = ca_path
-        elif os.path.isdir(ca_path):
-            for file in os.listdir(ca_path):
-                if file.endswith('.pfx'):
-                    cert_file = os.path.join(ca_path, file)
-                    break
+        
+        # 計算基於程式根目錄的絕對路徑
+        if ca_path:
+            # 如果是絕對路徑，直接使用
+            if os.path.isabs(ca_path):
+                final_ca_path = ca_path
+            else:
+                # 如果是相對路徑，轉換為絕對路徑
+                final_ca_path = os.path.abspath(os.path.join(os.path.dirname(__file__), ca_path))
+            
+            print(f"憑證路徑: {final_ca_path}")
+            
+            # 檢查路徑是否存在
+            cert_file = None
+            if os.path.isfile(final_ca_path):
+                cert_file = final_ca_path
+            elif os.path.isdir(final_ca_path):
+                for file in os.listdir(final_ca_path):
+                    if file.endswith('.pfx'):
+                        cert_file = os.path.join(final_ca_path, file)
+                        print(f"找到憑證檔案: {cert_file}")
+                        break
         
         if cert_file and os.path.exists(cert_file):
             try:
                 sinopac_api.activate_ca(ca_path=cert_file, ca_passwd=ca_passwd, person_id=person_id)
                 print("憑證激活成功")
             except Exception as e:
+                error_msg = str(e).lower()
                 print(f"憑證激活失敗: {e}")
-                # 憑證激活失敗，但繼續使用基本功能
+                
+                # 詳細的錯誤分析和建議（僅控制台輸出，不發送TG通知）
+                if "password" in error_msg or "passwd" in error_msg or "密碼" in error_msg:
+                    print("❌ 憑證密碼錯誤！請檢查前端輸入的憑證密碼是否正確")
+                elif "person_id" in error_msg or "身分證" in error_msg or "id" in error_msg:
+                    print("❌ 身分證字號錯誤！請檢查格式是否為：1個英文字母+9個數字")
+                elif "file" in error_msg or "path" in error_msg or "not found" in error_msg:
+                    print("❌ 憑證檔案問題！請檢查 .pfx 檔案是否正確上傳")
+                elif "expired" in error_msg or "過期" in error_msg:
+                    print("❌ 憑證已過期！請聯絡永豐證券更新憑證")
+                else:
+                    print(f"❌ 憑證激活失敗：{e}")
+                
+                # 記錄到前端系統日誌
+                try:
+                    requests.post(
+                        f'http://127.0.0.1:{CURRENT_PORT}/api/system_log',
+                        json={'message': f'憑證激活失敗：{str(e)[:100]}', 'type': 'error'},
+                        timeout=5
+                    )
+                except:
+                    pass
+        else:
+            error_msg = f"找不到憑證檔案，請確認 {final_ca_path if 'final_ca_path' in locals() else ca_path} 目錄下有 .pfx 檔案"
+            print(f"❌ {error_msg}")
+            # 不發送TG通知，只記錄到前端
+            try:
+                requests.post(
+                    f'http://127.0.0.1:{CURRENT_PORT}/api/system_log',
+                    json={'message': error_msg, 'type': 'error'},
+                    timeout=5
+                )
+            except:
                 pass
         
         # 設定期貨帳戶
@@ -2451,6 +2583,9 @@ def login_sinopac():
         # 登入成功後更新期貨合約和保證金資訊
         update_futures_contracts()
         update_margin_requirements_from_api()
+        
+        # 初始化TXserver風格的合約對象
+        init_contracts()
         
         print("永豐API 登入成功！！！")
         return True
@@ -2957,7 +3092,15 @@ def send_daily_startup_notification():
         message += f"API 狀態：{api_status}\n"
         
         message += "═════ 選用合約 ═════\n"
-        for code, contract_info in selected_contracts.items():
+        # 按照指定順序顯示合約：大台指、小台指、微台指
+        contract_order = [
+            ('TXF', '大台指'),
+            ('MXF', '小台指'), 
+            ('TMF', '微台指')
+        ]
+        
+        for code, contract_name in contract_order:
+            contract_info = selected_contracts.get(code, '-')
             if contract_info != '-':
                 # 解析合約資訊
                 parts = contract_info.split('　')
@@ -2965,7 +3108,6 @@ def send_daily_startup_notification():
                 delivery_part = parts[1].replace('交割日：', '')
                 margin_part = parts[2].replace('保證金 $', '').replace(',', '')
                 
-                contract_name = "大台指" if code == "TXF" else "小台指" if code == "MXF" else "微台指"
                 message += f"{contract_name} {code_part} ({delivery_part}) ${int(margin_part):,}\n"
         
         message += "═════ 帳戶狀態 ═════\n"
@@ -2988,9 +3130,16 @@ def send_daily_startup_notification():
             positions = position_data.get('data', {})
             total_pnl = position_data.get('total_pnl_value', 0)
             
-            for code, pos in positions.items():
-                if pos['動作'] != '-':  # 有持倉的才顯示
-                    contract_name = "大台" if code == "TXF" else "小台" if code == "MXF" else "微台"
+            # 按照指定順序顯示持倉：大台、小台、微台
+            position_order = [
+                ('TXF', '大台'),
+                ('MXF', '小台'),
+                ('TMF', '微台')
+            ]
+            
+            for code, contract_name in position_order:
+                pos = positions.get(code, {})
+                if pos.get('動作', '-') != '-':  # 有持倉的才顯示
                     message += f"{contract_name}｜動作：{pos['動作']}｜數量：{pos['數量']}｜均價：{pos['均價']}\n"
             
             message += f"損益：{int(total_pnl):,} TWD"
@@ -3172,104 +3321,466 @@ def manual_order():
             'message': f'處理請求失敗: {str(e)}'
         }), 500
 
-@app.route('/api/webhook/tradingview', methods=['POST'])
+def is_ip_allowed(ip):
+    """檢查IP是否在白名單中"""
+    allowed_ips = {"127.0.0.1", "::1"}  # 本地IP白名單，可根據需要擴充
+    return ip in allowed_ips
+
+@app.route('/webhook', methods=['POST'])
 def tradingview_webhook():
-    """接收TradingView的webhook信號"""
+    """接收TradingView的webhook信號（使用TXserver邏輯）"""
+    global has_processed_delivery_exit, active_trades, recent_signals
+    
+    client_ip = request.remote_addr
+    # 暫時不進行IP限制，但記錄來源IP
+    print(f"客戶端IP: {client_ip}")
+    
     try:
-        # 獲取webhook數據
-        data = request.get_json()
-        if not data:
-            return jsonify({
-                'status': 'error',
-                'message': '無效的請求數據'
-            }), 400
+        raw = request.data.decode('utf-8')
+        current_time = datetime.now().strftime('%Y/%m/%d %H:%M:%S')
+        print(f"=== [{current_time}] 收到TradingView Webhook請求 ===")
+        print(f"原始數據: {raw}")
         
+        # 檢查無效訊號
+        if '{{strategy.order.alert_message}}' in raw or not raw.strip():
+            print("警告: 無效訊號")
+            # 記錄失敗的請求
+            add_custom_request_log('POST', '/webhook', 400, {
+                'reason': '無效訊號',
+                'client_ip': client_ip,
+                'data_preview': raw[:50] if raw else 'empty'
+            })
+            return '無效訊號', 400
+            
+        data = json.loads(raw)
+        signal_id = data.get('tradeId')
+        
+        # 重複訊號檢查
+        with global_lock:
+            print(f"檢查重複訊號: recent_signals={recent_signals}")
+            if signal_id in recent_signals:
+                print(f"警告: 重複訊號 {signal_id}，忽略")
+                # 記錄重複訊號
+                add_custom_request_log('POST', '/webhook', 400, {
+                    'reason': '重複訊號',
+                    'signal_id': signal_id,
+                    'client_ip': client_ip
+                })
+                return '重複訊號', 400
+            recent_signals.add(signal_id)
+            # 10秒後清除記錄
+            threading.Timer(10, lambda: recent_signals.discard(signal_id)).start()
+        
+        data['receive_time'] = datetime.now()
+        process_signal(data)
+        
+        # 記錄成功的 webhook 請求
+        add_custom_request_log('POST', '/webhook', 200, {
+            'signal_id': signal_id,
+            'signal_type': data.get('type'),
+            'direction': data.get('direction'),
+            'client_ip': client_ip,
+            'contracts': f"TXF:{data.get('txf', 0)} MXF:{data.get('mxf', 0)} TMF:{data.get('tmf', 0)}"
+        })
+        
+        return 'OK', 200
+        
+    except Exception as e:
+        error_msg = str(e)
+        print(f"Webhook 處理錯誤：{error_msg}")
+        import traceback
+        traceback.print_exc()
+        send_telegram_message(f"❌ Webhook 錯誤：{error_msg[:100]}")
+        
+        # 記錄錯誤的請求
+        add_custom_request_log('POST', '/webhook', 500, {
+            'reason': error_msg[:100],
+            'client_ip': client_ip
+        })
+        
+        return f'錯誤：{error_msg}', 500
+
+def process_signal(data):
+    """處理TradingView訊號（參考TXserver.py邏輯）"""
+    global has_processed_delivery_exit, active_trades, contract_txf, contract_mxf, contract_tmf
+    
+    print(f"[process_signal] 開始處理訊號數據: {data}")
+    
+    try:
         # 驗證API是否已連線
         if not sinopac_connected or not sinopac_api:
-            return jsonify({
-                'status': 'error',
-                'message': '永豐API未連線'
-            }), 400
+            print("錯誤: 永豐API未連線")
+            send_telegram_message("❌ Webhook訊號處理失敗：永豐API未連線")
+            return
+            
+        # 解析訊號數據
+        signal_id = data.get('tradeId')
+        msg_type = data.get('type')  # entry 或 exit
+        direction = data.get('direction', '未知')
         
-        # 解析交易信號
-        signal_type = data.get('type', '')  # entry 或 exit
-        direction = data.get('direction', '')  # 開多、開空、平多、平空
-        ticker = data.get('ticker', '')
-        txf_size = int(data.get('txf', 0))  # 大台口數
-        mxf_size = int(data.get('mxf', 0))  # 小台口數
-        tmf_size = int(data.get('tmf', 0))  # 微台口數
-        trade_id = data.get('tradeId', '')
-        trade_time = data.get('time', '')
-        price = data.get('price', '')
+        # 獲取價格和時間
+        time_ms = int(data.get('time', 0)) / 1000 if data.get('time') else 0
+        if time_ms > 0:
+            time_str = (datetime.utcfromtimestamp(time_ms) + timedelta(hours=8)).strftime('%Y/%m/%d %H:%M')
+        else:
+            time_str = datetime.now().strftime('%Y/%m/%d %H:%M')
+            
+        qty_txf = int(float(data.get('txf', 0)))
+        qty_mxf = int(float(data.get('mxf', 0)))
+        qty_tmf = int(float(data.get('tmf', 0)))
+        price = float(data.get('price', 0))
         
-        # 驗證必要欄位
-        if not all([signal_type, direction, ticker]):
-            return jsonify({
-                'status': 'error',
-                'message': '缺少必要欄位'
-            }), 400
+        # 強制使用市價單IOC（參考TXserver.py）
+        order_type = "IOC"
+        price_type = "MKT"
         
-        # 檢查是否為交易時間
+        print(f"解析結果: type={msg_type}, direction={direction}, price={price}")
+        print(f"合約數量: TXF={qty_txf}, MXF={qty_mxf}, TMF={qty_tmf}")
+        
+        # 驗證價格
+        if price <= 0:
+            error_msg = f"價格 {price} 無效"
+            print(f"錯誤: {error_msg}")
+            send_telegram_message(f"❌ Webhook處理失敗：{error_msg}")
+            return
+            
+        # 檢查交易時間
         trading_status = requests.get(f'http://127.0.0.1:{CURRENT_PORT}/api/trading/status', timeout=5).json()
         if not trading_status.get('is_trading_day', False) or not trading_status.get('is_market_open', False):
-            return jsonify({
-                'status': 'error',
-                'message': '非交易時間'
-            }), 400
+            error_msg = "非交易時間"
+            print(f"錯誤: {error_msg}")
+            send_telegram_message(f"❌ Webhook處理失敗：{error_msg}")
+            return
+            
+        # 取得持倉資訊
+        positions = sinopac_api.list_positions(sinopac_api.futopt_account)
         
-        # 處理訂單
-        orders_result = []
+        # 初始化合約對象（如果尚未設置）
+        if not contract_txf:
+            txf_contracts = sinopac_api.Contracts.Futures.get("TXF")
+            if txf_contracts:
+                contract_txf = sorted(txf_contracts, key=lambda x: x.delivery_date)[0]
+                
+        if not contract_mxf:
+            mxf_contracts = sinopac_api.Contracts.Futures.get("MXF")
+            if mxf_contracts:
+                contract_mxf = sorted(mxf_contracts, key=lambda x: x.delivery_date)[0]
+                
+        if not contract_tmf:
+            tmf_contracts = sinopac_api.Contracts.Futures.get("TMF")
+            if tmf_contracts:
+                contract_tmf = sorted(tmf_contracts, key=lambda x: x.delivery_date)[0]
         
-        try:
-            # 判斷持倉類型
-            position_type = None
-            if '平' in direction:
-                position_type = 'long' if '多' in direction else 'short'
+        print(f"當前合約: TXF={contract_txf.code if contract_txf else None}, "
+              f"MXF={contract_mxf.code if contract_mxf else None}, "
+              f"TMF={contract_tmf.code if contract_tmf else None}")
+        
+        # 處理進場訊號
+        if msg_type == "entry":
+            process_entry_signal(data, qty_txf, qty_mxf, qty_tmf, direction, price, order_type, price_type, positions)
             
-            # 根據不同合約分別處理
-            if txf_size > 0:
-                result = place_futures_order('TXF', txf_size, direction, is_manual=False, position_type=position_type)
-                orders_result.append(result)
+        # 處理出場訊號  
+        elif msg_type == "exit":
+            process_exit_signal(data, qty_txf, qty_mxf, qty_tmf, direction, price, order_type, price_type, positions)
             
-            if mxf_size > 0:
-                result = place_futures_order('MXF', mxf_size, direction, is_manual=False, position_type=position_type)
-                orders_result.append(result)
-            
-            if tmf_size > 0:
-                result = place_futures_order('TMF', tmf_size, direction, is_manual=False, position_type=position_type)
-                orders_result.append(result)
-            
-            return jsonify({
-                'status': 'success',
-                'message': '下單成功',
-                'orders': orders_result
-            })
-            
-        except Exception as e:
-            error_msg = str(e)
-            return jsonify({
-                'status': 'error',
-                'message': f'下單失敗: {error_msg}'
-            }), 500
+        else:
+            error_msg = f"無效訊號類型 {msg_type}"
+            print(f"錯誤: {error_msg}")
+            send_telegram_message(f"❌ Webhook處理失敗：{error_msg}")
             
     except Exception as e:
-        return jsonify({
-            'status': 'error',
-            'message': f'處理請求失敗: {str(e)}'
-        }), 500
+        error_msg = str(e)
+        print(f"[process_signal] 處理訊號失敗：{error_msg}")
+        import traceback
+        traceback.print_exc()
+        send_telegram_message(f"❌ 處理Webhook訊號失敗：{error_msg[:100]}")
 
-# 模擬下單函數已移除
+def process_entry_signal(data, qty_txf, qty_mxf, qty_tmf, direction, price, order_type, price_type, positions):
+    """處理進場訊號"""
+    global active_trades, contract_txf, contract_mxf, contract_tmf
+    
+    print(f"[process_entry_signal] 處理進場訊號: direction={direction}")
+    
+    if direction not in ["開多", "開空"]:
+        error_msg = f"無效進場動作 {direction}"
+        print(f"錯誤: {error_msg}")
+        send_telegram_message(f"❌ 進場失敗：{error_msg}")
+        return
+        
+    # 確定交易動作
+    if direction == "開多":
+        expected_action = safe_constants.get_action('BUY')
+    else:  # 開空
+        expected_action = safe_constants.get_action('SELL')
+        
+    # 檢查是否有相反持倉
+    has_opposite = any(p.direction != expected_action and p.quantity != 0 for p in positions)
+    
+    if has_opposite:
+        print("警告: 存在相反持倉，取消下單")
+        send_telegram_message("⚠️ 取消下單：存在相反持倉")
+        return
+        
+    # 執行下單
+    contracts = [
+        (contract_txf, qty_txf, "大台", "TXF"),
+        (contract_mxf, qty_mxf, "小台", "MXF"), 
+        (contract_tmf, qty_tmf, "微台", "TMF")
+    ]
+    
+    for contract, qty, name, code in contracts:
+        if qty > 0 and contract:
+            try:
+                print(f"[process_entry_signal] 開始處理{name}進場: {qty}口 {direction}")
+                
+                result = place_futures_order_tx_style(
+                    contract=contract,
+                    quantity=qty,
+                    direction=direction,
+                    price=price,
+                    order_type=order_type,
+                    price_type=price_type,
+                    is_manual=False
+                )
+                
+                if result.get('success'):
+                    active_trades[contract_key_map[name]] = data.get('tradeId')
+                    print(f"{name}進場成功")
+                else:
+                    print(f"{name}進場失敗: {result.get('message', '未知錯誤')}")
+                    
+            except Exception as e:
+                error_msg = str(e)
+                print(f"{name}進場異常: {error_msg}")
+                send_telegram_message(f"❌ {name}進場失敗：{error_msg}")
+
+def process_exit_signal(data, qty_txf, qty_mxf, qty_tmf, direction, price, order_type, price_type, positions):
+    """處理出場訊號"""
+    global active_trades
+    
+    print(f"[process_exit_signal] 處理出場訊號: direction={direction}")
+    
+    # 檢查是否有持倉
+    position_txf = next((p for p in positions if p.code.startswith("TXF") and qty_txf > 0), None) if qty_txf > 0 else None
+    position_mxf = next((p for p in positions if p.code.startswith("MXF") and qty_mxf > 0), None) if qty_mxf > 0 else None  
+    position_tmf = next((p for p in positions if p.code.startswith("TMF") and qty_tmf > 0), None) if qty_tmf > 0 else None
+    
+    has_position = bool(position_txf or position_mxf or position_tmf)
+            
+    if not has_position:
+        print("警告: 無對應持倉，取消平倉")
+        send_telegram_message("⚠️ 取消平倉：無對應持倉")
+        return
+        
+    # 執行平倉
+    contracts_positions = [
+        (contract_txf, qty_txf, "大台", "TXF", position_txf),
+        (contract_mxf, qty_mxf, "小台", "MXF", position_mxf),
+        (contract_tmf, qty_tmf, "微台", "TMF", position_tmf)
+    ]
+    
+    for contract, qty, name, code, position in contracts_positions:
+        if qty > 0 and contract and position:
+            try:
+                print(f"[process_exit_signal] 開始處理{name}出場: {qty}口")
+                
+                result = place_futures_order_tx_style(
+                    contract=contract,
+                    quantity=qty,
+                    direction=direction,
+                    price=price,
+                    order_type=order_type,
+                    price_type=price_type,
+                    is_manual=False,
+                    position=position
+                )
+                
+                if result.get('success'):
+                    active_trades[contract_key_map[name]] = None
+                    print(f"{name}出場成功")
+                else:
+                    print(f"{name}出場失敗: {result.get('message', '未知錯誤')}")
+            
+            except Exception as e:
+                error_msg = str(e)
+        print(f"{name}出場異常: {error_msg}")
+        send_telegram_message(f"❌ {name}出場失敗：{error_msg}")
+
+def place_futures_order_tx_style(contract, quantity, direction, price, order_type="IOC", price_type="MKT", is_manual=False, position=None):
+    """TXserver風格的下單函數"""
+    try:
+        # 判斷開平倉類型
+        is_entry = position is None
+        
+        # 確定交易動作
+        if is_entry:
+            # 開倉
+            if direction == "開多":
+                action = safe_constants.get_action('BUY')
+            elif direction == "開空":
+                action = safe_constants.get_action('SELL')
+            else:
+                raise Exception(f"無效的開倉方向: {direction}")
+        else:
+            # 平倉：根據持倉方向決定平倉動作
+            if position.direction == safe_constants.get_action('BUY'):
+                # 持多單，平多
+                action = safe_constants.get_action('SELL')
+            else:
+                # 持空單，平空
+                action = safe_constants.get_action('BUY')
+        
+        # 建立訂單
+        order = sinopac_api.Order(
+            price=price if price_type == "LMT" else 0,  # 市價單價格設為0
+            quantity=quantity,
+            action=action,
+            price_type=safe_constants.get_price_type(price_type),
+            order_type=safe_constants.get_order_type(order_type),
+            octype=safe_constants.get_oc_type(),
+            account=sinopac_api.futopt_account
+        )
+        
+        # 送出訂單
+        trade = sinopac_api.place_order(contract, order)
+        
+        # 檢查訂單結果
+        if not trade or not hasattr(trade, 'order') or not trade.order.id:
+            raise Exception("訂單提交失敗")
+            
+        order_id = trade.order.id
+        contract_name = "大台" if contract.code.startswith('TXF') else "小台" if contract.code.startswith('MXF') else "微台"
+        
+        # 建立訂單映射（參考TXserver.py架構）
+        with global_lock:
+            order_octype_map[order_id] = {
+                'octype': 'New' if is_entry else 'Cover',
+                'direction': str(action),
+                'contract_name': contract_name,
+                'order_type': order_type,
+                'price_type': price_type,
+                'is_manual': is_manual,
+                'timestamp': datetime.now().strftime('%H:%M:%S')
+            }
+        
+        # 檢查操作結果
+        if hasattr(trade, 'operation') and trade.operation.get('op_msg'):
+            error_msg = trade.operation.get('op_msg')
+            
+            # 發送失敗通知
+            fail_message = get_formatted_order_message(
+                is_success=False,
+                order_id=order_id,
+                contract_name=contract_name,
+                qty=quantity,
+                price=price,
+                octype='New' if is_entry else 'Cover',
+                direction=str(action),
+                order_type=order_type,
+                price_type=price_type,
+                is_manual=is_manual,
+                reason=OP_MSG_TRANSLATIONS.get(error_msg, error_msg),
+                contract_code=contract.code,
+                delivery_date=contract.delivery_date.strftime('%Y/%m/%d')
+            )
+            send_telegram_message(fail_message)
+            
+            return {
+                'success': False,
+                'message': OP_MSG_TRANSLATIONS.get(error_msg, error_msg),
+                'order_id': order_id
+            }
+        
+        # 訂單提交成功 - 不需要立即發送通知，等callback處理
+        print(f"訂單提交成功: {order_id} - {contract_name} {quantity}口 {direction}")
+        
+        return {
+            'success': True,
+            'message': '訂單提交成功',
+            'order_id': order_id,
+            'contract_name': contract_name
+        }
+            
+    except Exception as e:
+        error_msg = str(e)
+        print(f"下單失敗: {error_msg}")
+        
+        # 發送錯誤通知
+        contract_name = "大台" if contract.code.startswith('TXF') else "小台" if contract.code.startswith('MXF') else "微台"
+        fail_message = get_formatted_order_message(
+            is_success=False,
+            order_id="未知",
+            contract_name=contract_name,
+            qty=quantity,
+            price=price,
+            octype='New' if position is None else 'Cover',
+            direction=direction,
+            order_type=order_type,
+            price_type=price_type,
+            is_manual=is_manual,
+            reason=error_msg,
+            contract_code=contract.code if contract else None
+        )
+        send_telegram_message(fail_message)
+        
+        return {
+            'success': False,
+            'message': error_msg,
+            'order_id': None
+        }
+
+def init_contracts():
+    """初始化TXserver風格的合約對象"""
+    global contract_txf, contract_mxf, contract_tmf
+    
+    try:
+        print("[init_contracts] 開始初始化合約對象...")
+        
+        # 初始化大台指合約
+        txf_contracts = sinopac_api.Contracts.Futures.get("TXF")
+        if txf_contracts:
+            # 選擇最近月份的合約
+            contract_txf = sorted(txf_contracts, key=lambda x: x.delivery_date)[0]
+            print(f"大台指合約: {contract_txf.code} (交割日: {contract_txf.delivery_date})")
+        else:
+            print("警告: 無法獲取大台指合約")
+            
+        # 初始化小台指合約
+        mxf_contracts = sinopac_api.Contracts.Futures.get("MXF")
+        if mxf_contracts:
+            contract_mxf = sorted(mxf_contracts, key=lambda x: x.delivery_date)[0]
+            print(f"小台指合約: {contract_mxf.code} (交割日: {contract_mxf.delivery_date})")
+        else:
+            print("警告: 無法獲取小台指合約")
+            
+        # 初始化微台指合約
+        tmf_contracts = sinopac_api.Contracts.Futures.get("TMF")
+        if tmf_contracts:
+            contract_tmf = sorted(tmf_contracts, key=lambda x: x.delivery_date)[0]
+            print(f"微台指合約: {contract_tmf.code} (交割日: {contract_tmf.delivery_date})")
+        else:
+            print("警告: 無法獲取微台指合約")
+            
+        print("[init_contracts] 合約對象初始化完成")
+        
+    except Exception as e:
+        print(f"[init_contracts] 初始化合約對象失敗: {e}")
+        contract_txf = None
+        contract_mxf = None
+        contract_tmf = None
+
+
 
 def place_futures_order(contract_code, quantity, direction, price=0, is_manual=False, position_type=None, price_type=None, order_type=None):
     """執行期貨下單
     contract_code: 合約代碼 (TXF, MXF, TMF)
     quantity: 數量
-    direction: 交易方向 (開多, 開空, 平多, 平空)
-    price: 價格 (0表示市價單)
+    direction: 方向 ('開多', '開空', '平多', '平空')
+    price: 價格 (0為市價)
     is_manual: 是否為手動下單
-    position_type: 持倉類型 (None表示開倉, 'long'表示持多, 'short'表示持空)
-    price_type: 價格類型 (None表示自動判斷, 'MKT'表示市價, 'LMT'表示限價)
-    order_type: 訂單類型 (None表示自動判斷, 'IOC'表示IOC, 'ROD'表示ROD)
+    position_type: 持倉類型 (當direction為平倉時使用)
+    price_type: 價格類型 (LMT/MKT)
+    order_type: 單別 (ROD/IOC/FOK)
     """
     try:
         # 獲取合約資訊
@@ -3277,8 +3788,8 @@ def place_futures_order(contract_code, quantity, direction, price=0, is_manual=F
         if not contracts:
             raise Exception(f'無法獲取{contract_code}合約資訊')
         
-        # 選擇最近月份的合約
-        target_contract = sorted(contracts, key=lambda x: x.delivery_date)[0]
+        # 選擇最近月份的合約（按到期日排序）
+        target_contract = sorted(contracts, key=lambda x: x.delivery_date)[-1]  # 使用最遠月合約
         
         # 判斷交易動作
         if direction == "開多" or (direction == "平空" and position_type == 'short'):
@@ -3313,7 +3824,7 @@ def place_futures_order(contract_code, quantity, direction, price=0, is_manual=F
             action=action,
             price_type=final_price_type,
             order_type=final_order_type,
-            octype=safe_constants.get_oc_type(),
+            octype=safe_constants.get_oc_type('New' if direction.startswith('開') else 'Cover'),
             account=sinopac_api.futopt_account
         )
         
@@ -3336,7 +3847,7 @@ def place_futures_order(contract_code, quantity, direction, price=0, is_manual=F
                 contract_name=contract_name,
                 qty=quantity,
                 price=price,
-                octype="New",
+                octype='New' if direction.startswith('開') else 'Cover',
                 direction=str(action),
                 order_type=str(final_order_type),
                 price_type=str(final_price_type),
@@ -3358,7 +3869,7 @@ def place_futures_order(contract_code, quantity, direction, price=0, is_manual=F
         
         # 建立訂單映射資訊（關鍵：參考TXserver.py架構）
         order_info = {
-            'octype': 'New',  # 目前只處理開倉
+            'octype': 'New' if direction.startswith('開') else 'Cover',  # 根據direction判斷開平倉
             'direction': str(action),
             'contract_name': contract_name,
             'order_type': str(final_order_type),
