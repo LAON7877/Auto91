@@ -1290,35 +1290,50 @@ function updateRequestsLog() {
         const requestsContainer = document.getElementById('requests-container');
         
         if (data.requests && data.requests.length > 0) {
-            // 限制最多顯示100條記錄，並反轉順序（新的在上面）
-            const limitedRequests = data.requests.slice(-100).reverse();
+            // 只顯示 webhook 請求（type=webhook 或 uri=/webhook）
+            const webhookRequests = data.requests.filter(req => 
+                req.type === 'webhook' || req.uri === '/webhook'
+            );
             
-            requestsContainer.innerHTML = '';
-            limitedRequests.forEach((req, index) => {
-                const requestItem = document.createElement('div');
-                requestItem.className = 'request-item';
+            if (webhookRequests.length > 0) {
+                // 限制最多顯示50條記錄，並反轉順序（新的在上面）
+                const limitedRequests = webhookRequests.slice(-50).reverse();
                 
-                // 設置狀態顏色類別
-                let statusClass = 'success';
-                if (req.status >= 400) {
-                    statusClass = 'error';
-                } else if (req.status >= 300) {
-                    statusClass = 'warning';
-                }
+                requestsContainer.innerHTML = '';
+                limitedRequests.forEach((req, index) => {
+                    const requestItem = document.createElement('div');
+                    requestItem.className = 'request-item';
+                    
+                    // 設置狀態顏色類別
+                    let statusClass = 'success';
+                    if (req.status >= 400) {
+                        statusClass = 'error';
+                    } else if (req.status >= 300) {
+                        statusClass = 'warning';
+                    }
+                    
+                    // 使用 ngrok 格式：時間戳 方法 URI 狀態碼 狀態文字
+                    requestItem.innerHTML = `
+                        <span class="request-timestamp">${req.timestamp}</span>
+                        <span class="request-method ${req.method.toLowerCase()}">${req.method}</span>
+                        <span class="request-uri">${req.uri}</span>
+                        <span class="request-status ${statusClass}">${req.status} ${req.status_text}</span>
+                    `;
+                    
+                    requestsContainer.appendChild(requestItem);
+                });
                 
-                // 使用 ngrok 格式：時間戳 方法 URI 狀態碼 狀態文字
-                requestItem.innerHTML = `
-                    <span class="request-timestamp">${req.timestamp}</span>
-                    <span class="request-method ${req.method.toLowerCase()}">${req.method}</span>
-                    <span class="request-uri">${req.uri}</span>
-                    <span class="request-status ${statusClass}">${req.status} ${req.status_text}</span>
-                `;
-                
-                requestsContainer.appendChild(requestItem);
-            });
-            
-            // 保持在頂部位置顯示最新的記錄
-            requestsContainer.scrollTop = 0;
+                // 保持在頂部位置顯示最新的記錄
+                requestsContainer.scrollTop = 0;
+            } else {
+                requestsContainer.innerHTML = '';
+                const noRequestsMsg = document.createElement('div');
+                noRequestsMsg.className = 'request-item';
+                noRequestsMsg.textContent = '無請求記錄';
+                noRequestsMsg.style.justifyContent = 'center';
+                noRequestsMsg.style.color = '#666';
+                requestsContainer.appendChild(noRequestsMsg);
+            }
         } else {
             requestsContainer.innerHTML = '';
             const noRequestsMsg = document.createElement('div');
@@ -1401,6 +1416,76 @@ function addSystemLog(message, type = 'info') {
     }).catch(() => {
         // 靜默處理錯誤，不影響前端功能
     });
+}
+
+// 新增：從後端同步系統日誌
+function updateSystemLogsFromBackend() {
+    fetch('/api/ngrok/requests')
+        .then(res => res.json())
+        .then(data => {
+            if (data.requests && data.requests.length > 0) {
+                // 過濾 type=custom 的日誌（後端送來的系統日誌）
+                const customLogs = data.requests
+                    .filter(log => log.type === 'custom' || log.type === 'webhook')
+                    .map(log => {
+                        // 解析後端日誌格式
+                        let message = '';
+                        let type = 'info';
+                        
+                        // 檢查 extra_info 中的 message 和 type
+                        if (log.extra_info && log.extra_info.message) {
+                            message = log.extra_info.message;
+                            type = log.extra_info.type || 'info';
+                        } else if (log.message) {
+                            message = log.message;
+                            type = 'info';
+                        } else {
+                            message = log.uri || '';
+                            type = log.status >= 400 ? 'error' : (log.status >= 300 ? 'warning' : 'info');
+                        }
+                        
+                        // 格式化時間戳為 時:分:秒 格式
+                        let formattedTimestamp = '';
+                        if (log.timestamp) {
+                            try {
+                                // 解析 ngrok 格式的時間戳 (HH:MM:SS.mmm CST)
+                                if (log.timestamp.includes(' CST')) {
+                                    const timePart = log.timestamp.replace(' CST', '');
+                                    const timeComponents = timePart.split('.')[0]; // 移除毫秒
+                                    formattedTimestamp = timeComponents;
+                                } else {
+                                    // 如果是其他格式，嘗試解析
+                                    const date = new Date(log.timestamp);
+                                    formattedTimestamp = date.toLocaleTimeString('zh-TW', {
+                                        hour12: false,
+                                        hour: '2-digit',
+                                        minute: '2-digit',
+                                        second: '2-digit'
+                                    });
+                                }
+                            } catch (e) {
+                                formattedTimestamp = log.timestamp;
+                            }
+                        }
+                        
+                        return {
+                            timestamp: formattedTimestamp,
+                            message: message,
+                            type: type
+                        };
+                    });
+                
+                // 更新本地 systemLogs 陣列，保留最新的100條
+                if (customLogs.length > 0) {
+                    systemLogs = customLogs.slice(-100);
+                    updateSystemLogsDisplay();
+                    console.log('同步後端系統日誌成功，共', customLogs.length, '條日誌');
+                }
+            }
+        })
+        .catch(error => {
+            console.error('同步後端系統日誌失敗：', error);
+        });
 }
 
 function updateSystemLogsDisplay() {
@@ -1926,6 +2011,10 @@ document.addEventListener('DOMContentLoaded', () => {
     
     // 初始化系統日誌
     updateSystemLogsDisplay();
+    
+    // 啟動系統日誌同步（從後端拉取）
+    updateSystemLogsFromBackend();
+    setInterval(updateSystemLogsFromBackend, 5000); // 每5秒同步一次後端系統日誌
     
     // 添加初始系統日誌
     addSystemLog('Auto91 交易系統已啟動', 'success');

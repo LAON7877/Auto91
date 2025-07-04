@@ -169,7 +169,20 @@ contract_tmf = None
 active_trades = {"txf": None, "mxf": None, "tmf": None}
 recent_signals = set()
 contract_key_map = {"大台": "txf", "小台": "mxf", "微台": "tmf"}
+# 轉倉相關變數
 has_processed_delivery_exit = False
+rollover_mode = False  # 是否處於轉倉模式
+next_month_contracts = {}  # 次月合約快取
+rollover_start_date = None  # 轉倉開始日期
+rollover_processed_signals = set()  # 已處理的轉倉訊號ID
+
+# 斷線重連相關變數
+connection_monitor_timer = None  # 連線監控定時器
+connection_check_interval = 60  # 每1分鐘檢查一次連線狀態
+max_reconnect_attempts = 999  # 無限重連嘗試
+reconnect_attempts = 0  # 當前重連嘗試次數
+last_connection_check = None  # 上次連線檢查時間
+is_reconnecting = False  # 是否正在重連中
 
 # 自定義請求日誌系統（用於前端顯示）
 custom_request_logs = []
@@ -224,10 +237,10 @@ SECRET_KEY=
 PERSON_ID=
 
 # 台股日曆
-HOLIDAY_DIR=Desktop/AutoTX/holiday
+HOLIDAY_DIR=Desktop/AutoTX/server/holiday
 
-# 憑證檔案 (相對於程式根目錄)
-CA_PATH=server/certificate
+# 憑證檔案
+CA_PATH=Desktop/AutoTX/server/holiday
 
 # 憑證密碼
 CA_PASSWD=
@@ -1542,26 +1555,12 @@ def api_futures_contracts():
                 contracts = sinopac_api.Contracts.Futures.get(code)
                 if contracts:
                     # 按交割日期排序（確保正確的日期格式排序）
-                    def get_sort_date(contract):
-                        date_str = contract.delivery_date
-                        if isinstance(date_str, str):
-                            if len(date_str) == 8:  # YYYYMMDD
-                                return date_str
-                            elif '-' in date_str:  # YYYY-MM-DD
-                                return date_str.replace('-', '')
-                        return str(date_str)
-                    
                     sorted_contracts = sorted(contracts, key=get_sort_date)
                     
                     # 可用合約列表
                     available_list = []
                     for c in sorted_contracts:
-                        delivery_date = c.delivery_date
-                        if isinstance(delivery_date, str):
-                            if len(delivery_date) == 8:  # YYYYMMDD
-                                delivery_date = f"{delivery_date[:4]}/{delivery_date[4:6]}/{delivery_date[6:8]}"
-                            elif '-' in delivery_date:  # YYYY-MM-DD
-                                delivery_date = delivery_date.replace('-', '/')
+                        delivery_date = format_delivery_date(c.delivery_date)
                         
                         available_list.append({
                             'code': c.code,
@@ -1578,12 +1577,7 @@ def api_futures_contracts():
                         contract_name = '大台' if code == 'TXF' else '小台' if code == 'MXF' else '微台'
                         margin = margin_requirements.get(contract_name, 0)
                         
-                        delivery_date = selected_contract.delivery_date
-                        if isinstance(delivery_date, str):
-                            if len(delivery_date) == 8:  # YYYYMMDD
-                                delivery_date = f"{delivery_date[:4]}/{delivery_date[4:6]}/{delivery_date[6:8]}"
-                            elif '-' in delivery_date:  # YYYY-MM-DD
-                                delivery_date = delivery_date.replace('-', '/')
+                        delivery_date = format_delivery_date(selected_contract.delivery_date)
                         
                         selected_contracts[code] = f"{selected_contract.code}　交割日：{delivery_date}　保證金 ${margin:,}"
                     else:
@@ -1761,15 +1755,6 @@ def api_trading_status():
                         contracts = sinopac_api.Contracts.Futures.get(code)
                         if contracts:
                             # 按交割日期排序，取得最近的合約（即選用合約）
-                            def get_sort_date(contract):
-                                date_str = contract.delivery_date
-                                if isinstance(date_str, str):
-                                    if len(date_str) == 8:  # YYYYMMDD
-                                        return date_str
-                                    elif '-' in date_str:  # YYYY-MM-DD
-                                        return date_str.replace('-', '')
-                                return str(date_str)
-                            
                             sorted_contracts = sorted(contracts, key=get_sort_date)
                             if sorted_contracts:
                                 # 檢查最近的合約（選用合約）是否今天交割
@@ -1954,12 +1939,61 @@ def api_system_log():
         message = data.get('message', '')
         log_type = data.get('type', 'info')
         
+        # 儲存到 custom_request_logs
+        add_custom_request_log(
+            method='POST',
+            uri='/api/system_log',
+            status=200,
+            extra_info={
+                'message': message,
+                'type': log_type
+            }
+        )
+        
         # 這裡可以添加後端日誌記錄邏輯
         print(f"前端系統日誌 [{log_type.upper()}]: {message}")
         
         return jsonify({'status': 'success'})
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)}), 500
+
+@app.route('/api/rollover/status', methods=['GET'])
+def api_rollover_status():
+    """獲取轉倉狀態"""
+    global rollover_mode, rollover_start_date, next_month_contracts
+    
+    try:
+        # 檢查轉倉模式
+        check_rollover_mode()
+        
+        # 獲取當前合約資訊
+        current_contracts = {
+            'TXF': contract_txf.code if contract_txf else None,
+            'MXF': contract_mxf.code if contract_mxf else None,
+            'TMF': contract_tmf.code if contract_tmf else None
+        }
+        
+        # 獲取次月合約資訊
+        next_contracts = {
+            'TXF': next_month_contracts.get('TXF', {}).code if next_month_contracts.get('TXF') else None,
+            'MXF': next_month_contracts.get('MXF', {}).code if next_month_contracts.get('MXF') else None,
+            'TMF': next_month_contracts.get('TMF', {}).code if next_month_contracts.get('TMF') else None
+        }
+        
+        return jsonify({
+            'status': 'success',
+            'rollover_mode': rollover_mode,
+            'rollover_start_date': rollover_start_date.isoformat() if rollover_start_date else None,
+            'current_contracts': current_contracts,
+            'next_month_contracts': next_contracts,
+            'last_updated': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'status': 'error',
+            'error': f'獲取轉倉狀態失敗: {str(e)}'
+        }), 500
 
 @app.route('/api/connection/duration', methods=['GET'])
 def api_connection_duration():
@@ -1974,6 +2008,41 @@ def api_connection_duration():
             'login_time': login_time,
             'auto_logout_hours': AUTO_LOGOUT_HOURS,
             'remaining_hours': max(0, AUTO_LOGOUT_HOURS - duration_hours)
+        })
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+@app.route('/api/connection/monitor', methods=['GET'])
+def api_connection_monitor_status():
+    """查詢連線監控狀態"""
+    global reconnect_attempts, last_connection_check, max_reconnect_attempts, is_reconnecting
+    
+    try:
+        # 獲取當前動態檢查間隔
+        current_interval = get_dynamic_check_interval()
+        
+        # 判斷當前檢查模式
+        if is_reconnecting:
+            check_mode = "重連中"
+            interval_display = "30秒"
+        elif current_interval == 60:
+            check_mode = "交易時間"
+            interval_display = "1分鐘"
+        else:
+            check_mode = "非交易時間"
+            interval_display = "10分鐘"
+        
+        return jsonify({
+            'status': 'success',
+            'monitor_active': connection_monitor_timer is not None,
+            'check_interval_seconds': current_interval,
+            'check_interval_display': interval_display,
+            'check_mode': check_mode,
+            'max_reconnect_attempts': max_reconnect_attempts,
+            'current_reconnect_attempts': reconnect_attempts,
+            'is_reconnecting': is_reconnecting,
+            'last_check_time': last_connection_check.strftime('%Y-%m-%d %H:%M:%S') if last_connection_check else None,
+            'connection_status': sinopac_connected and sinopac_login_status
         })
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)}), 500
@@ -2361,6 +2430,28 @@ def order_callback(state, deal, order=None):
                     'is_manual': is_manual
                 })
                 
+                # 記錄掛單失敗日誌
+                log_message = get_simple_order_log_message(
+                    contract_name=contract_name,
+                    direction=direction,
+                    qty=qty,
+                    price=price_value,
+                    order_id=order_id,
+                    octype=octype,
+                    is_manual=is_manual,
+                    is_success=False,
+                    order_type=order_type,
+                    price_type=price_type
+                )
+                try:
+                    requests.post(
+                        f'http://127.0.0.1:{CURRENT_PORT}/api/system_log',
+                        json={'message': log_message, 'type': 'error'},
+                        timeout=5
+                    )
+                except:
+                    pass
+                
                 # 發送失敗通知
                 msg = get_formatted_order_message(
                     is_success=False,
@@ -2438,6 +2529,28 @@ def order_callback(state, deal, order=None):
                     'is_manual': is_manual
                 })
                 
+                # 記錄掛單成功日誌
+                log_message = get_simple_order_log_message(
+                    contract_name=contract_name,
+                    direction=direction,
+                    qty=qty,
+                    price=price_value,
+                    order_id=order_id,
+                    octype=octype,
+                    is_manual=is_manual,
+                    is_success=False,
+                    order_type=order_type,
+                    price_type=price_type
+                )
+                try:
+                    requests.post(
+                        f'http://127.0.0.1:{CURRENT_PORT}/api/system_log',
+                        json={'message': log_message, 'type': 'success'},
+                        timeout=5
+                    )
+                except:
+                    pass
+                
                 # 發送提交成功通知
                 msg = get_formatted_order_message(
                     is_success=True,
@@ -2506,6 +2619,28 @@ def handle_futures_deal_callback(deal, octype_info):
                         delivery_date_for_deal = contract_tmf.delivery_date.strftime('%Y/%m/%d')
                     else:
                         delivery_date_for_deal = str(contract_tmf.delivery_date)
+        except:
+            pass
+        
+        # 記錄成交成功日誌
+        log_message = get_simple_order_log_message(
+            contract_name=contract_name,
+            direction=direction,
+            qty=deal_quantity,
+            price=deal_price,
+            order_id=order_id,
+            octype=octype,
+            is_manual=is_manual,
+            is_success=True,
+            order_type=order_type,
+            price_type=price_type
+        )
+        try:
+            requests.post(
+                f'http://127.0.0.1:{CURRENT_PORT}/api/system_log',
+                json={'message': log_message, 'type': 'success'},
+                timeout=5
+            )
         except:
             pass
         
@@ -2744,6 +2879,65 @@ def get_formatted_trade_message(order_id, contract_name, qty, price, octype, dir
     
     return msg
 
+def get_simple_order_log_message(contract_name, direction, qty, price, order_id, octype, is_manual, is_success=False, order_type=None, price_type=None):
+    """生成簡化的訂單日誌訊息"""
+    try:
+        # 簡化合約名稱
+        if '微台' in contract_name or 'TMF' in contract_name:
+            simple_contract = '微台'
+        elif '小台' in contract_name or 'MXF' in contract_name:
+            simple_contract = '小台'
+        elif '大台' in contract_name or 'TXF' in contract_name:
+            simple_contract = '大台'
+        else:
+            simple_contract = contract_name
+        
+        # 判斷開平倉
+        if str(octype).upper() == 'NEW':
+            action_type = '開倉'
+        elif str(octype).upper() == 'COVER':
+            action_type = '平倉'
+        else:
+            action_type = '未知'
+        
+        # 判斷手動/自動
+        manual_type = '手動' if is_manual else '自動'
+        
+        # 格式化價格
+        if price == 0:
+            price_display = '市價'
+        else:
+            price_display = f'$ {price:,.0f}'
+        
+        # 格式化方向
+        if str(direction).upper() == 'BUY':
+            direction_display = '多單'
+        elif str(direction).upper() == 'SELL':
+            direction_display = '空單'
+        else:
+            direction_display = direction
+        
+        # 格式化訂單類型和價格類型
+        order_type_display = order_type or 'ROD'
+        price_type_display = price_type or 'LMT'
+        
+        # 組合訂單類型顯示
+        if price_type_display.upper() == 'MKT':
+            order_info = f"市價 ({order_type_display})"
+        else:
+            order_info = f"限價 ({order_type_display})"
+        
+        if is_success:
+            # 成交成功格式
+            return f"{action_type}成功：{simple_contract}｜{direction_display}｜{qty} 口｜{price_display}｜{order_info}"
+        else:
+            # 掛單格式
+            return f"{manual_type}{action_type}：{simple_contract}｜{direction_display}｜{qty} 口｜{price_display}｜{order_info}"
+            
+    except Exception as e:
+        print(f"生成簡化日誌訊息失敗: {e}")
+        return f"日誌生成失敗: {order_id}"
+
 def login_sinopac():
     global sinopac_api, sinopac_connected, sinopac_account, sinopac_login_status, sinopac_login_time, auto_logout_timer
     
@@ -2781,8 +2975,17 @@ def login_sinopac():
         # 激活CA憑證 - 智能路徑處理
         cert_file = None
         
-        # 計算基於程式根目錄的絕對路徑
-        if ca_path:
+        # 優先檢查 server/certificate/ 目錄
+        cert_dir = os.path.join(os.path.dirname(__file__), 'certificate')
+        if os.path.exists(cert_dir):
+            for file in os.listdir(cert_dir):
+                if file.endswith('.pfx'):
+                    cert_file = os.path.join(cert_dir, file)
+                    print(f"找到憑證檔案: {cert_file}")
+                    break
+        
+        # 如果 server/certificate/ 目錄沒有找到，再檢查 ca_path
+        if not cert_file and ca_path:
             # 如果是絕對路徑，直接使用
             if os.path.isabs(ca_path):
                 final_ca_path = ca_path
@@ -2793,7 +2996,6 @@ def login_sinopac():
             print(f"憑證路徑: {final_ca_path}")
             
             # 檢查路徑是否存在
-            cert_file = None
             if os.path.isfile(final_ca_path):
                 cert_file = final_ca_path
             elif os.path.isdir(final_ca_path):
@@ -2929,7 +3131,7 @@ def start_auto_logout_timer():
     
     def auto_logout_task():
         """12小時後自動登出並重新登入"""
-        global sinopac_connected, sinopac_login_status
+        global sinopac_connected, sinopac_login_status, is_reconnecting
         
         if sinopac_connected and sinopac_login_status:
             print(f"目前連線已滿{AUTO_LOGOUT_HOURS}個小時，將自動登出並重新登入！")
@@ -2952,7 +3154,7 @@ def start_auto_logout_timer():
             
             # 重新登入
             if login_sinopac():
-                print("自動重新登入成功！")
+                print("12小時自動重新登入成功！")
                 # 發送前端系統日誌
                 try:
                     requests.post(
@@ -2963,7 +3165,7 @@ def start_auto_logout_timer():
                 except:
                     pass
             else:
-                print("自動重新登入失敗！")
+                print("12小時自動重新登入失敗！")
                 # 發送前端系統日誌
                 try:
                     requests.post(
@@ -3037,11 +3239,14 @@ reset_login_flag()
 
 def cleanup_on_exit():
     """程式退出時的清理工作"""
-    global sinopac_api, sinopac_connected, sinopac_account, sinopac_login_status, auto_logout_timer, ngrok_process, ngrok_auto_restart_timer, order_octype_map
+    global sinopac_api, sinopac_connected, sinopac_account, sinopac_login_status, auto_logout_timer, ngrok_process, ngrok_auto_restart_timer, order_octype_map, connection_monitor_timer
     
     try:
         # 停止自動登出定時器
         stop_auto_logout_timer()
+        
+        # 停止連線監控器
+        stop_connection_monitor()
         
         # 停止自動重啟定時器
         if ngrok_auto_restart_timer and ngrok_auto_restart_timer.is_alive():
@@ -3106,83 +3311,7 @@ def signal_handler(signum, frame):
 signal.signal(signal.SIGINT, signal_handler)
 signal.signal(signal.SIGTERM, signal_handler)
 
-def check_ngrok_update_alternative():
-    try:
-        api_urls = [
-            'https://api.github.com/repos/ngrok/ngrok-go/releases/latest',
-            'https://api.github.com/repos/inconshreveable/ngrok/releases/latest'
-        ]
-        for url in api_urls:
-            try:
-                response = requests.get(url, timeout=10)
-                if response.status_code == 200:
-                    data = response.json()
-                    latest_version = data.get('tag_name', '').lstrip('v')
-                    if latest_version and re.match(r'^\d+\.\d+\.\d+$', latest_version):
-                        current_version = get_ngrok_version()
-                        if current_version:
-                            if compare_versions(latest_version, current_version) > 0:
-                                ngrok_update_available = True
-                                return {
-                                    'update_available': True,
-                                    'current_version': current_version,
-                                    'latest_version': latest_version,
-                                    'download_url': get_download_url(data)
-                                }
-                            else:
-                                ngrok_update_available = False
-                                return {
-                                    'update_available': False,
-                                    'current_version': current_version,
-                                    'latest_version': latest_version
-                                }
-                        break
-            except Exception:
-                continue
-        try:
-            response = requests.get('https://ngrok.com/download', timeout=10)
-            if response.status_code == 200:
-                import re
-                version_patterns = [
-                    r'ngrok-v?(\d+\.\d+\.\d+)',
-                    r'version["\']?\s*:\s*["\']?(\d+\.\d+\.\d+)',
-                    r'(\d+\.\d+\.\d+).*ngrok',
-                    r'ngrok.*(\d+\.\d+\.\d+)'
-                ]
-                latest_version = None
-                for pattern in version_patterns:
-                    matches = re.findall(pattern, response.text, re.IGNORECASE)
-                    if matches:
-                        valid_versions = []
-                        for match in matches:
-                            if re.match(r'^\d+\.\d+\.\d+$', match):
-                                valid_versions.append(match)
-                        if valid_versions:
-                            latest_version = max(valid_versions, key=lambda v: [int(x) for x in v.split('.')])
-                            break
-                if latest_version:
-                    current_version = get_ngrok_version()
-                    if current_version:
-                        if compare_versions(latest_version, current_version) > 0:
-                            ngrok_update_available = True
-                            return {
-                                'update_available': True,
-                                'current_version': current_version,
-                                'latest_version': latest_version,
-                                'download_url': f'https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v{latest_version}-windows-amd64.zip'
-                            }
-                        else:
-                            ngrok_update_available = False
-                            return {
-                                'update_available': False,
-                                'current_version': current_version,
-                                'latest_version': latest_version
-                            }
-        except Exception:
-            pass
-        return None
-    except Exception:
-        return None
+# 移除check_ngrok_update_alternative函數，使用check_ngrok_update_simple作為主要更新檢查方法
 
 def check_ngrok_update_simple():
     """簡單的ngrok更新檢查方法，使用已知的最新版本"""
@@ -3280,10 +3409,7 @@ def start_ngrok_auto_restart():
     ngrok_auto_restart_timer.start()
     print("已啟動 ngrok 自動重啟定時器，5秒後重啟")
 
-def signal_handler(signum, frame):
-    """信號處理函數"""
-    cleanup_on_exit()
-    sys.exit(0)
+# 移除重複的signal_handler函數，保留第一個
 
 def check_daily_startup_notification():
     """檢查是否需要發送每日啟動通知"""
@@ -3307,13 +3433,13 @@ def schedule_next_check():
     
     # 設定明天早上 8:44 的檢查
     tomorrow = datetime.now() + timedelta(days=1)
-    schedule.every().day.at("08:44").do(check_daily_startup_notification)
+    schedule.every().day.at("08:45").do(check_daily_startup_notification)
     
     # 設定今天下午 14:49 的夜盤檢查
-    schedule.every().day.at("14:49").do(check_night_session_notification)
+    schedule.every().day.at("14:50").do(check_night_session_notification)
     
-    print(f"已排程下一次啟動通知檢查：{tomorrow.strftime('%Y-%m-%d')} 08:44")
-    print(f"已排程下一次夜盤通知檢查：{datetime.now().strftime('%Y-%m-%d')} 14:49")
+    print(f"已排程下一次啟動通知檢查：{tomorrow.strftime('%Y-%m-%d')} 08:45")
+    print(f"已排程下一次夜盤通知檢查：{datetime.now().strftime('%Y-%m-%d')} 14:50")
 
 def start_notification_checker():
     """啟動通知檢查器"""
@@ -3486,7 +3612,7 @@ def send_margin_change_notification(changes):
             return
         
         # 構建訊息
-        message = "保證金已更新！！！\n"
+        message = "⚠️ 保證金已更新！！！\n"
         
         # 顯示所有合約的最新保證金
         for contract in ['大台', '小台', '微台']:
@@ -3504,6 +3630,22 @@ def send_margin_change_notification(changes):
         
         response = requests.post(url, json=payload, timeout=10)
         response.raise_for_status()
+        
+        # 記錄保證金更新到前端日誌
+        try:
+            margin_log_message = "保證金已更新！"
+            for contract in ['大台', '小台', '微台']:
+                margin = margin_requirements.get(contract, 0)
+                margin_log_message += f" {contract}/{margin:,}"
+            margin_log_message += "！！！"
+            
+            requests.post(
+                f'http://127.0.0.1:{CURRENT_PORT}/api/system_log',
+                json={'message': margin_log_message, 'type': 'info'},
+                timeout=5
+            )
+        except:
+            pass
         
     except Exception as e:
         print(f"發送保證金變更通知失敗: {e}")
@@ -3625,7 +3767,7 @@ def is_ip_allowed(ip):
 @app.route('/webhook', methods=['POST'])
 def tradingview_webhook():
     """接收TradingView的webhook信號（使用TXserver邏輯）"""
-    global has_processed_delivery_exit, active_trades, recent_signals
+    global has_processed_delivery_exit, active_trades, recent_signals, rollover_processed_signals
     
     client_ip = request.remote_addr
     # 暫時不進行IP限制，但記錄來源IP
@@ -3650,6 +3792,12 @@ def tradingview_webhook():
             
         data = json.loads(raw)
         signal_id = data.get('tradeId')
+        
+        # 轉倉邏輯檢查
+        if process_rollover_signal(data):
+            print(f"轉倉模式: 處理訊號 {signal_id}")
+            # 在轉倉模式下，強制使用次月合約
+            data['rollover_mode'] = True
         
         # 重複訊號檢查
         with global_lock:
@@ -3754,6 +3902,28 @@ def send_unified_failure_message(data, reason, order_id="未知"):
                     delivery_date_str = "未知"
                     contract_code = f"{code}XX" 
                 
+                # 記錄掛單失敗日誌
+                log_message = get_simple_order_log_message(
+                    contract_name=name,
+                    direction=str(expected_action),
+                    qty=qty,
+                    price=price,
+                    order_id=order_id,
+                    octype=octype,
+                    is_manual=False,
+                    is_success=False,
+                    order_type="IOC",
+                    price_type="MKT"
+                )
+                try:
+                    requests.post(
+                        f'http://127.0.0.1:{CURRENT_PORT}/api/system_log',
+                        json={'message': log_message, 'type': 'error'},
+                        timeout=5
+                    )
+                except:
+                    pass
+                
                 fail_message = get_formatted_order_message(
                     is_success=False,
                     order_id=order_id,
@@ -3778,7 +3948,7 @@ def send_unified_failure_message(data, reason, order_id="未知"):
 
 def process_signal(data):
     """處理TradingView訊號（參考TXserver.py邏輯）"""
-    global has_processed_delivery_exit, active_trades, contract_txf, contract_mxf, contract_tmf
+    global has_processed_delivery_exit, active_trades, contract_txf, contract_mxf, contract_tmf, rollover_mode
     
     print(f"[process_signal] 開始處理訊號數據: {data}")
     
@@ -3793,6 +3963,7 @@ def process_signal(data):
         signal_id = data.get('tradeId')
         msg_type = data.get('type')  # entry 或 exit
         direction = data.get('direction', '未知')
+        is_rollover_mode = data.get('rollover_mode', False)
         
         # 獲取價格和時間
         time_ms = int(data.get('time', 0)) / 1000 if data.get('time') else 0
@@ -3812,6 +3983,7 @@ def process_signal(data):
         
         print(f"解析結果: type={msg_type}, direction={direction}, price={price}")
         print(f"合約數量: TXF={qty_txf}, MXF={qty_mxf}, TMF={qty_tmf}")
+        print(f"轉倉模式: {is_rollover_mode}")
         
         # 驗證價格
         if price <= 0:
@@ -3873,7 +4045,7 @@ def process_signal(data):
 
 def process_entry_signal(data, qty_txf, qty_mxf, qty_tmf, direction, price, order_type, price_type, positions):
     """處理進場訊號"""
-    global active_trades, contract_txf, contract_mxf, contract_tmf
+    global active_trades, contract_txf, contract_mxf, contract_tmf, rollover_mode
     
     print(f"[process_entry_signal] 處理進場訊號: direction={direction}")
     
@@ -3897,9 +4069,9 @@ def process_entry_signal(data, qty_txf, qty_mxf, qty_tmf, direction, price, orde
         
         # 發送提交失敗訊息
         contracts = [
-            (contract_txf, qty_txf, "大台", "TXF"),
-            (contract_mxf, qty_mxf, "小台", "MXF"), 
-            (contract_tmf, qty_tmf, "微台", "TMF")
+            (get_contract_for_rollover('TXF'), qty_txf, "大台", "TXF"),
+            (get_contract_for_rollover('MXF'), qty_mxf, "小台", "MXF"), 
+            (get_contract_for_rollover('TMF'), qty_tmf, "微台", "TMF")
         ]
         
         # 對每個有數量的合約發送失敗訊息
@@ -3930,17 +4102,21 @@ def process_entry_signal(data, qty_txf, qty_mxf, qty_tmf, direction, price, orde
                 send_telegram_message(fail_message)
         return
         
+    # 轉倉邏輯：根據轉倉模式選擇合約
+    is_rollover_mode = data.get('rollover_mode', False)
+    
     # 執行下單
     contracts = [
-        (contract_txf, qty_txf, "大台", "TXF"),
-        (contract_mxf, qty_mxf, "小台", "MXF"), 
-        (contract_tmf, qty_tmf, "微台", "TMF")
+        (get_contract_for_rollover('TXF'), qty_txf, "大台", "TXF"),
+        (get_contract_for_rollover('MXF'), qty_mxf, "小台", "MXF"), 
+        (get_contract_for_rollover('TMF'), qty_tmf, "微台", "TMF")
     ]
     
     for contract, qty, name, code in contracts:
         if qty > 0 and contract:
             try:
-                print(f"[process_entry_signal] 開始處理{name}進場: {qty}口 {direction}")
+                contract_type = "次月" if is_rollover_mode else "當月"
+                print(f"[process_entry_signal] 開始處理{name}進場: {qty}口 {direction} ({contract_type}合約)")
                 
                 result = place_futures_order_tx_style(
                     contract=contract,
@@ -3954,7 +4130,7 @@ def process_entry_signal(data, qty_txf, qty_mxf, qty_tmf, direction, price, orde
                 
                 if result.get('success'):
                     active_trades[contract_key_map[name]] = data.get('tradeId')
-                    print(f"{name}進場成功")
+                    print(f"{name}進場成功 ({contract_type}合約)")
                 else:
                     print(f"{name}進場失敗: {result.get('message', '未知錯誤')}")
                     
@@ -3971,9 +4147,12 @@ def process_entry_signal(data, qty_txf, qty_mxf, qty_tmf, direction, price, orde
 
 def process_exit_signal(data, qty_txf, qty_mxf, qty_tmf, direction, price, order_type, price_type, positions):
     """處理出場訊號"""
-    global active_trades
+    global active_trades, rollover_mode
     
     print(f"[process_exit_signal] 處理出場訊號: direction={direction}")
+    
+    # 轉倉邏輯：在轉倉模式下，先平倉當月合約
+    is_rollover_mode = data.get('rollover_mode', False)
     
     # 檢查是否有持倉
     position_txf = next((p for p in positions if p.code.startswith("TXF") and qty_txf > 0), None) if qty_txf > 0 else None
@@ -3987,8 +4166,8 @@ def process_exit_signal(data, qty_txf, qty_mxf, qty_tmf, direction, price, order
         
         # 發送提交失敗訊息
         contracts_to_check = [
-            (contract_txf, qty_txf, "大台", "TXF"),
-            (contract_mxf, qty_mxf, "小台", "MXF"), 
+            (get_contract_for_rollover('TXF'), qty_txf, "大台", "TXF"),
+            (get_contract_for_rollover('MXF'), qty_mxf, "小台", "MXF"), 
             (contract_tmf, qty_tmf, "微台", "TMF")
         ]
         
@@ -4022,15 +4201,16 @@ def process_exit_signal(data, qty_txf, qty_mxf, qty_tmf, direction, price, order
         
     # 執行平倉
     contracts_positions = [
-        (contract_txf, qty_txf, "大台", "TXF", position_txf),
-        (contract_mxf, qty_mxf, "小台", "MXF", position_mxf),
-        (contract_tmf, qty_tmf, "微台", "TMF", position_tmf)
+        (get_contract_for_rollover('TXF'), qty_txf, "大台", "TXF", position_txf),
+        (get_contract_for_rollover('MXF'), qty_mxf, "小台", "MXF", position_mxf),
+        (get_contract_for_rollover('TMF'), qty_tmf, "微台", "TMF", position_tmf)
     ]
     
     for contract, qty, name, code, position in contracts_positions:
         if qty > 0 and contract and position:
             try:
-                print(f"[process_exit_signal] 開始處理{name}出場: {qty}口")
+                contract_type = "次月" if is_rollover_mode else "當月"
+                print(f"[process_exit_signal] 開始處理{name}出場: {qty}口 ({contract_type}合約)")
                 
                 result = place_futures_order_tx_style(
                     contract=contract,
@@ -4045,7 +4225,7 @@ def process_exit_signal(data, qty_txf, qty_mxf, qty_tmf, direction, price, order
                 
                 if result.get('success'):
                     active_trades[contract_key_map[name]] = None
-                    print(f"{name}出場成功")
+                    print(f"{name}出場成功 ({contract_type}合約)")
                 else:
                     print(f"{name}出場失敗: {result.get('message', '未知錯誤')}")
             
@@ -4134,6 +4314,28 @@ def place_futures_order_tx_style(contract, quantity, direction, price, order_typ
         if hasattr(trade, 'operation') and trade.operation.get('op_msg'):
             error_msg = trade.operation.get('op_msg')
             
+            # 記錄掛單失敗日誌
+            log_message = get_simple_order_log_message(
+                contract_name=contract_name,
+                direction=direction_str,
+                qty=quantity,
+                price=price,
+                order_id=order_id,
+                octype=octype_str,
+                is_manual=is_manual,
+                is_success=False,
+                order_type=order_type,
+                price_type=price_type
+            )
+            try:
+                requests.post(
+                    f'http://127.0.0.1:{CURRENT_PORT}/api/system_log',
+                    json={'message': log_message, 'type': 'error'},
+                    timeout=5
+                )
+            except:
+                pass
+            
             # 發送失敗通知
             # 修正：將永豐API常數轉換為字符串
             direction_str = 'Buy' if action == sj.constant.Action.Buy else 'Sell'
@@ -4162,6 +4364,28 @@ def place_futures_order_tx_style(contract, quantity, direction, price, order_typ
                 'order_id': order_id
             }
         
+        # 記錄掛單成功日誌
+        log_message = get_simple_order_log_message(
+            contract_name=contract_name,
+            direction=direction_str,
+            qty=quantity,
+            price=price,
+            order_id=order_id,
+            octype=octype_str,
+            is_manual=is_manual,
+            is_success=False,
+            order_type=order_type,
+            price_type=price_type
+        )
+        try:
+            requests.post(
+                f'http://127.0.0.1:{CURRENT_PORT}/api/system_log',
+                json={'message': log_message, 'type': 'success'},
+                timeout=5
+            )
+        except:
+            pass
+        
         # 訂單提交成功 - 不需要立即發送通知，等callback處理
         print(f"訂單提交成功: {order_id} - {contract_name} {quantity}口 {direction}")
         
@@ -4176,7 +4400,7 @@ def place_futures_order_tx_style(contract, quantity, direction, price, order_typ
         error_msg = str(e)
         print(f"下單失敗: {error_msg}")
         
-        # 發送錯誤通知
+        # 記錄掛單失敗日誌
         contract_name = "大台" if contract.code.startswith('TXF') else "小台" if contract.code.startswith('MXF') else "微台"
         
         # 判斷octype
@@ -4186,7 +4410,29 @@ def place_futures_order_tx_style(contract, quantity, direction, price, order_typ
             error_octype = 'Cover'
         else:
             error_octype = 'New' if position is None else 'Cover'
+        
+        log_message = get_simple_order_log_message(
+            contract_name=contract_name,
+            direction=direction,
+            qty=quantity,
+            price=price,
+            order_id="未知",
+            octype=error_octype,
+            is_manual=is_manual,
+            is_success=False,
+            order_type=order_type,
+            price_type=price_type
+        )
+        try:
+            requests.post(
+                f'http://127.0.0.1:{CURRENT_PORT}/api/system_log',
+                json={'message': log_message, 'type': 'error'},
+                timeout=5
+            )
+        except:
+            pass
             
+        # 發送錯誤通知
         fail_message = get_formatted_order_message(
             is_success=False,
             order_id="未知",
@@ -4403,6 +4649,28 @@ def place_futures_order(contract_code, quantity, direction, price=0, is_manual=F
                 delivery_date=target_contract.delivery_date.strftime('%Y/%m/%d')
             )
             
+            # 記錄掛單失敗日誌
+            log_message = get_simple_order_log_message(
+                contract_name=contract_name,
+                direction=direction_str,
+                qty=quantity,
+                price=price,
+                order_id=order_id,
+                octype=octype_str,
+                is_manual=is_manual,
+                is_success=False,
+                order_type=str(final_order_type),
+                price_type=str(final_price_type)
+            )
+            try:
+                requests.post(
+                    f'http://127.0.0.1:{CURRENT_PORT}/api/system_log',
+                    json={'message': log_message, 'type': 'error'},
+                    timeout=5
+                )
+            except:
+                pass
+            
             # 延遲5秒發送失敗通知
             def delayed_send_fail():
                 time.sleep(5)
@@ -4446,6 +4714,28 @@ def place_futures_order(contract_code, quantity, direction, price=0, is_manual=F
         print(f"訂單映射已建立: {order_info}")
         print(f"當前 order_octype_map 內容: {order_octype_map}")
         
+        # 記錄掛單成功日誌
+        log_message = get_simple_order_log_message(
+            contract_name=contract_name,
+            direction=direction_str,
+            qty=quantity,
+            price=price,
+            order_id=order_id,
+            octype=octype_str,
+            is_manual=is_manual,
+            is_success=False,
+            order_type=str(final_order_type),
+            price_type=str(final_price_type)
+        )
+        try:
+            requests.post(
+                f'http://127.0.0.1:{CURRENT_PORT}/api/system_log',
+                json={'message': log_message, 'type': 'success'},
+                timeout=5
+            )
+        except:
+            pass
+        
         # 返回訂單資訊
         return {
             'contract_code': contract_code,
@@ -4469,7 +4759,7 @@ def place_futures_order(contract_code, quantity, direction, price=0, is_manual=F
 
 # 移除舊的通知函數，改用新的回調機制
 
-def send_telegram_message(message):
+def send_telegram_message(message, log_type="info"):
     """發送Telegram訊息"""
     try:
         print(f"=== 準備發送Telegram訊息 ===")
@@ -4507,6 +4797,27 @@ def send_telegram_message(message):
         
         if response.status_code == 200:
             print("Telegram 訊息發送成功！")
+            
+            # 根據訊息內容判斷發送狀態類型
+            if "提交成功" in message:
+                log_message = "Telegram ［提交成功］訊息發送成功！！！"
+            elif "提交失敗" in message:
+                log_message = "Telegram ［提交失敗］訊息發送成功！！！"
+            elif "成交通知" in message:
+                log_message = "Telegram ［成交通知］訊息發送成功！！！"
+            else:
+                log_message = "Telegram 訊息發送成功！！！"
+            
+            # 發送前端系統日誌
+            try:
+                requests.post(
+                    f'http://127.0.0.1:{CURRENT_PORT}/api/system_log',
+                    json={'message': log_message, 'type': 'success'},
+                    timeout=5
+                )
+            except:
+                pass
+            
             return True
         else:
             print(f"Telegram API 錯誤: {response.text}")
@@ -4589,6 +4900,374 @@ def cleanup_old_trade_files():
     except Exception as e:
         print(f"清理舊交易記錄檔案失敗：{e}")
 
+# 公共工具函數
+def get_sort_date(contract):
+    """按交割日期排序合約的公共函數"""
+    date_str = contract.delivery_date
+    if isinstance(date_str, str):
+        if len(date_str) == 8:  # YYYYMMDD
+            return date_str
+        elif '-' in date_str:  # YYYY-MM-DD
+            return date_str.replace('-', '')
+    return str(date_str)
+
+def format_delivery_date(delivery_date):
+    """格式化交割日期的公共函數"""
+    if isinstance(delivery_date, str):
+        if len(delivery_date) == 8:  # YYYYMMDD
+            return f"{delivery_date[:4]}/{delivery_date[4:6]}/{delivery_date[6:8]}"
+        elif '-' in delivery_date:  # YYYY-MM-DD
+            return delivery_date.replace('-', '/')
+    return str(delivery_date)
+
+# 轉倉相關函數
+def get_next_month_contracts():
+    """獲取次月合約"""
+    global next_month_contracts, sinopac_api
+    
+    try:
+        if not sinopac_connected or not sinopac_api:
+            return {}
+        
+        next_month_contracts = {}
+        
+        for code in ['TXF', 'MXF', 'TMF']:
+            try:
+                contracts = sinopac_api.Contracts.Futures.get(code)
+                if contracts:
+                    # 按交割日期排序
+                    sorted_contracts = sorted(contracts, key=get_sort_date)
+                    
+                    # 獲取第二個合約（次月合約）
+                    if len(sorted_contracts) >= 2:
+                        next_month_contracts[code] = sorted_contracts[1]
+                        print(f"次月{code}合約: {sorted_contracts[1].code}")
+                    else:
+                        print(f"警告: {code}只有一個合約可用")
+                        
+            except Exception as e:
+                print(f"獲取{code}次月合約失敗: {e}")
+                
+        return next_month_contracts
+        
+    except Exception as e:
+        print(f"獲取次月合約失敗: {e}")
+        return {}
+
+def check_rollover_mode():
+    """檢查是否應該進入轉倉模式"""
+    global rollover_mode, rollover_start_date, contract_txf, contract_mxf, contract_tmf
+    
+    try:
+        today = datetime.now().date()
+        
+        # 檢查當前合約的交割日
+        current_contracts = [contract_txf, contract_mxf, contract_tmf]
+        delivery_dates = []
+        
+        for contract in current_contracts:
+            if contract and hasattr(contract, 'delivery_date'):
+                delivery_date_str = contract.delivery_date
+                if isinstance(delivery_date_str, str):
+                    if len(delivery_date_str) == 8:  # YYYYMMDD
+                        delivery_date = datetime.strptime(delivery_date_str, '%Y%m%d').date()
+                    elif '/' in delivery_date_str:  # YYYY/MM/DD
+                        delivery_date = datetime.strptime(delivery_date_str, '%Y/%m/%d').date()
+                    elif '-' in delivery_date_str:  # YYYY-MM-DD
+                        delivery_date = datetime.strptime(delivery_date_str, '%Y-%m-%d').date()
+                    else:
+                        continue
+                    delivery_dates.append(delivery_date)
+        
+        if delivery_dates:
+            # 找到最近的交割日
+            nearest_delivery = min(delivery_dates)
+            # 轉倉開始日期 = 交割日前一天
+            rollover_start = nearest_delivery - timedelta(days=1)
+            
+            # 檢查是否應該進入轉倉模式
+            if today >= rollover_start:
+                if not rollover_mode:
+                    rollover_mode = True
+                    rollover_start_date = rollover_start
+                    print(f"進入轉倉模式，交割日: {nearest_delivery}")
+                    
+                    # 獲取次月合約
+                    get_next_month_contracts()
+                    
+                    # 發送轉倉通知
+                    rollover_message = f"交易系統將自動轉倉\n交割日: {nearest_delivery}\n下次開倉將使用次月合約！！！"
+                    send_telegram_message(rollover_message)
+                    
+                    # 記錄轉倉通知到前端日誌
+                    try:
+                        requests.post(
+                            f'http://127.0.0.1:{CURRENT_PORT}/api/system_log',
+                            json={'message': f'自動轉倉交割日: {nearest_delivery}，下次開倉將使用次月合約！！！', 'type': 'warning'},
+                            timeout=5
+                        )
+                    except:
+                        pass
+                    
+                return True
+            else:
+                if rollover_mode:
+                    rollover_mode = False
+                    rollover_start_date = None
+                    next_month_contracts.clear()
+                    rollover_processed_signals.clear()
+                    print("退出轉倉模式")
+                    
+                return False
+                
+        return False
+        
+    except Exception as e:
+        print(f"檢查轉倉模式失敗: {e}")
+        return False
+
+def get_contract_for_rollover(contract_type):
+    """根據轉倉模式獲取合約"""
+    global rollover_mode, next_month_contracts, contract_txf, contract_mxf, contract_tmf
+    
+    if not rollover_mode:
+        # 非轉倉模式，使用當前合約
+        if contract_type == 'TXF':
+            return contract_txf
+        elif contract_type == 'MXF':
+            return contract_mxf
+        elif contract_type == 'TMF':
+            return contract_tmf
+        else:
+            return None
+    
+    # 轉倉模式，使用次月合約
+    next_month_contract = next_month_contracts.get(contract_type)
+    if next_month_contract:
+        print(f"轉倉模式: 使用次月{contract_type}合約 {next_month_contract.code}")
+        return next_month_contract
+    else:
+        # 如果沒有次月合約，回退到當前合約
+        print(f"警告: 沒有次月{contract_type}合約，使用當前合約")
+        if contract_type == 'TXF':
+            return contract_txf
+        elif contract_type == 'MXF':
+            return contract_mxf
+        elif contract_type == 'TMF':
+            return contract_tmf
+        else:
+            return None
+
+def process_rollover_signal(data):
+    """處理轉倉訊號"""
+    global rollover_processed_signals
+    
+    signal_id = data.get('tradeId')
+    if signal_id in rollover_processed_signals:
+        print(f"轉倉訊號 {signal_id} 已處理，跳過")
+        return True
+    
+    # 檢查是否為轉倉模式
+    if not check_rollover_mode():
+        return False
+    
+    # 檢查是否為第一個webhook訊號
+    if len(rollover_processed_signals) == 0:
+        print("收到轉倉模式下的第一個webhook訊號")
+        rollover_processed_signals.add(signal_id)
+        return True
+    
+    return False
+
+def start_rollover_checker():
+    """啟動轉倉檢查器"""
+    def rollover_check_loop():
+        while True:
+            try:
+                # 每天凌晨00:05檢查一次轉倉模式（避免與其他檢查衝突）
+                now = datetime.now()
+                if now.hour == 0 and now.minute >= 5:
+                    check_rollover_mode()
+                    # 檢查後等待到明天凌晨
+                    tomorrow = now.replace(hour=0, minute=5, second=0, microsecond=0) + timedelta(days=1)
+                    sleep_seconds = (tomorrow - now).total_seconds()
+                    time.sleep(sleep_seconds)
+                else:
+                    # 計算到明天凌晨00:05的時間
+                    tomorrow = now.replace(hour=0, minute=5, second=0, microsecond=0) + timedelta(days=1)
+                    sleep_seconds = (tomorrow - now).total_seconds()
+                    time.sleep(sleep_seconds)
+                    
+            except Exception as e:
+                print(f"轉倉檢查器錯誤: {e}")
+                time.sleep(3600)  # 發生錯誤時等待1小時
+    
+    rollover_thread = threading.Thread(target=rollover_check_loop, daemon=True)
+    rollover_thread.start()
+    print("轉倉檢查器已啟動（每天凌晨00:05檢查）")
+
+# 斷線重連相關函數
+def check_api_connection():
+    """檢查API連線狀態"""
+    global sinopac_connected, sinopac_api, reconnect_attempts, last_connection_check
+    
+    try:
+        last_connection_check = datetime.now()
+        
+        # 如果API未初始化，跳過檢查
+        if not sinopac_api:
+            return True
+        
+        # 嘗試獲取帳戶資訊來測試連線
+        try:
+            # 簡單的API調用來測試連線
+            test_result = sinopac_api.list_positions(sinopac_api.futopt_account)
+            # 如果成功執行，重置重連計數
+            reconnect_attempts = 0
+            return True
+        except Exception as e:
+            print(f"API連線檢查失敗: {e}")
+            return False
+            
+    except Exception as e:
+        print(f"檢查API連線時發生錯誤: {e}")
+        return False
+
+def get_dynamic_check_interval():
+    """根據交易時間動態調整檢查間隔"""
+    try:
+        # 檢查是否為交易時間
+        response = requests.get(f'http://127.0.0.1:{CURRENT_PORT}/api/trading/status', timeout=5)
+        if response.status_code == 200:
+            data = response.json()
+            is_trading_day = data.get('is_trading_day', False)
+            is_market_open = data.get('is_market_open', False)
+            
+            # 交易時間：每1分鐘檢查
+            if is_trading_day and is_market_open:
+                return 60  # 1分鐘
+            # 非交易時間：每10分鐘檢查
+            else:
+                return 600  # 10分鐘
+        else:
+            # 如果無法獲取交易狀態，預設使用較長的間隔
+            return 600
+    except Exception as e:
+        print(f"獲取動態檢查間隔失敗: {e}")
+        # 發生錯誤時使用較長的間隔
+        return 600
+
+def start_connection_monitor():
+    """啟動連線監控器（智能檢查頻率）"""
+    global connection_monitor_timer
+    
+    def connection_monitor_loop():
+        global reconnect_attempts, is_reconnecting
+        
+        while True:
+            try:
+                # 動態獲取檢查間隔
+                check_interval = get_dynamic_check_interval()
+                
+                # 根據當前狀態決定檢查頻率
+                if is_reconnecting:
+                    # 重連中：每30秒檢查一次
+                    sleep_time = 30
+                    print(f"重連中，{sleep_time}秒後檢查連線狀態...")
+                else:
+                    # 正常狀態：使用動態間隔
+                    sleep_time = check_interval
+                    if check_interval == 60:
+                        print(f"交易時間，{sleep_time}秒後檢查連線狀態...")
+                    else:
+                        print(f"非交易時間，{sleep_time}秒後檢查連線狀態...")
+                
+                time.sleep(sleep_time)
+                
+                # 只有在已登入的情況下才檢查連線
+                if sinopac_connected and sinopac_login_status:
+                    if not check_api_connection():
+                        # 如果還沒開始重連，發送斷線通知
+                        if not is_reconnecting:
+                            print("檢測到API斷線，開始重連...")
+                            send_telegram_message("⚠️ API連線異常！！！\n正在嘗試重新連線．．．")
+                            is_reconnecting = True
+                            reconnect_attempts = 0
+                        
+                        # 嘗試重連
+                        if reconnect_api():
+                            print("API重連成功！")
+                            send_telegram_message("✅ API重新連線成功！！！")
+                            reconnect_attempts = 0
+                            is_reconnecting = False
+                        else:
+                            reconnect_attempts += 1
+                            print(f"重連失敗，30秒後重試... (第{reconnect_attempts}次)")
+                
+            except Exception as e:
+                print(f"連線監控器錯誤: {e}")
+                time.sleep(60)  # 發生錯誤時等待1分鐘
+    
+    connection_thread = threading.Thread(target=connection_monitor_loop, daemon=True)
+    connection_thread.start()
+    print("智能連線監控器已啟動（交易時間每1分鐘，非交易時間每10分鐘）")
+
+def reconnect_api():
+    """重連API"""
+    global sinopac_connected, sinopac_login_status
+    
+    try:
+        print("開始重連API...")
+        
+        # 先登出（包含token清理）
+        if sinopac_connected:
+            try:
+                sinopac_api.logout()
+            except:
+                pass
+            sinopac_connected = False
+            sinopac_login_status = False
+        
+        # 等待1秒
+        time.sleep(1)
+        
+        # 重新初始化API並登入
+        try:
+            # 重新初始化API
+            if sinopac_api:
+                try:
+                    sinopac_api.logout()
+                except:
+                    pass
+            
+            # 重新初始化
+            init_sinopac_api()
+            
+            # 重新登入
+            if login_sinopac():
+                print("API重連成功")
+                return True
+            else:
+                print("API重連失敗")
+                return False
+                
+        except Exception as e:
+            print(f"重新初始化API時發生錯誤: {e}")
+            return False
+            
+    except Exception as e:
+        print(f"重連API時發生錯誤: {e}")
+        return False
+
+def stop_connection_monitor():
+    """停止連線監控器"""
+    global connection_monitor_timer
+    
+    if connection_monitor_timer and connection_monitor_timer.is_alive():
+        connection_monitor_timer.cancel()
+        connection_monitor_timer = None
+        print("已停止連線監控器")
+
 if __name__ == '__main__':
     # 在其他初始化代碼之前添加
     notification_sent_date = None
@@ -4623,6 +5302,12 @@ if __name__ == '__main__':
     
     # 啟動通知檢查器
     start_notification_checker()
+    
+    # 啟動轉倉檢查器
+    start_rollover_checker()
+    
+    # 啟動連線監控器
+    start_connection_monitor()
     
     # 註冊信號處理器
     signal.signal(signal.SIGINT, signal_handler)
