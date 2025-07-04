@@ -2,6 +2,53 @@
 
 ## 最新更新 (v1.3.4 - 2025-07-04)
 
+### 永豐手動下單參數格式標準化
+重大API變更：手動下單改為使用永豐官方參數格式，與 WEBHOOK 下單明確分離。
+
+#### 手動下單 API 參數要求
+```json
+{
+  "contract_code": "TXF",
+  "quantity": 1,
+  "price": 0,
+  "action": "Buy",    // 永豐官方參數：Buy 或 Sell
+  "octype": "Cover"   // 永豐官方參數：New 或 Cover
+}
+```
+
+#### 參數對應關係
+- **action 參數**：
+  - `"Buy"` = 買入
+  - `"Sell"` = 賣出
+- **octype 參數**：
+  - `"New"` = 開倉
+  - `"Cover"` = 平倉
+
+#### 動作組合對應
+- `New Buy` = 多單買入（開倉多單）
+- `New Sell` = 空單買入（開倉空單）
+- `Cover Sell` = 多單賣出（平倉多單）
+- `Cover Buy` = 空單賣出（平倉空單）
+
+#### 錯誤處理
+如果沒有提供 `action` 或 `octype` 參數：
+```json
+{
+  "status": "error",
+  "message": "永豐手動下單需要提供 action (Buy/Sell) 和 octype (New/Cover) 參數"
+}
+```
+
+### WEBHOOK 下單參數（保持不變）
+```json
+{
+  "contract_code": "TXF",
+  "quantity": 1,
+  "price": 0,
+  "direction": "平多"  // 中文參數：開多、開空、平多、平空
+}
+```
+
 ### 統一失敗通知格式 API
 新增 `send_unified_failure_message()` 函數，統一處理所有訂單提交失敗的通知格式：
 

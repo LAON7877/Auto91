@@ -2160,7 +2160,7 @@ def update_margin_requirements_from_api():
 def order_callback(state, deal, order=None):
     """訂單回調函數處理（參考TXserver.py架構）"""
     global order_octype_map, contract_txf, contract_mxf, contract_tmf
-    
+        
     try:
         print(f"收到回調事件: {state}")
         
@@ -2181,11 +2181,20 @@ def order_callback(state, deal, order=None):
         octype_info = order_octype_map.get(order_id)
         if octype_info is None:
             # 如果找不到映射資訊，嘗試從回調資料推斷
+            # 修正：對於成交回調，如果找不到映射資訊，可能是手動下單
             # 嘗試從API回調數據中推斷開平倉類型
             try:
                 # 獲取持倉資訊來判斷是否為平倉
                 positions = sinopac_api.list_positions(sinopac_api.futopt_account)
-                contract_positions = [p for p in positions if p.code == contract_code]
+                
+                # 根據合約代碼前綴找到對應的持倉
+                contract_positions = []
+                if contract_code.startswith('TXF'):
+                    contract_positions = [p for p in positions if p.code.startswith('TXF')]
+                elif contract_code.startswith('MXF'):
+                    contract_positions = [p for p in positions if p.code.startswith('MXF')]
+                elif contract_code.startswith('TMF'):
+                    contract_positions = [p for p in positions if p.code.startswith('TMF')]
                 
                 # 如果有持倉且訂單方向與持倉方向相反，則為平倉
                 action = deal.get('order', {}).get('action', 'Sell')
@@ -2194,17 +2203,20 @@ def order_callback(state, deal, order=None):
                 )
                 
                 inferred_octype = 'Cover' if has_opposite_position else 'New'
-                inferred_manual = True  # 推斷為手動操作（因為webhook操作有明確映射）
+                # 修正：如果找不到映射資訊，可能是手動下單，預設為手動
+                inferred_manual = True  # 預設為手動操作
             except:
                 inferred_octype = 'New'
-                inferred_manual = True  # 預設為手動
+                inferred_manual = True  # 預設為手動操作
             
+            # 修正：從deal中獲取實際的訂單資訊
+            order_info = deal.get('order', {})
             octype_info = {
                 'octype': inferred_octype,
-                'direction': deal.get('order', {}).get('action', 'Sell'),
+                'direction': order_info.get('action', 'Sell'),
                 'contract_name': contract_name,
-                'order_type': deal.get('order', {}).get('order_type', 'IOC'),
-                'price_type': deal.get('order', {}).get('price_type', 'MKT'),
+                'order_type': order_info.get('order_type', order_info.get('order_type', 'IOC')),  # 先取order內的order_type，預設IOC
+                'price_type': order_info.get('price_type', order_info.get('price_type', 'MKT')),  # 先取order內的price_type，預設MKT
                 'is_manual': inferred_manual
             }
         
@@ -2230,31 +2242,42 @@ def order_callback(state, deal, order=None):
         elif str(state) in ['OrderState.Submitted', 'OrderState.FuturesOrder']:
             if op_type == 'Cancel' or op_code != '00':
                 # 訂單失敗或取消
-                if op_type == 'Cancel' and order_type == 'IOC' and not op_msg:
-                    fail_reason = "價格未滿足"
+                if op_type == 'Cancel':
+                    if order_type == 'IOC' and not op_msg:
+                        fail_reason = "價格未滿足"
+                    else:
+                        fail_reason = "手動取消掛單"  # 手動取消訂單
                 else:
                     fail_reason = OP_MSG_TRANSLATIONS.get(op_msg, op_msg or '未知錯誤')
                 
                 price_value = order.get('price', 0.0) if order else deal.get('order', {}).get('price', 0.0)
                 
-                # 獲取交割日期用於失敗通知
+                # 獲取完整合約代碼和交割日期用於失敗通知
+                full_contract_code = None
                 delivery_date_for_fail = None
                 try:
-                    if contract_code:
-                        # 從全域合約對象獲取交割日期
-                        target_contract = None
-                        if contract_code.startswith('TXF') and contract_txf and contract_txf.code == contract_code:
-                            target_contract = contract_txf
-                        elif contract_code.startswith('MXF') and contract_mxf and contract_mxf.code == contract_code:
-                            target_contract = contract_mxf
-                        elif contract_code.startswith('TMF') and contract_tmf and contract_tmf.code == contract_code:
-                            target_contract = contract_tmf
-                        
-                        if target_contract and hasattr(target_contract, 'delivery_date'):
-                            if hasattr(target_contract.delivery_date, 'strftime'):
-                                delivery_date_for_fail = target_contract.delivery_date.strftime('%Y/%m/%d')
+                    # 根據合約代碼前綴找到對應的全域合約對象
+                    if contract_code.startswith('TXF') and contract_txf:
+                        full_contract_code = contract_txf.code
+                        if hasattr(contract_txf, 'delivery_date'):
+                            if hasattr(contract_txf.delivery_date, 'strftime'):
+                                delivery_date_for_fail = contract_txf.delivery_date.strftime('%Y/%m/%d')
                             else:
-                                delivery_date_for_fail = str(target_contract.delivery_date)
+                                delivery_date_for_fail = str(contract_txf.delivery_date)
+                    elif contract_code.startswith('MXF') and contract_mxf:
+                        full_contract_code = contract_mxf.code
+                        if hasattr(contract_mxf, 'delivery_date'):
+                            if hasattr(contract_mxf.delivery_date, 'strftime'):
+                                delivery_date_for_fail = contract_mxf.delivery_date.strftime('%Y/%m/%d')
+                            else:
+                                delivery_date_for_fail = str(contract_mxf.delivery_date)
+                    elif contract_code.startswith('TMF') and contract_tmf:
+                        full_contract_code = contract_tmf.code
+                        if hasattr(contract_tmf, 'delivery_date'):
+                            if hasattr(contract_tmf.delivery_date, 'strftime'):
+                                delivery_date_for_fail = contract_tmf.delivery_date.strftime('%Y/%m/%d')
+                            else:
+                                delivery_date_for_fail = str(contract_tmf.delivery_date)
                 except:
                     pass
                 
@@ -2271,7 +2294,7 @@ def order_callback(state, deal, order=None):
                     price_type=price_type,
                     is_manual=is_manual,
                     reason=fail_reason,
-                    contract_code=contract_code,
+                    contract_code=full_contract_code or contract_code,
                     delivery_date=delivery_date_for_fail
                 )
                 send_telegram_message(msg)
@@ -2283,7 +2306,8 @@ def order_callback(state, deal, order=None):
                 # 訂單提交成功
                 price_value = order.get('price', 0.0) if order else deal.get('order', {}).get('price', 0.0)
                 
-                # 獲取交割日期
+                # 獲取完整合約代碼和交割日期
+                full_contract_code = None
                 delivery_date = None
                 try:
                     # 首先嘗試從deal或order獲取delivery_month
@@ -2298,22 +2322,28 @@ def order_callback(state, deal, order=None):
                         month = int(delivery_month[4:6])
                         delivery_date = f"{year}/{month:02d}/16"
                     else:
-                        # 如果沒有delivery_month，嘗試從合約代碼查找
-                        if contract_code:
-                            # 從全域合約對象獲取交割日期
-                            target_contract = None
-                            if contract_code.startswith('TXF') and contract_txf and contract_txf.code == contract_code:
-                                target_contract = contract_txf
-                            elif contract_code.startswith('MXF') and contract_mxf and contract_mxf.code == contract_code:
-                                target_contract = contract_mxf
-                            elif contract_code.startswith('TMF') and contract_tmf and contract_tmf.code == contract_code:
-                                target_contract = contract_tmf
-                            
-                            if target_contract and hasattr(target_contract, 'delivery_date'):
-                                if hasattr(target_contract.delivery_date, 'strftime'):
-                                    delivery_date = target_contract.delivery_date.strftime('%Y/%m/%d')
+                        # 如果沒有delivery_month，從全域合約對象獲取
+                        if contract_code.startswith('TXF') and contract_txf:
+                            full_contract_code = contract_txf.code
+                            if hasattr(contract_txf, 'delivery_date'):
+                                if hasattr(contract_txf.delivery_date, 'strftime'):
+                                    delivery_date = contract_txf.delivery_date.strftime('%Y/%m/%d')
                                 else:
-                                    delivery_date = str(target_contract.delivery_date)
+                                    delivery_date = str(contract_txf.delivery_date)
+                        elif contract_code.startswith('MXF') and contract_mxf:
+                            full_contract_code = contract_mxf.code
+                            if hasattr(contract_mxf, 'delivery_date'):
+                                if hasattr(contract_mxf.delivery_date, 'strftime'):
+                                    delivery_date = contract_mxf.delivery_date.strftime('%Y/%m/%d')
+                                else:
+                                    delivery_date = str(contract_mxf.delivery_date)
+                        elif contract_code.startswith('TMF') and contract_tmf:
+                            full_contract_code = contract_tmf.code
+                            if hasattr(contract_tmf, 'delivery_date'):
+                                if hasattr(contract_tmf.delivery_date, 'strftime'):
+                                    delivery_date = contract_tmf.delivery_date.strftime('%Y/%m/%d')
+                                else:
+                                    delivery_date = str(contract_tmf.delivery_date)
                 except:
                     pass
                 
@@ -2329,7 +2359,7 @@ def order_callback(state, deal, order=None):
                     order_type=order_type,
                     price_type=price_type,
                     is_manual=is_manual,
-                    contract_code=contract_code,
+                    contract_code=full_contract_code or contract_code,
                     delivery_date=delivery_date
                 )
                 send_telegram_message(msg)
@@ -2351,42 +2381,64 @@ def handle_futures_deal_callback(deal, octype_info):
         
         current_time = datetime.now().strftime('%Y/%m/%d %H:%M')
         
-        # 獲取交割日期用於成交通知
+        # 修正：確保使用正確的訂單資訊
+        # 如果octype_info中有完整的訂單資訊，優先使用
+        octype = octype_info.get('octype', 'New')
+        direction = octype_info.get('direction', 'Sell')
+        order_type = octype_info.get('order_type', 'IOC')
+        price_type = octype_info.get('price_type', 'MKT')
+        is_manual = octype_info.get('is_manual', False)
+        
+        # 獲取完整合約代碼和交割日期用於成交通知
+        full_contract_code = None
         delivery_date_for_deal = None
         try:
-            if contract_code:
-                # 從全域合約對象獲取交割日期
-                target_contract = None
-                if contract_code.startswith('TXF') and contract_txf and contract_txf.code == contract_code:
-                    target_contract = contract_txf
-                elif contract_code.startswith('MXF') and contract_mxf and contract_mxf.code == contract_code:
-                    target_contract = contract_mxf
-                elif contract_code.startswith('TMF') and contract_tmf and contract_tmf.code == contract_code:
-                    target_contract = contract_tmf
-                
-                if target_contract and hasattr(target_contract, 'delivery_date'):
-                    if hasattr(target_contract.delivery_date, 'strftime'):
-                        delivery_date_for_deal = target_contract.delivery_date.strftime('%Y/%m/%d')
+            # 根據合約代碼前綴找到對應的全域合約對象
+            if contract_code.startswith('TXF') and contract_txf:
+                full_contract_code = contract_txf.code
+                if hasattr(contract_txf, 'delivery_date'):
+                    if hasattr(contract_txf.delivery_date, 'strftime'):
+                        delivery_date_for_deal = contract_txf.delivery_date.strftime('%Y/%m/%d')
                     else:
-                        delivery_date_for_deal = str(target_contract.delivery_date)
+                        delivery_date_for_deal = str(contract_txf.delivery_date)
+            elif contract_code.startswith('MXF') and contract_mxf:
+                full_contract_code = contract_mxf.code
+                if hasattr(contract_mxf, 'delivery_date'):
+                    if hasattr(contract_mxf.delivery_date, 'strftime'):
+                        delivery_date_for_deal = contract_mxf.delivery_date.strftime('%Y/%m/%d')
+                    else:
+                        delivery_date_for_deal = str(contract_mxf.delivery_date)
+            elif contract_code.startswith('TMF') and contract_tmf:
+                full_contract_code = contract_tmf.code
+                if hasattr(contract_tmf, 'delivery_date'):
+                    if hasattr(contract_tmf.delivery_date, 'strftime'):
+                        delivery_date_for_deal = contract_tmf.delivery_date.strftime('%Y/%m/%d')
+                    else:
+                        delivery_date_for_deal = str(contract_tmf.delivery_date)
         except:
             pass
         
-        # 發送成交通知
+        # 發送成交通知 - 使用正確的訂單資訊，延遲5秒發送
         msg = get_formatted_trade_message(
             order_id=order_id,
             contract_name=contract_name,
             qty=deal_quantity,
             price=deal_price,
-            octype=octype_info['octype'],
-            direction=octype_info['direction'],
-            order_type=octype_info['order_type'],
-            price_type=octype_info['price_type'],
-            is_manual=octype_info.get('is_manual', False),
-            contract_code=contract_code,
+            octype=octype,
+            direction=direction,
+            order_type=order_type,
+            price_type=price_type,
+            is_manual=is_manual,
+            contract_code=full_contract_code or contract_code,
             delivery_date=delivery_date_for_deal
         )
-        send_telegram_message(msg)
+        
+        # 延遲5秒發送成交通知，確保在提交通知之後
+        def delayed_send():
+            time.sleep(5)
+            send_telegram_message(msg)
+        
+        threading.Thread(target=delayed_send, daemon=True).start()
         
         # 清理映射
         with global_lock:
@@ -2416,9 +2468,27 @@ def get_formatted_order_message(is_success, order_id, contract_name, qty, price,
     # 獲取完整合約資訊
     try:
         if contract_code and delivery_date:
-            contract_display = f"{contract_code} ({delivery_date})"
+            # 簡化合約代碼顯示：TMFG5 -> TMF, MXFG5 -> MXF, TXFG5 -> TXF
+            if contract_code.startswith('TMF'):
+                simple_code = 'TMF'
+            elif contract_code.startswith('MXF'):
+                simple_code = 'MXF'
+            elif contract_code.startswith('TXF'):
+                simple_code = 'TXF'
+            else:
+                simple_code = contract_code
+            contract_display = f"{simple_code} ({delivery_date})"
         elif contract_code:
-            contract_display = f"{contract_code} (日期未知)"
+            # 簡化合約代碼顯示
+            if contract_code.startswith('TMF'):
+                simple_code = 'TMF'
+            elif contract_code.startswith('MXF'):
+                simple_code = 'MXF'
+            elif contract_code.startswith('TXF'):
+                simple_code = 'TXF'
+            else:
+                simple_code = contract_code
+            contract_display = f"{simple_code} (日期未知)"
         else:
             contract_display = "未知"
     except:
@@ -2440,29 +2510,47 @@ def get_formatted_order_message(is_success, order_id, contract_name, qty, price,
     except:
         order_type_display = f"未知 ({order_type})"
     
-    # 提交類型
+    # 提交類型 - 參考TXserver.py邏輯
     manual_type = "手動" if is_manual else "自動"
-    octype_display = "開倉" if octype == "New" else "平倉"
+    # 根據octype判斷開平倉
+    if str(octype).upper() == 'NEW':
+        octype_display = "開倉"
+    elif str(octype).upper() == 'COVER':
+        octype_display = "平倉"
+    else:
+        octype_display = f"未知({octype})"  # 不預設為開倉，顯示實際值
     submit_type = f"{manual_type}{octype_display}"
     
-    # 提交動作
+    # 提交動作 - 參考TXserver.py的get_action_display_by_rule邏輯
     direction_str = str(direction).upper()
-    if octype == "New":  # 開倉
+    if str(octype).upper() == 'NEW':  # 開倉
         if 'BUY' in direction_str:
-            submit_action = "多單買入"
-        else:  # Sell
-            submit_action = "空單買入"
-    else:  # Cover 平倉
-        if 'BUY' in direction_str:
-            submit_action = "空單賣出"  # 買入平空
-        else:  # Sell
-            submit_action = "多單賣出"  # 賣出平多
+            submit_action = "多單買入"  # 開倉多單
+        elif 'SELL' in direction_str:
+            submit_action = "空單買入"  # 開倉空單
+        else:
+            submit_action = "未知動作"
+    elif str(octype).upper() == 'COVER':  # 平倉
+        if 'SELL' in direction_str:
+            submit_action = "多單賣出"  # 賣出平多單
+        elif 'BUY' in direction_str:
+            submit_action = "空單賣出"  # 買入平空單
+        else:
+            submit_action = "未知動作"
+    else:
+        submit_action = "未知動作"
     
     # 提交價格
     if str(price_type).upper() == "MKT":
         price_display = "市價"
     else:
         price_display = f"{price:.0f}"
+    
+    # 失敗原因翻譯 - 參考TXserver.py的OP_MSG_TRANSLATIONS
+    if reason:
+        translated_reason = OP_MSG_TRANSLATIONS.get(reason, reason)
+    else:
+        translated_reason = reason
     
     if is_success:
         msg = (f"⭕ 提交成功（{current_time}）\n"
@@ -2484,7 +2572,7 @@ def get_formatted_order_message(is_success, order_id, contract_name, qty, price,
                f"提交部位：{contract_name}\n"
                f"提交數量：{qty} 口\n"
                f"提交價格：{price_display}\n"
-               f"原因：{reason}")
+               f"原因：{translated_reason}")
     
     return msg
 
@@ -2492,12 +2580,30 @@ def get_formatted_trade_message(order_id, contract_name, qty, price, octype, dir
     """格式化成交訊息"""
     current_time = datetime.now().strftime('%Y/%m/%d')
     
-    # 獲取完整合約資訊
+    # 獲取完整合約資訊 - 修正：簡化合約代碼顯示
     try:
         if contract_code and delivery_date:
-            contract_display = f"{contract_code} ({delivery_date})"
+            # 簡化合約代碼顯示：TMFG5 -> TMF, MXFG5 -> MXF, TXFG5 -> TXF
+            if contract_code.startswith('TMF'):
+                simple_code = 'TMF'
+            elif contract_code.startswith('MXF'):
+                simple_code = 'MXF'
+            elif contract_code.startswith('TXF'):
+                simple_code = 'TXF'
+            else:
+                simple_code = contract_code
+            contract_display = f"{simple_code} ({delivery_date})"
         elif contract_code:
-            contract_display = f"{contract_code} (日期未知)"
+            # 簡化合約代碼顯示
+            if contract_code.startswith('TMF'):
+                simple_code = 'TMF'
+            elif contract_code.startswith('MXF'):
+                simple_code = 'MXF'
+            elif contract_code.startswith('TXF'):
+                simple_code = 'TXF'
+            else:
+                simple_code = contract_code
+            contract_display = f"{simple_code} (日期未知)"
         else:
             contract_display = "未知"
     except:
@@ -2521,21 +2627,33 @@ def get_formatted_trade_message(order_id, contract_name, qty, price, octype, dir
     
     # 成交類型
     manual_type = "手動" if is_manual else "自動"
-    octype_display = "開倉" if octype == "New" else "平倉"
+    # 根據octype判斷開平倉
+    if str(octype).upper() == 'NEW':
+        octype_display = "開倉"
+    elif str(octype).upper() == 'COVER':
+        octype_display = "平倉"
+    else:
+        octype_display = f"未知({octype})"  # 不預設為開倉，顯示實際值
     trade_type = f"{manual_type}{octype_display}"
     
-    # 成交動作
+    # 成交動作 - 參考TXserver.py的get_action_display_by_rule邏輯
     direction_str = str(direction).upper()
-    if octype == "New":  # 開倉
+    if str(octype).upper() == 'NEW':  # 開倉
         if 'BUY' in direction_str:
-            trade_action = "多單買入"
-        else:  # Sell
-            trade_action = "空單買入"
-    else:  # Cover 平倉
-        if 'BUY' in direction_str:
-            trade_action = "空單賣出"  # 買入平空
-        else:  # Sell
-            trade_action = "多單賣出"  # 賣出平多
+            trade_action = "多單買入"  # 開倉多單
+        elif 'SELL' in direction_str:
+            trade_action = "空單買入"  # 開倉空單
+        else:
+            trade_action = "未知動作"
+    elif str(octype).upper() == 'COVER':  # 平倉
+        if 'SELL' in direction_str:
+            trade_action = "多單賣出"  # 賣出平多單
+        elif 'BUY' in direction_str:
+            trade_action = "空單賣出"  # 買入平空單
+        else:
+            trade_action = "未知動作"
+    else:
+        trade_action = "未知動作"
     
     msg = (f"✅ 成交通知（{current_time}）\n"
            f"選用合約：{contract_display}\n"
@@ -3356,17 +3474,28 @@ def manual_order():
         # 解析下單參數
         contract_code = data.get('contract_code', 'TXF')  # 合約代碼
         quantity = int(data.get('quantity', 1))  # 數量
-        direction = data.get('direction', '')  # 開多、開空、平多、平空
+        direction = data.get('direction', '')  # 開多、開空、平多、平空（兼容性）
         price = float(data.get('price', 0))  # 價格
         price_type = data.get('price_type', None)  # MKT或LMT
         order_type = data.get('order_type', None)  # IOC或ROD
         position_type = data.get('position_type', None)  # None、long、short
+        action_param = data.get('action', None)  # Buy或Sell（永豐官方參數）
+        octype_param = data.get('octype', None)  # New或Cover（永豐官方參數）
+        
+        # 調試信息
+        print(f"=== 手動下單參數調試 ===")
+        print(f"原始數據: {data}")
+        print(f"所有參數:")
+        for key, value in data.items():
+            print(f"  {key}: '{value}'")
+        print(f"is_manual: True")
+        print(f"永豐官方參數: action='{action_param}', octype='{octype_param}'")
         
         # 驗證必要欄位
-        if not direction:
+        if not action_param or not octype_param:
             return jsonify({
                 'status': 'error',
-                'message': '缺少交易方向'
+                'message': '永豐手動下單需要提供 action (Buy/Sell) 和 octype (New/Cover) 參數'
             }), 400
         
         # 檢查是否為交易時間
@@ -3387,7 +3516,9 @@ def manual_order():
                 is_manual=True,  # 手動下單
                 position_type=position_type,
                 price_type=price_type,  # 傳遞實際的price_type
-                order_type=order_type   # 傳遞實際的order_type
+                order_type=order_type,  # 傳遞實際的order_type
+                action_param=action_param,  # 傳遞永豐官方action參數
+                octype_param=octype_param   # 傳遞永豐官方octype參數
             )
             
             return jsonify({
@@ -3514,8 +3645,14 @@ def send_unified_failure_message(data, reason, order_id="未知"):
         else:
             expected_action = direction
         
-        # 確定開平倉類型
-        octype = 'New' if msg_type == 'entry' or direction in ['開多', '開空'] else 'Cover'
+        # 確定開平倉類型 - webhook邏輯
+        if direction in ['開多', '開空']:
+            octype = 'New'  # 開倉
+        elif direction in ['平多', '平空']:
+            octype = 'Cover'  # 平倉
+        else:
+            # 根據msg_type判斷
+            octype = 'New' if msg_type == 'entry' else 'Cover'
         
         # 獲取合約資訊
         contracts = [
@@ -3704,11 +3841,11 @@ def process_entry_signal(data, qty_txf, qty_mxf, qty_tmf, direction, price, orde
                     contract_name=name,
                     qty=qty,
                     price=price,
-                    octype='New',
+                    octype='New',  # 進場訊號都是開倉
                     direction=str(expected_action),
                     order_type="IOC",
                     price_type="MKT",
-                    is_manual=False,
+                    is_manual=False,  # webhook來源為自動
                     reason="存在相反持倉",
                     contract_code=contract.code,
                     delivery_date=delivery_date_str
@@ -3794,11 +3931,11 @@ def process_exit_signal(data, qty_txf, qty_mxf, qty_tmf, direction, price, order
                     contract_name=name,
                     qty=qty,
                     price=price,
-                    octype='Cover',
+                    octype='Cover',  # 出場訊號都是平倉
                     direction=direction,
                     order_type="IOC",
                     price_type="MKT",
-                    is_manual=False,
+                    is_manual=False,  # webhook來源為自動
                     reason="無對應持倉",
                     contract_code=contract.code,
                     delivery_date=delivery_date_str
@@ -3849,8 +3986,17 @@ def process_exit_signal(data, qty_txf, qty_mxf, qty_tmf, direction, price, order
 def place_futures_order_tx_style(contract, quantity, direction, price, order_type="IOC", price_type="MKT", is_manual=False, position=None):
     """TXserver風格的下單函數"""
     try:
-        # 判斷開平倉類型
-        is_entry = position is None
+        # 判斷開平倉類型 - 根據direction判斷
+        if direction in ["開多", "開空"]:
+            is_entry = True
+            octype = 'New'
+        elif direction in ["平多", "平空"]:
+            is_entry = False
+            octype = 'Cover'
+        else:
+            # 如果direction不是中文，則根據position判斷
+            is_entry = position is None
+            octype = 'New' if is_entry else 'Cover'
         
         # 確定交易動作
         if is_entry:
@@ -3894,7 +4040,7 @@ def place_futures_order_tx_style(contract, quantity, direction, price, order_typ
         # 建立訂單映射（參考TXserver.py架構）
         with global_lock:
             order_octype_map[order_id] = {
-                'octype': 'New' if is_entry else 'Cover',
+                'octype': octype,  # 使用前面判斷的octype
                 'direction': str(action),
                 'contract_name': contract_name,
                 'order_type': order_type,
@@ -3914,7 +4060,7 @@ def place_futures_order_tx_style(contract, quantity, direction, price, order_typ
                 contract_name=contract_name,
                 qty=quantity,
                 price=price,
-                octype='New' if is_entry else 'Cover',
+                octype=octype,  # 使用前面判斷的octype
                 direction=str(action),
                 order_type=order_type,
                 price_type=price_type,
@@ -3947,13 +4093,22 @@ def place_futures_order_tx_style(contract, quantity, direction, price, order_typ
         
         # 發送錯誤通知
         contract_name = "大台" if contract.code.startswith('TXF') else "小台" if contract.code.startswith('MXF') else "微台"
+        
+        # 判斷octype
+        if direction in ["開多", "開空"]:
+            error_octype = 'New'
+        elif direction in ["平多", "平空"]:
+            error_octype = 'Cover'
+        else:
+            error_octype = 'New' if position is None else 'Cover'
+            
         fail_message = get_formatted_order_message(
             is_success=False,
             order_id="未知",
             contract_name=contract_name,
             qty=quantity,
             price=price,
-            octype='New' if position is None else 'Cover',
+            octype=error_octype,
             direction=direction,
             order_type=order_type,
             price_type=price_type,
@@ -4011,7 +4166,7 @@ def init_contracts():
 
 
 
-def place_futures_order(contract_code, quantity, direction, price=0, is_manual=False, position_type=None, price_type=None, order_type=None):
+def place_futures_order(contract_code, quantity, direction, price=0, is_manual=False, position_type=None, price_type=None, order_type=None, action_param=None, octype_param=None):
     """執行期貨下單
     contract_code: 合約代碼 (TXF, MXF, TMF)
     quantity: 數量
@@ -4023,6 +4178,16 @@ def place_futures_order(contract_code, quantity, direction, price=0, is_manual=F
     order_type: 單別 (ROD/IOC/FOK)
     """
     try:
+        # 調試信息
+        print(f"=== place_futures_order 調試 ===")
+        print(f"contract_code: '{contract_code}'")
+        print(f"quantity: {quantity}")
+        print(f"direction: '{direction}'")
+        print(f"price: {price}")
+        print(f"is_manual: {is_manual}")
+        print(f"position_type: '{position_type}'")
+        print(f"price_type: '{price_type}'")
+        print(f"order_type: '{order_type}'")
         # 獲取合約資訊
         contracts = sinopac_api.Contracts.Futures.get(contract_code)
         if not contracts:
@@ -4031,13 +4196,65 @@ def place_futures_order(contract_code, quantity, direction, price=0, is_manual=F
         # 選擇最近月份的合約（按到期日排序）
         target_contract = sorted(contracts, key=lambda x: x.delivery_date)[0]  # 使用最近月合約
         
-        # 判斷交易動作
-        if direction == "開多" or (direction == "平空" and position_type == 'short'):
-            action = safe_constants.get_action('BUY')
-        elif direction == "開空" or (direction == "平多" and position_type == 'long'):
-            action = safe_constants.get_action('SELL')
+        # 判斷交易動作 - 修正邏輯
+        print(f"=== 動作判斷調試 ===")
+        print(f"direction: '{direction}'")
+        print(f"position_type: '{position_type}'")
+        print(f"is_manual: {is_manual}")
+        
+        # 參數處理邏輯
+        print(f"=== 參數處理調試 ===")
+        print(f"direction: '{direction}'")
+        print(f"position_type: '{position_type}'")
+        print(f"is_manual: {is_manual}")
+        
+        # 永豐手動下單：使用永豐官方參數格式
+        if is_manual:
+            # 永豐手動下單應該使用永豐官方的參數格式
+            # 前端應該傳遞 action (Buy/Sell) 和 octype (New/Cover) 參數
+            # 而不是中文的 direction 參數
+            
+            # 使用傳入的永豐官方參數
+            print(f"永豐手動下單參數檢查:")
+            print(f"  action_param: '{action_param}'")
+            print(f"  octype_param: '{octype_param}'")
+            
+            if action_param and octype_param:
+                # 使用永豐官方參數
+                final_action = safe_constants.get_action(action_param)
+                final_octype = safe_constants.get_oc_type(octype_param)
+                print(f"永豐手動下單使用官方參數: action={action_param} -> {final_action}, octype={octype_param} -> {final_octype}")
+            else:
+                # 如果沒有官方參數，顯示未知
+                print(f"錯誤: 永豐手動下單缺少官方參數")
+                raise Exception('永豐手動下單缺少官方參數 action 和 octype')
+        # WEBHOOK下單：使用 direction 參數
         else:
-            raise Exception(f'無效的交易方向: {direction}')
+            if direction:
+                if direction == "開多":
+                    final_action = safe_constants.get_action('BUY')
+                    final_octype = safe_constants.get_oc_type('New')
+                    print(f"WEBHOOK開多 -> BUY/New")
+                elif direction == "開空":
+                    final_action = safe_constants.get_action('SELL')
+                    final_octype = safe_constants.get_oc_type('New')
+                    print(f"WEBHOOK開空 -> SELL/New")
+                elif direction == "平多":
+                    final_action = safe_constants.get_action('SELL')
+                    final_octype = safe_constants.get_oc_type('Cover')
+                    print(f"WEBHOOK平多 -> SELL/Cover")
+                elif direction == "平空":
+                    final_action = safe_constants.get_action('BUY')
+                    final_octype = safe_constants.get_oc_type('Cover')
+                    print(f"WEBHOOK平空 -> BUY/Cover")
+                else:
+                    print(f"無效的WEBHOOK direction: '{direction}'")
+                    raise Exception(f'無效的WEBHOOK交易方向: {direction}')
+            else:
+                print(f"WEBHOOK缺少direction參數")
+                raise Exception('WEBHOOK缺少direction參數')
+        
+        print(f"最終: action={final_action}, octype={final_octype}")
         
         # 判斷訂單類型
         if is_manual:
@@ -4061,10 +4278,10 @@ def place_futures_order(contract_code, quantity, direction, price=0, is_manual=F
         order = sinopac_api.Order(
             price=price,
             quantity=quantity,
-            action=action,
+            action=final_action,
             price_type=final_price_type,
             order_type=final_order_type,
-            octype=safe_constants.get_oc_type('New' if direction.startswith('開') else 'Cover'),
+            octype=final_octype,
             account=sinopac_api.futopt_account
         )
         
@@ -4080,15 +4297,15 @@ def place_futures_order(contract_code, quantity, direction, price=0, is_manual=F
             contract_name = '大台' if contract_code == 'TXF' else '小台' if contract_code == 'MXF' else '微台'
             order_id = trade.order.id if trade and trade.order else "未知"
             
-            # 發送失敗通知
+            # 發送失敗通知 - 延遲5秒發送
             fail_message = get_formatted_order_message(
                 is_success=False,
                 order_id=order_id,
                 contract_name=contract_name,
                 qty=quantity,
                 price=price,
-                octype='New' if direction.startswith('開') else 'Cover',
-                direction=str(action),
+                octype=str(final_octype),
+                direction=str(final_action),
                 order_type=str(final_order_type),
                 price_type=str(final_price_type),
                 is_manual=is_manual,
@@ -4096,7 +4313,13 @@ def place_futures_order(contract_code, quantity, direction, price=0, is_manual=F
                 contract_code=target_contract.code,
                 delivery_date=target_contract.delivery_date.strftime('%Y/%m/%d')
             )
-            send_telegram_message(fail_message)
+            
+            # 延遲5秒發送失敗通知
+            def delayed_send_fail():
+                time.sleep(5)
+                send_telegram_message(fail_message)
+            
+            threading.Thread(target=delayed_send_fail, daemon=True).start()
             
             raise Exception(error_msg)
         
@@ -4108,9 +4331,14 @@ def place_futures_order(contract_code, quantity, direction, price=0, is_manual=F
         contract_name = '大台' if contract_code == 'TXF' else '小台' if contract_code == 'MXF' else '微台'
         
         # 建立訂單映射資訊（關鍵：參考TXserver.py架構）
+        # 使用已確定的final_action和final_octype
+        print(f"=== 訂單映射調試 ===")
+        print(f"使用 final_action: {final_action}")
+        print(f"使用 final_octype: {final_octype}")
+        
         order_info = {
-            'octype': 'New' if direction.startswith('開') else 'Cover',  # 根據direction判斷開平倉
-            'direction': str(action),
+            'octype': str(final_octype),
+            'direction': str(final_action),
             'contract_name': contract_name,
             'order_type': str(final_order_type),
             'price_type': str(final_price_type),
@@ -4130,7 +4358,7 @@ def place_futures_order(contract_code, quantity, direction, price=0, is_manual=F
             'contract_name': target_contract.code,
             'delivery_date': target_contract.delivery_date.strftime('%Y/%m/%d'),
             'quantity': quantity,
-            'action': action,
+            'action': final_action,
             'position_type': position_type,
             'order_id': order_id,
             'status': 'submitted',

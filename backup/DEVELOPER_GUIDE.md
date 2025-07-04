@@ -2,6 +2,89 @@
 
 ## 最新更新 (v1.3.4 - 2025-07-04)
 
+### 永豐手動下單參數格式標準化
+重大架構變更：手動下單改為使用永豐官方參數格式，與 WEBHOOK 下單明確分離：
+
+```python
+def place_futures_order(contract_code, quantity, direction, price=0, is_manual=False, 
+                       position_type=None, price_type=None, order_type=None, 
+                       action_param=None, octype_param=None):
+    """執行期貨下單 - 支援永豐官方參數格式"""
+    
+    # 永豐手動下單：使用永豐官方參數格式
+    if is_manual:
+        if action_param and octype_param:
+            # 使用永豐官方參數
+            final_action = safe_constants.get_action(action_param)
+            final_octype = safe_constants.get_oc_type(octype_param)
+        else:
+            # 如果沒有官方參數，顯示未知
+            raise Exception('永豐手動下單缺少官方參數 action 和 octype')
+    
+    # WEBHOOK下單：使用 direction 參數
+    else:
+        if direction == "開多":
+            final_action = safe_constants.get_action('BUY')
+            final_octype = safe_constants.get_oc_type('New')
+        elif direction == "開空":
+            final_action = safe_constants.get_action('SELL')
+            final_octype = safe_constants.get_oc_type('New')
+        # ... 其他方向處理
+```
+
+### 動作對應邏輯標準化
+統一動作對應邏輯，確保通知訊息準確性：
+
+```python
+# 永豐官方參數對應
+New Buy = 多單買入
+New Sell = 空單買入
+Cover Sell = 多單賣出
+Cover Buy = 空單賣出
+
+# WEBHOOK 動作對應
+開多 = 多單買入
+開空 = 空單買入
+平多 = 多單賣出
+平空 = 空單賣出
+```
+
+### 手動下單API參數要求
+手動下單必須提供永豐官方參數：
+
+```python
+@app.route('/api/manual/order', methods=['POST'])
+def manual_order():
+    # 解析下單參數
+    action_param = data.get('action', None)  # Buy或Sell（永豐官方參數）
+    octype_param = data.get('octype', None)  # New或Cover（永豐官方參數）
+    
+    # 驗證必要欄位
+    if not action_param or not octype_param:
+        return jsonify({
+            'status': 'error',
+            'message': '永豐手動下單需要提供 action (Buy/Sell) 和 octype (New/Cover) 參數'
+        }), 400
+```
+
+### 消息格式化優化
+移除預設為開倉的邏輯，確保開平倉類型準確判斷：
+
+```python
+def get_formatted_order_message(...):
+    # 根據octype判斷開平倉
+    if str(octype).upper() == 'NEW':
+        octype_display = "開倉"
+    elif str(octype).upper() == 'COVER':
+        octype_display = "平倉"
+    else:
+        octype_display = f"未知({octype})"  # 不預設為開倉，顯示實際值
+    
+    # 提交類型
+    manual_type = "手動" if is_manual else "自動"
+    submit_type = f"{manual_type}{octype_display}"
+```
+
 ### 統一失敗通知格式系統
 新增 `send_unified_failure_message()` 函數，統一處理所有訂單提交失敗的通知格式：
 
