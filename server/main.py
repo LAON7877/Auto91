@@ -199,7 +199,13 @@ OP_MSG_TRANSLATIONS = {
     "不可做空": "不可做空",
     "暫停交易": "暫停交易",
     "漲跌停限制": "漲跌停限制",
-    "未知錯誤": "未知錯誤"
+    "未知錯誤": "未知錯誤",
+    "Order Cancelled": "手動取消訂單",
+    "cancelled": "手動取消訂單",
+    "Cancelled": "手動取消訂單",
+    "CANCELLED": "手動取消訂單",
+    "手動取消": "手動取消訂單",
+    "取消訂單": "手動取消訂單"
 }
 
 ENV_TEMPLATE = '''# Telegram Bot
@@ -2153,9 +2159,9 @@ def update_margin_requirements_from_api():
 
 def order_callback(state, deal, order=None):
     """訂單回調函數處理（參考TXserver.py架構）"""
+    global order_octype_map, contract_txf, contract_mxf, contract_tmf
+    
     try:
-        global order_octype_map
-        
         print(f"收到回調事件: {state}")
         
         # 成交回調和訂單回調的數據結構不同，需要分別處理
@@ -2175,13 +2181,31 @@ def order_callback(state, deal, order=None):
         octype_info = order_octype_map.get(order_id)
         if octype_info is None:
             # 如果找不到映射資訊，嘗試從回調資料推斷
+            # 嘗試從API回調數據中推斷開平倉類型
+            try:
+                # 獲取持倉資訊來判斷是否為平倉
+                positions = sinopac_api.list_positions(sinopac_api.futopt_account)
+                contract_positions = [p for p in positions if p.code == contract_code]
+                
+                # 如果有持倉且訂單方向與持倉方向相反，則為平倉
+                action = deal.get('order', {}).get('action', 'Sell')
+                has_opposite_position = any(
+                    (p.direction != action and p.quantity != 0) for p in contract_positions
+                )
+                
+                inferred_octype = 'Cover' if has_opposite_position else 'New'
+                inferred_manual = True  # 推斷為手動操作（因為webhook操作有明確映射）
+            except:
+                inferred_octype = 'New'
+                inferred_manual = True  # 預設為手動
+            
             octype_info = {
-                'octype': 'New',
+                'octype': inferred_octype,
                 'direction': deal.get('order', {}).get('action', 'Sell'),
                 'contract_name': contract_name,
                 'order_type': deal.get('order', {}).get('order_type', 'IOC'),
                 'price_type': deal.get('order', {}).get('price_type', 'MKT'),
-                'is_manual': False
+                'is_manual': inferred_manual
             }
         
         octype = octype_info['octype']
@@ -2213,6 +2237,27 @@ def order_callback(state, deal, order=None):
                 
                 price_value = order.get('price', 0.0) if order else deal.get('order', {}).get('price', 0.0)
                 
+                # 獲取交割日期用於失敗通知
+                delivery_date_for_fail = None
+                try:
+                    if contract_code:
+                        # 從全域合約對象獲取交割日期
+                        target_contract = None
+                        if contract_code.startswith('TXF') and contract_txf and contract_txf.code == contract_code:
+                            target_contract = contract_txf
+                        elif contract_code.startswith('MXF') and contract_mxf and contract_mxf.code == contract_code:
+                            target_contract = contract_mxf
+                        elif contract_code.startswith('TMF') and contract_tmf and contract_tmf.code == contract_code:
+                            target_contract = contract_tmf
+                        
+                        if target_contract and hasattr(target_contract, 'delivery_date'):
+                            if hasattr(target_contract.delivery_date, 'strftime'):
+                                delivery_date_for_fail = target_contract.delivery_date.strftime('%Y/%m/%d')
+                            else:
+                                delivery_date_for_fail = str(target_contract.delivery_date)
+                except:
+                    pass
+                
                 # 發送失敗通知
                 msg = get_formatted_order_message(
                     is_success=False,
@@ -2226,7 +2271,8 @@ def order_callback(state, deal, order=None):
                     price_type=price_type,
                     is_manual=is_manual,
                     reason=fail_reason,
-                    contract_code=contract_code
+                    contract_code=contract_code,
+                    delivery_date=delivery_date_for_fail
                 )
                 send_telegram_message(msg)
                 
@@ -2240,6 +2286,7 @@ def order_callback(state, deal, order=None):
                 # 獲取交割日期
                 delivery_date = None
                 try:
+                    # 首先嘗試從deal或order獲取delivery_month
                     delivery_month = None
                     if order and order.get('delivery_month'):
                         delivery_month = order.get('delivery_month')
@@ -2250,6 +2297,23 @@ def order_callback(state, deal, order=None):
                         year = int(delivery_month[:4])
                         month = int(delivery_month[4:6])
                         delivery_date = f"{year}/{month:02d}/16"
+                    else:
+                        # 如果沒有delivery_month，嘗試從合約代碼查找
+                        if contract_code:
+                            # 從全域合約對象獲取交割日期
+                            target_contract = None
+                            if contract_code.startswith('TXF') and contract_txf and contract_txf.code == contract_code:
+                                target_contract = contract_txf
+                            elif contract_code.startswith('MXF') and contract_mxf and contract_mxf.code == contract_code:
+                                target_contract = contract_mxf
+                            elif contract_code.startswith('TMF') and contract_tmf and contract_tmf.code == contract_code:
+                                target_contract = contract_tmf
+                            
+                            if target_contract and hasattr(target_contract, 'delivery_date'):
+                                if hasattr(target_contract.delivery_date, 'strftime'):
+                                    delivery_date = target_contract.delivery_date.strftime('%Y/%m/%d')
+                                else:
+                                    delivery_date = str(target_contract.delivery_date)
                 except:
                     pass
                 
@@ -2275,6 +2339,8 @@ def order_callback(state, deal, order=None):
 
 def handle_futures_deal_callback(deal, octype_info):
     """處理期貨成交回調"""
+    global order_octype_map, contract_txf, contract_mxf, contract_tmf
+    
     try:
         order_id = deal.get('trade_id', deal.get('order_id', '未知'))
         contract_code = deal.get('code', '')
@@ -2284,6 +2350,27 @@ def handle_futures_deal_callback(deal, octype_info):
         deal_quantity = deal.get('quantity', 0)
         
         current_time = datetime.now().strftime('%Y/%m/%d %H:%M')
+        
+        # 獲取交割日期用於成交通知
+        delivery_date_for_deal = None
+        try:
+            if contract_code:
+                # 從全域合約對象獲取交割日期
+                target_contract = None
+                if contract_code.startswith('TXF') and contract_txf and contract_txf.code == contract_code:
+                    target_contract = contract_txf
+                elif contract_code.startswith('MXF') and contract_mxf and contract_mxf.code == contract_code:
+                    target_contract = contract_mxf
+                elif contract_code.startswith('TMF') and contract_tmf and contract_tmf.code == contract_code:
+                    target_contract = contract_tmf
+                
+                if target_contract and hasattr(target_contract, 'delivery_date'):
+                    if hasattr(target_contract.delivery_date, 'strftime'):
+                        delivery_date_for_deal = target_contract.delivery_date.strftime('%Y/%m/%d')
+                    else:
+                        delivery_date_for_deal = str(target_contract.delivery_date)
+        except:
+            pass
         
         # 發送成交通知
         msg = get_formatted_trade_message(
@@ -2296,7 +2383,8 @@ def handle_futures_deal_callback(deal, octype_info):
             order_type=octype_info['order_type'],
             price_type=octype_info['price_type'],
             is_manual=octype_info.get('is_manual', False),
-            contract_code=contract_code
+            contract_code=contract_code,
+            delivery_date=delivery_date_for_deal
         )
         send_telegram_message(msg)
         
@@ -3390,7 +3478,12 @@ def tradingview_webhook():
         print(f"Webhook 處理錯誤：{error_msg}")
         import traceback
         traceback.print_exc()
-        send_telegram_message(f"❌ Webhook 錯誤：{error_msg[:100]}")
+        
+        # 嘗試使用統一格式，如果無法解析data就用簡單訊息
+        try:
+            send_unified_failure_message(data, f"Webhook解析錯誤：{error_msg[:100]}")
+        except:
+            send_telegram_message(f"❌ Webhook 錯誤：{error_msg[:100]}")
         
         # 記錄錯誤的請求
         add_custom_request_log('POST', '/webhook', 500, {
@@ -3399,6 +3492,75 @@ def tradingview_webhook():
         })
         
         return f'錯誤：{error_msg}', 500
+
+def send_unified_failure_message(data, reason, order_id="未知"):
+    """發送統一的提交失敗訊息"""
+    global contract_txf, contract_mxf, contract_tmf
+    
+    try:
+        # 解析訊號數據
+        qty_txf = int(float(data.get('txf', 0)))
+        qty_mxf = int(float(data.get('mxf', 0)))
+        qty_tmf = int(float(data.get('tmf', 0)))
+        price = float(data.get('price', 0))
+        direction = data.get('direction', '未知')
+        msg_type = data.get('type', 'entry')
+        
+        # 確定交易動作
+        if direction == "開多":
+            expected_action = safe_constants.get_action('BUY')
+        elif direction == "開空":
+            expected_action = safe_constants.get_action('SELL')
+        else:
+            expected_action = direction
+        
+        # 確定開平倉類型
+        octype = 'New' if msg_type == 'entry' or direction in ['開多', '開空'] else 'Cover'
+        
+        # 獲取合約資訊
+        contracts = [
+            (contract_txf, qty_txf, "大台", "TXF"),
+            (contract_mxf, qty_mxf, "小台", "MXF"), 
+            (contract_tmf, qty_tmf, "微台", "TMF")
+        ]
+        
+        # 對每個有數量的合約發送失敗訊息
+        for contract, qty, name, code in contracts:
+            if qty > 0:
+                # 如果合約存在，獲取交割日期
+                if contract:
+                    delivery_date = contract.delivery_date
+                    if hasattr(delivery_date, 'strftime'):
+                        delivery_date_str = delivery_date.strftime('%Y/%m/%d')
+                    else:
+                        delivery_date_str = str(delivery_date)
+                    contract_code = contract.code
+                else:
+                    # 如果合約不存在，使用預設值
+                    delivery_date_str = "未知"
+                    contract_code = f"{code}XX" 
+                
+                fail_message = get_formatted_order_message(
+                    is_success=False,
+                    order_id=order_id,
+                    contract_name=name,
+                    qty=qty,
+                    price=price,
+                    octype=octype,
+                    direction=str(expected_action),
+                    order_type="IOC",
+                    price_type="MKT",
+                    is_manual=False,
+                    reason=reason,
+                    contract_code=contract_code,
+                    delivery_date=delivery_date_str
+                )
+                send_telegram_message(fail_message)
+                
+    except Exception as e:
+        print(f"發送統一失敗訊息錯誤: {e}")
+        # 如果統一格式失敗，回退到簡單訊息
+        send_telegram_message(f"❌ 提交失敗：{reason}")
 
 def process_signal(data):
     """處理TradingView訊號（參考TXserver.py邏輯）"""
@@ -3410,7 +3572,7 @@ def process_signal(data):
         # 驗證API是否已連線
         if not sinopac_connected or not sinopac_api:
             print("錯誤: 永豐API未連線")
-            send_telegram_message("❌ Webhook訊號處理失敗：永豐API未連線")
+            send_unified_failure_message(data, "永豐API未連線")
             return
             
         # 解析訊號數據
@@ -3441,7 +3603,7 @@ def process_signal(data):
         if price <= 0:
             error_msg = f"價格 {price} 無效"
             print(f"錯誤: {error_msg}")
-            send_telegram_message(f"❌ Webhook處理失敗：{error_msg}")
+            send_unified_failure_message(data, error_msg)
             return
             
         # 檢查交易時間
@@ -3449,7 +3611,7 @@ def process_signal(data):
         if not trading_status.get('is_trading_day', False) or not trading_status.get('is_market_open', False):
             error_msg = "非交易時間"
             print(f"錯誤: {error_msg}")
-            send_telegram_message(f"❌ Webhook處理失敗：{error_msg}")
+            send_unified_failure_message(data, error_msg)
             return
             
         # 取得持倉資訊
@@ -3486,14 +3648,14 @@ def process_signal(data):
         else:
             error_msg = f"無效訊號類型 {msg_type}"
             print(f"錯誤: {error_msg}")
-            send_telegram_message(f"❌ Webhook處理失敗：{error_msg}")
+            send_unified_failure_message(data, error_msg)
             
     except Exception as e:
         error_msg = str(e)
         print(f"[process_signal] 處理訊號失敗：{error_msg}")
         import traceback
         traceback.print_exc()
-        send_telegram_message(f"❌ 處理Webhook訊號失敗：{error_msg[:100]}")
+        send_unified_failure_message(data, error_msg[:100])
 
 def process_entry_signal(data, qty_txf, qty_mxf, qty_tmf, direction, price, order_type, price_type, positions):
     """處理進場訊號"""
@@ -3504,7 +3666,7 @@ def process_entry_signal(data, qty_txf, qty_mxf, qty_tmf, direction, price, orde
     if direction not in ["開多", "開空"]:
         error_msg = f"無效進場動作 {direction}"
         print(f"錯誤: {error_msg}")
-        send_telegram_message(f"❌ 進場失敗：{error_msg}")
+        send_unified_failure_message(data, error_msg)
         return
         
     # 確定交易動作
@@ -3518,7 +3680,40 @@ def process_entry_signal(data, qty_txf, qty_mxf, qty_tmf, direction, price, orde
     
     if has_opposite:
         print("警告: 存在相反持倉，取消下單")
-        send_telegram_message("⚠️ 取消下單：存在相反持倉")
+        
+        # 發送提交失敗訊息
+        contracts = [
+            (contract_txf, qty_txf, "大台", "TXF"),
+            (contract_mxf, qty_mxf, "小台", "MXF"), 
+            (contract_tmf, qty_tmf, "微台", "TMF")
+        ]
+        
+        # 對每個有數量的合約發送失敗訊息
+        for contract, qty, name, code in contracts:
+            if qty > 0 and contract:
+                # 獲取交割日期
+                delivery_date = contract.delivery_date
+                if hasattr(delivery_date, 'strftime'):
+                    delivery_date_str = delivery_date.strftime('%Y/%m/%d')
+                else:
+                    delivery_date_str = str(delivery_date)
+                
+                fail_message = get_formatted_order_message(
+                    is_success=False,
+                    order_id="未知",
+                    contract_name=name,
+                    qty=qty,
+                    price=price,
+                    octype='New',
+                    direction=str(expected_action),
+                    order_type="IOC",
+                    price_type="MKT",
+                    is_manual=False,
+                    reason="存在相反持倉",
+                    contract_code=contract.code,
+                    delivery_date=delivery_date_str
+                )
+                send_telegram_message(fail_message)
         return
         
     # 執行下單
@@ -3552,7 +3747,13 @@ def process_entry_signal(data, qty_txf, qty_mxf, qty_tmf, direction, price, orde
             except Exception as e:
                 error_msg = str(e)
                 print(f"{name}進場異常: {error_msg}")
-                send_telegram_message(f"❌ {name}進場失敗：{error_msg}")
+                
+                # 創建單個合約的data用於發送失敗訊息
+                single_data = data.copy()
+                single_data['txf'] = qty if code == 'TXF' else 0
+                single_data['mxf'] = qty if code == 'MXF' else 0
+                single_data['tmf'] = qty if code == 'TMF' else 0
+                send_unified_failure_message(single_data, error_msg)
 
 def process_exit_signal(data, qty_txf, qty_mxf, qty_tmf, direction, price, order_type, price_type, positions):
     """處理出場訊號"""
@@ -3569,7 +3770,40 @@ def process_exit_signal(data, qty_txf, qty_mxf, qty_tmf, direction, price, order
             
     if not has_position:
         print("警告: 無對應持倉，取消平倉")
-        send_telegram_message("⚠️ 取消平倉：無對應持倉")
+        
+        # 發送提交失敗訊息
+        contracts_to_check = [
+            (contract_txf, qty_txf, "大台", "TXF"),
+            (contract_mxf, qty_mxf, "小台", "MXF"), 
+            (contract_tmf, qty_tmf, "微台", "TMF")
+        ]
+        
+        # 對每個有數量的合約發送失敗訊息
+        for contract, qty, name, code in contracts_to_check:
+            if qty > 0 and contract:
+                # 獲取交割日期
+                delivery_date = contract.delivery_date
+                if hasattr(delivery_date, 'strftime'):
+                    delivery_date_str = delivery_date.strftime('%Y/%m/%d')
+                else:
+                    delivery_date_str = str(delivery_date)
+                
+                fail_message = get_formatted_order_message(
+                    is_success=False,
+                    order_id="未知",
+                    contract_name=name,
+                    qty=qty,
+                    price=price,
+                    octype='Cover',
+                    direction=direction,
+                    order_type="IOC",
+                    price_type="MKT",
+                    is_manual=False,
+                    reason="無對應持倉",
+                    contract_code=contract.code,
+                    delivery_date=delivery_date_str
+                )
+                send_telegram_message(fail_message)
         return
         
     # 執行平倉
@@ -3603,8 +3837,14 @@ def process_exit_signal(data, qty_txf, qty_mxf, qty_tmf, direction, price, order
             
             except Exception as e:
                 error_msg = str(e)
-        print(f"{name}出場異常: {error_msg}")
-        send_telegram_message(f"❌ {name}出場失敗：{error_msg}")
+                print(f"{name}出場異常: {error_msg}")
+                
+                # 創建單個合約的data用於發送失敗訊息
+                single_data = data.copy()
+                single_data['txf'] = qty if code == 'TXF' else 0
+                single_data['mxf'] = qty if code == 'MXF' else 0
+                single_data['tmf'] = qty if code == 'TMF' else 0
+                send_unified_failure_message(single_data, error_msg)
 
 def place_futures_order_tx_style(contract, quantity, direction, price, order_type="IOC", price_type="MKT", is_manual=False, position=None):
     """TXserver風格的下單函數"""
@@ -3789,7 +4029,7 @@ def place_futures_order(contract_code, quantity, direction, price=0, is_manual=F
             raise Exception(f'無法獲取{contract_code}合約資訊')
         
         # 選擇最近月份的合約（按到期日排序）
-        target_contract = sorted(contracts, key=lambda x: x.delivery_date)[-1]  # 使用最遠月合約
+        target_contract = sorted(contracts, key=lambda x: x.delivery_date)[0]  # 使用最近月合約
         
         # 判斷交易動作
         if direction == "開多" or (direction == "平空" and position_type == 'short'):

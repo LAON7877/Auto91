@@ -1,5 +1,109 @@
 # 開發者指南
 
+## 最新更新 (v1.3.4 - 2025-07-04)
+
+### 統一失敗通知格式系統
+新增 `send_unified_failure_message()` 函數，統一處理所有訂單提交失敗的通知格式：
+
+```python
+def send_unified_failure_message(data, reason, order_id="未知"):
+    """發送統一的提交失敗訊息"""
+    # 解析訊號數據
+    qty_txf = int(float(data.get('txf', 0)))
+    qty_mxf = int(float(data.get('mxf', 0)))
+    qty_tmf = int(float(data.get('tmf', 0)))
+    
+    # 對每個有數量的合約發送失敗訊息
+    for contract, qty, name, code in contracts:
+        if qty > 0:
+            fail_message = get_formatted_order_message(
+                is_success=False,
+                order_id=order_id,
+                contract_name=name,
+                qty=qty,
+                price=price,
+                octype=octype,
+                direction=str(expected_action),
+                order_type="IOC",
+                price_type="MKT",
+                is_manual=False,
+                reason=reason,
+                contract_code=contract_code,
+                delivery_date=delivery_date_str
+            )
+            send_telegram_message(fail_message)
+```
+
+### 錯誤訊息翻譯系統
+新增 `OP_MSG_TRANSLATIONS` 對照表，提供友善的中文錯誤訊息：
+
+```python
+OP_MSG_TRANSLATIONS = {
+    "Order not found": "訂單未找到",
+    "Price not satisfied": "價格未滿足",
+    "Insufficient margin": "保證金不足",
+    "Market closed": "市場已關閉",
+    "非該商品可下單時間": "非交易時間",
+    "可委託金額不足": "保證金不足",
+    "Order Cancelled": "手動取消訂單",
+    "cancelled": "手動取消訂單",
+    # ... 更多翻譯
+}
+```
+
+### 訂單回調函數增強
+改進 `order_callback()` 函數，智能推斷開平倉和手動/自動狀態：
+
+```python
+def order_callback(state, deal, order=None):
+    """訂單回調函數處理（參考TXserver.py架構）"""
+    # 從映射中獲取訂單詳細資訊
+    octype_info = order_octype_map.get(order_id)
+    if octype_info is None:
+        # 如果找不到映射資訊，嘗試從回調資料推斷
+        try:
+            # 獲取持倉資訊來判斷是否為平倉
+            positions = sinopac_api.list_positions(sinopac_api.futopt_account)
+            contract_positions = [p for p in positions if p.code == contract_code]
+            
+            # 如果有持倉且訂單方向與持倉方向相反，則為平倉
+            has_opposite_position = any(
+                (p.direction != action and p.quantity != 0) for p in contract_positions
+            )
+            
+            inferred_octype = 'Cover' if has_opposite_position else 'New'
+            inferred_manual = True  # 推斷為手動操作
+        except:
+            inferred_octype = 'New'
+            inferred_manual = True
+```
+
+### 合約代碼顯示修復
+修復多個通知函數中合約代碼和交割日期的檢索邏輯：
+
+```python
+# 獲取交割日期用於失敗通知
+delivery_date_for_fail = None
+try:
+    if contract_code:
+        # 從全域合約對象獲取交割日期
+        target_contract = None
+        if contract_code.startswith('TXF') and contract_txf and contract_txf.code == contract_code:
+            target_contract = contract_txf
+        elif contract_code.startswith('MXF') and contract_mxf and contract_mxf.code == contract_code:
+            target_contract = contract_mxf
+        elif contract_code.startswith('TMF') and contract_tmf and contract_tmf.code == contract_code:
+            target_contract = contract_tmf
+        
+        if target_contract and hasattr(target_contract, 'delivery_date'):
+            if hasattr(target_contract.delivery_date, 'strftime'):
+                delivery_date_for_fail = target_contract.delivery_date.strftime('%Y/%m/%d')
+            else:
+                delivery_date_for_fail = str(target_contract.delivery_date)
+except:
+    pass
+```
+
 ## 系統架構
 
 ### ngrok 自動管理架構（重要）

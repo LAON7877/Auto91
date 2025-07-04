@@ -1,17 +1,24 @@
 # 文檔導航索引
 
-**最新版本：v1.3.2** - 通知系統重構與ngrok自動化完善 (2025-07-02)
+**最新版本：v1.3.4** - 統一失敗通知格式與合約代碼顯示修復 (2025-07-04)
 
-- [README.md](README.md) 系統概況與功能 **[v1.3.2 已更新]**
-- [QUICK_START.md](QUICK_START.md) 5 分鐘快速上手 **[v1.3.2 已更新]**
-- [API_REFERENCE.md](API_REFERENCE.md) API 技術參考 **[v1.3.2 已更新]**
-- [CHANGELOG.md](CHANGELOG.md) 版本變更紀錄 **[v1.3.2 已更新]**
-- [TROUBLESHOOTING.md](TROUBLESHOOTING.md) 故障排除 **[v1.3.2 已更新]**
-- [DEPLOYMENT.md](DEPLOYMENT.md) 生產部署指南
-- [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md) 開發者指南 **[v1.3.2 已更新]**
-- [MAINTENANCE.md](MAINTENANCE.md) 維護運營指南 **[v1.3.2 已更新]**
+- [README.md](README.md) 系統概況與功能 **[v1.3.4 已更新]**
+- [QUICK_START.md](QUICK_START.md) 5 分鐘快速上手 **[v1.3.4 已更新]**
+- [API_REFERENCE.md](API_REFERENCE.md) API 技術參考 **[v1.3.4 已更新]**
+- [CHANGELOG.md](CHANGELOG.md) 版本變更紀錄 **[v1.3.4 已更新]**
+- [TROUBLESHOOTING.md](TROUBLESHOOTING.md) 故障排除 **[v1.3.4 已更新]**
+- [DEPLOYMENT.md](DEPLOYMENT.md) 生產部署指南 **[v1.3.4 已更新]**
+- [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md) 開發者指南 **[v1.3.4 已更新]**
+- [MAINTENANCE.md](MAINTENANCE.md) 維護運營指南 **[v1.3.4 已更新]**
 
 ## 重點功能文檔
+
+### 統一失敗通知格式系統（v1.3.4新增）
+- **格式統一**：所有訂單提交失敗訊息使用統一格式
+- **錯誤翻譯**：新增OP_MSG_TRANSLATIONS對照表，提供友善的中文錯誤訊息
+- **合約代碼修復**：修復手動平倉和訂單取消時合約代碼顯示錯誤的問題
+- **提交類型修復**：修正手動操作時提交類型顯示錯誤的問題
+- **智能推斷**：訂單回調函數智能推斷開平倉和手動/自動狀態
 
 ### ngrok 自動管理
 - **自動啟動/關閉**：程式啟動時自動啟動 ngrok，退出時自動清理
