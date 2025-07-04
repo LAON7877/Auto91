@@ -1,5 +1,190 @@
 # 開發者指南
 
+## 最新更新 (v1.3.5 - 2025-07-05)
+
+### 交易記錄持久化系統
+新增完整的交易記錄 JSON 儲存機制，確保所有交易參數完整保存：
+
+```python
+def save_trade(data):
+    """保存交易記錄到 JSON 檔案"""
+    today = datetime.now().strftime('%Y%m%d')
+    transdata_dir = os.path.join(os.path.dirname(__file__), 'transdata')
+    os.makedirs(transdata_dir, exist_ok=True)
+    
+    filename = os.path.join(transdata_dir, f'trades_{today}.json')
+    
+    # 讀取現有記錄
+    existing_trades = []
+    if os.path.exists(filename):
+        try:
+            with open(filename, 'r', encoding='utf-8') as f:
+                existing_trades = json.load(f)
+        except:
+            existing_trades = []
+    
+    # 添加新記錄
+    existing_trades.append(data)
+    
+    # 保存到檔案
+    with open(filename, 'w', encoding='utf-8') as f:
+        json.dump(existing_trades, f, ensure_ascii=False, indent=2)
+```
+
+### 自動清理機制
+新增自動清理舊交易記錄的功能：
+
+```python
+def cleanup_old_trade_files():
+    """清理超過 30 天的舊交易記錄檔案"""
+    transdata_dir = os.path.join(os.path.dirname(__file__), 'transdata')
+    if not os.path.exists(transdata_dir):
+        return
+    
+    current_date = datetime.now()
+    cutoff_date = current_date - timedelta(days=30)
+    
+    for filename in os.listdir(transdata_dir):
+        if filename.startswith('trades_') and filename.endswith('.json'):
+            try:
+                # 從檔案名提取日期
+                date_str = filename[7:15]  # trades_YYYYMMDD.json
+                file_date = datetime.strptime(date_str, '%Y%m%d')
+                
+                if file_date < cutoff_date:
+                    file_path = os.path.join(transdata_dir, filename)
+                    os.remove(file_path)
+                    print(f"已刪除舊交易記錄檔案: {filename}")
+            except:
+                continue
+```
+
+### 動作顯示統一函數
+新增 `get_action_display_by_rule()` 函數，統一動作顯示邏輯：
+
+```python
+def get_action_display_by_rule(octype, direction):
+    """根據開平倉類型和方向判斷動作顯示（與TXserver.py的get_formatted_order_message內部邏輯一致）"""
+    # 統一轉換為大寫進行比較
+    octype_upper = str(octype).upper()
+    direction_upper = str(direction).upper()
+    
+    if octype_upper == 'NEW':  # 開倉
+        if direction_upper == 'BUY':
+            return '多單買入'
+        else:  # SELL
+            return '空單買入'
+    else:  # 平倉 (COVER)
+        if direction_upper == 'BUY':
+            return '空單賣出'
+        else:  # SELL
+            return '多單賣出'
+```
+
+### 訂單回調推斷邏輯優化
+改進 `order_callback()` 函數，當訂單映射缺失時智能推斷交易類型：
+
+```python
+def order_callback(state, deal, order=None):
+    """訂單回調函數處理（參考TXserver.py架構）"""
+    # 從映射中獲取訂單詳細資訊
+    octype_info = order_octype_map.get(order_id)
+    if octype_info is None:
+        # 如果找不到映射資訊，嘗試從回調資料推斷
+        try:
+            # 獲取持倉資訊來判斷是否為平倉
+            positions = sinopac_api.list_positions(sinopac_api.futopt_account)
+            contract_positions = [p for p in positions if p.code == contract_code]
+            
+            # 如果有持倉且訂單方向與持倉方向相反，則為平倉
+            has_opposite_position = any(
+                (p.direction != action and p.quantity != 0) for p in contract_positions
+            )
+            
+            inferred_octype = 'Cover' if has_opposite_position else 'New'
+            inferred_manual = True  # 推斷為手動操作
+            
+            # 嘗試從 JSON 檔案讀取完整參數
+            try:
+                today = datetime.now().strftime('%Y%m%d')
+                transdata_dir = os.path.join(os.path.dirname(__file__), 'transdata')
+                filename = os.path.join(transdata_dir, f'trades_{today}.json')
+                
+                if os.path.exists(filename):
+                    with open(filename, 'r', encoding='utf-8') as f:
+                        trades = json.load(f)
+                    
+                    # 尋找匹配的交易記錄
+                    for trade in trades:
+                        if trade.get('order_number') == order_id:
+                            octype = trade.get('position', inferred_octype)
+                            action = trade.get('action', action)
+                            is_manual = trade.get('submission_type') == 'manual'
+                            break
+            except:
+                pass
+        except:
+            inferred_octype = 'New'
+            inferred_manual = True
+```
+
+### 交易記錄結構
+完整的交易記錄包含所有必要參數：
+
+```json
+{
+  "exchange_sequence": "序號",
+  "order_number": "訂單號",
+  "contract": "合約代碼",
+  "order_type": "訂單類型",
+  "submission_number": "提交編號",
+  "submission_type": "提交類型(manual/auto)",
+  "action": "動作(Buy/Sell)",
+  "position": "持倉類型(New/Cover)",
+  "quantity": "數量",
+  "price": "價格",
+  "timestamp": "時間戳"
+}
+```
+
+### 通知一致性修復
+確保提交成功和成交通知使用相同的參數來源：
+
+```python
+def get_formatted_trade_message(order_id, contract_name, qty, price, octype, direction, order_type, price_type, is_manual, contract_code=None, delivery_date=None):
+    """格式化成交訊息（參考TXserver.py）"""
+    current_time = datetime.now().strftime('%Y/%m/%d')
+    
+    # 使用統一的動作顯示函數
+    action_display = get_action_display_by_rule(octype, direction)
+    
+    # 根據octype判斷開平倉
+    if str(octype).upper() == 'NEW':
+        octype_display = "開倉"
+    elif str(octype).upper() == 'COVER':
+        octype_display = "平倉"
+    else:
+        octype_display = f"未知({octype})"
+    
+    # 提交類型
+    manual_type = "手動" if is_manual else "自動"
+    trade_type = f"{manual_type}{octype_display}"
+    
+    # 格式化訊息
+    message = f"📊 成交通知\n"
+    message += f"⏰ {current_time}\n"
+    message += f"📋 訂單編號: {order_id}\n"
+    message += f"📈 合約: {contract_name}\n"
+    message += f"🔢 數量: {qty}\n"
+    message += f"💰 價格: {price}\n"
+    message += f"🎯 動作: {action_display}\n"
+    message += f"📝 類型: {trade_type}\n"
+    message += f"📋 訂單類型: {order_type}\n"
+    message += f"💱 價格類型: {price_type}"
+    
+    return message
+```
+
 ## 最新更新 (v1.3.4 - 2025-07-04)
 
 ### 永豐手動下單參數格式標準化

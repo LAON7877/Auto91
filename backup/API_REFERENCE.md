@@ -1,5 +1,134 @@
 # API 參考文檔
 
+## 最新更新 (v1.3.5 - 2025-07-05)
+
+### 交易記錄持久化 API
+新增完整的交易記錄 JSON 儲存機制，確保所有交易參數完整保存：
+
+#### 交易記錄儲存 API
+```python
+def save_trade(data):
+    """保存交易記錄到 JSON 檔案"""
+    today = datetime.now().strftime('%Y%m%d')
+    transdata_dir = os.path.join(os.path.dirname(__file__), 'transdata')
+    os.makedirs(transdata_dir, exist_ok=True)
+    
+    filename = os.path.join(transdata_dir, f'trades_{today}.json')
+    
+    # 讀取現有記錄
+    existing_trades = []
+    if os.path.exists(filename):
+        try:
+            with open(filename, 'r', encoding='utf-8') as f:
+                existing_trades = json.load(f)
+        except:
+            existing_trades = []
+    
+    # 添加新記錄
+    existing_trades.append(data)
+    
+    # 保存到檔案
+    with open(filename, 'w', encoding='utf-8') as f:
+        json.dump(existing_trades, f, ensure_ascii=False, indent=2)
+```
+
+#### 交易記錄結構
+```json
+{
+  "exchange_sequence": "序號",
+  "order_number": "訂單號",
+  "contract": "合約代碼",
+  "order_type": "訂單類型",
+  "submission_number": "提交編號",
+  "submission_type": "提交類型(manual/auto)",
+  "action": "動作(Buy/Sell)",
+  "position": "持倉類型(New/Cover)",
+  "quantity": "數量",
+  "price": "價格",
+  "timestamp": "時間戳"
+}
+```
+
+#### 自動清理機制 API
+```python
+def cleanup_old_trade_files():
+    """清理超過 30 天的舊交易記錄檔案"""
+    transdata_dir = os.path.join(os.path.dirname(__file__), 'transdata')
+    if not os.path.exists(transdata_dir):
+        return
+    
+    current_date = datetime.now()
+    cutoff_date = current_date - timedelta(days=30)
+    
+    for filename in os.listdir(transdata_dir):
+        if filename.startswith('trades_') and filename.endswith('.json'):
+            try:
+                # 從檔案名提取日期
+                date_str = filename[7:15]  # trades_YYYYMMDD.json
+                file_date = datetime.strptime(date_str, '%Y%m%d')
+                
+                if file_date < cutoff_date:
+                    file_path = os.path.join(transdata_dir, filename)
+                    os.remove(file_path)
+                    print(f"已刪除舊交易記錄檔案: {filename}")
+            except:
+                continue
+```
+
+### 動作顯示統一 API
+新增 `get_action_display_by_rule()` 函數，統一動作顯示邏輯：
+
+```python
+def get_action_display_by_rule(octype, direction):
+    """根據開平倉類型和方向判斷動作顯示"""
+    # 統一轉換為大寫進行比較
+    octype_upper = str(octype).upper()
+    direction_upper = str(direction).upper()
+    
+    if octype_upper == 'NEW':  # 開倉
+        if direction_upper == 'BUY':
+            return '多單買入'
+        else:  # SELL
+            return '空單買入'
+    else:  # 平倉 (COVER)
+        if direction_upper == 'BUY':
+            return '空單賣出'
+        else:  # SELL
+            return '多單賣出'
+```
+
+### 訂單回調推斷邏輯增強
+改進 `order_callback()` 函數，當訂單映射缺失時智能推斷交易類型：
+
+#### 智能推斷功能
+- **持倉資訊分析**：從持倉資訊判斷是否為平倉操作
+- **JSON 檔案讀取**：支援從交易記錄 JSON 檔案讀取完整參數
+- **開平倉類型推斷**：根據訂單方向與持倉方向的關係推斷開平倉類型
+
+#### 推斷邏輯
+```python
+# 如果有持倉且訂單方向與持倉方向相反，則為平倉
+has_opposite_position = any(
+    (p.direction != action and p.quantity != 0) for p in contract_positions
+)
+
+inferred_octype = 'Cover' if has_opposite_position else 'New'
+inferred_manual = True  # 推斷為手動操作
+```
+
+### 通知一致性修復
+確保提交成功和成交通知使用相同的參數來源：
+
+#### 統一參數來源
+- **提交通知**：使用訂單提交時的參數
+- **成交通知**：優先使用訂單映射，缺失時從 JSON 檔案讀取
+- **動作顯示**：統一使用 `get_action_display_by_rule()` 函數
+
+#### 修復內容
+- **手動平倉通知錯誤**：修復手動平倉的提交訊息顯示「手動平倉」但成交訊息顯示「手動開倉」的問題
+- **動作顯示不一致**：修復成交通知中動作顯示不正確的問題
+- **訂單映射缺失處理**：改進當訂單映射缺失時的推斷邏輯，提升通知準確性
+
 ## 最新更新 (v1.3.4 - 2025-07-04)
 
 ### 永豐手動下單參數格式標準化

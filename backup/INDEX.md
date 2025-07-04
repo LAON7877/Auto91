@@ -1,17 +1,26 @@
 # 文檔導航索引
 
-**最新版本：v1.3.4** - 永豐手動下單參數格式標準化 (2025-07-04)
+**最新版本：v1.3.5** - 交易記錄持久化與通知一致性修復 (2025-07-05)
 
-- [README.md](README.md) 系統概況與功能 **[v1.3.4 已更新]**
-- [QUICK_START.md](QUICK_START.md) 5 分鐘快速上手 **[v1.3.4 已更新]**
-- [API_REFERENCE.md](API_REFERENCE.md) API 技術參考 **[v1.3.4 已更新]**
-- [CHANGELOG.md](CHANGELOG.md) 版本變更紀錄 **[v1.3.4 已更新]**
-- [TROUBLESHOOTING.md](TROUBLESHOOTING.md) 故障排除 **[v1.3.4 已更新]**
-- [DEPLOYMENT.md](DEPLOYMENT.md) 生產部署指南 **[v1.3.4 已更新]**
-- [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md) 開發者指南 **[v1.3.4 已更新]**
-- [MAINTENANCE.md](MAINTENANCE.md) 維護運營指南 **[v1.3.4 已更新]**
+- [README.md](README.md) 系統概況與功能 **[v1.3.5 已更新]**
+- [QUICK_START.md](QUICK_START.md) 5 分鐘快速上手 **[v1.3.5 已更新]**
+- [API_REFERENCE.md](API_REFERENCE.md) API 技術參考 **[v1.3.5 已更新]**
+- [CHANGELOG.md](CHANGELOG.md) 版本變更紀錄 **[v1.3.5 已更新]**
+- [TROUBLESHOOTING.md](TROUBLESHOOTING.md) 故障排除 **[v1.3.5 已更新]**
+- [DEPLOYMENT.md](DEPLOYMENT.md) 生產部署指南 **[v1.3.5 已更新]**
+- [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md) 開發者指南 **[v1.3.5 已更新]**
+- [MAINTENANCE.md](MAINTENANCE.md) 維護運營指南 **[v1.3.5 已更新]**
 
 ## 重點功能文檔
+
+### 交易記錄持久化系統（v1.3.5重大更新）
+- **交易記錄 JSON 儲存**：新增 `save_trade()` 函數，將所有交易參數保存到 `transdata/trades_YYYYMMDD.json`
+- **自動清理機制**：新增 `cleanup_old_trade_files()` 函數，自動保留最近 30 天的交易記錄
+- **動作顯示統一函數**：新增 `get_action_display_by_rule()` 函數，統一動作顯示邏輯
+- **交易記錄讀取機制**：`order_callback` 函數支援從 JSON 檔案讀取交易參數作為備用
+- **通知一致性修復**：解決手動平倉通知顯示錯誤的問題，確保提交和成交通知內容一致
+- **訂單映射增強**：改進 `order_callback` 函數的推斷邏輯，提升通知準確性
+- **智能推斷功能**：從持倉資訊判斷是否為平倉操作，根據訂單方向與持倉方向的關係推斷開平倉類型
 
 ### 永豐手動下單參數格式標準化（v1.3.4重大更新）
 - **參數格式標準化**：手動下單改為使用永豐官方參數格式，不再依賴中文 direction 參數

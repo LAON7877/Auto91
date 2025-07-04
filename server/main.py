@@ -2174,57 +2174,115 @@ def order_callback(state, deal, order=None):
             order_id = deal.get('order', {}).get('id', '未知').strip()
             contract_code = deal.get('contract', {}).get('code', '')
         
+        # 調試信息
+        print(f"=== order_callback 調試 ===")
+        print(f"state: {state}")
+        print(f"order_id: '{order_id}'")
+        print(f"contract_code: '{contract_code}'")
+        print(f"order_octype_map keys: {list(order_octype_map.keys())}")
+        print(f"order_octype_map: {order_octype_map}")
+        
         # 取得合約名稱
         contract_name = get_contract_name_from_code(contract_code)
         
         # 從映射中獲取訂單詳細資訊
         octype_info = order_octype_map.get(order_id)
         if octype_info is None:
-            # 如果找不到映射資訊，嘗試從回調資料推斷
-            # 修正：對於成交回調，如果找不到映射資訊，可能是手動下單
-            # 嘗試從API回調數據中推斷開平倉類型
-            try:
-                # 獲取持倉資訊來判斷是否為平倉
-                positions = sinopac_api.list_positions(sinopac_api.futopt_account)
-                
-                # 根據合約代碼前綴找到對應的持倉
-                contract_positions = []
-                if contract_code.startswith('TXF'):
-                    contract_positions = [p for p in positions if p.code.startswith('TXF')]
-                elif contract_code.startswith('MXF'):
-                    contract_positions = [p for p in positions if p.code.startswith('MXF')]
-                elif contract_code.startswith('TMF'):
-                    contract_positions = [p for p in positions if p.code.startswith('TMF')]
-                
-                # 如果有持倉且訂單方向與持倉方向相反，則為平倉
-                action = deal.get('order', {}).get('action', 'Sell')
-                has_opposite_position = any(
-                    (p.direction != action and p.quantity != 0) for p in contract_positions
-                )
-                
-                inferred_octype = 'Cover' if has_opposite_position else 'New'
-                # 修正：如果找不到映射資訊，可能是手動下單，預設為手動
-                inferred_manual = True  # 預設為手動操作
-            except:
-                inferred_octype = 'New'
-                inferred_manual = True  # 預設為手動操作
+            # 如果找不到映射資訊，嘗試從交易記錄JSON文件中讀取（參考TXserver.py）
+            today = datetime.now().strftime("%Y%m%d")
+            filename = f"{LOG_DIR}/trades_{today}.json"
+            oc_type, direction, order_type, price_type, is_manual = None, None, None, None, True
             
-            # 修正：從deal中獲取實際的訂單資訊
-            order_info = deal.get('order', {})
+            if os.path.exists(filename):
+                try:
+                    with open(filename, 'r') as f:
+                        trades = json.load(f)
+                    for trade in trades:
+                        if trade.get('deal_order_id') == order_id and trade.get('type') == 'order':
+                            raw_order = trade.get('raw_data', {}).get('order', {})
+                            oc_type = raw_order.get('oc_type', 'New')
+                            direction = raw_order.get('action', deal.get('order', {}).get('action', 'Sell'))
+                            order_type = raw_order.get('order_type', deal.get('order', {}).get('order_type', 'IOC'))
+                            price_type = raw_order.get('price_type', 'MKT')
+                            is_manual = trade.get('is_manual', True)
+                            break
+                except Exception as e:
+                    print(f"讀取交易記錄失敗：{e}")
+            
+            # 如果從交易記錄中找不到，使用推斷邏輯
+            if not oc_type:
+                try:
+                    # 獲取持倉資訊來判斷是否為平倉
+                    positions = sinopac_api.list_positions(sinopac_api.futopt_account)
+                    
+                    # 根據合約代碼前綴找到對應的持倉
+                    contract_positions = []
+                    if contract_code.startswith('TXF'):
+                        contract_positions = [p for p in positions if p.code.startswith('TXF')]
+                    elif contract_code.startswith('MXF'):
+                        contract_positions = [p for p in positions if p.code.startswith('MXF')]
+                    elif contract_code.startswith('TMF'):
+                        contract_positions = [p for p in positions if p.code.startswith('TMF')]
+                    
+                    # 如果有持倉且訂單方向與持倉方向相反，則為平倉
+                    action = None
+                    if deal.get('order', {}).get('action'):
+                        action = deal.get('order', {}).get('action')
+                    elif deal.get('action'):
+                        action = deal.get('action')
+                    else:
+                        action = 'Sell'  # 預設值
+                    
+                    print(f"推斷邏輯調試:")
+                    print(f"  action: '{action}'")
+                    print(f"  contract_positions: {[f'{p.code}:{p.direction}:{p.quantity}' for p in contract_positions]}")
+                    
+                    has_opposite_position = any(
+                        (p.direction != action and p.quantity != 0) for p in contract_positions
+                    )
+                    
+                    print(f"  has_opposite_position: {has_opposite_position}")
+                    
+                    oc_type = 'Cover' if has_opposite_position else 'New'
+                    direction = action
+                    order_type = deal.get('order', {}).get('order_type', 'IOC')
+                    price_type = deal.get('order', {}).get('price_type', 'MKT')
+                    is_manual = True  # 預設為手動操作
+                except:
+                    oc_type = 'New'
+                    direction = deal.get('order', {}).get('action', 'Sell')
+                    order_type = deal.get('order', {}).get('order_type', 'IOC')
+                    price_type = deal.get('order', {}).get('price_type', 'MKT')
+                    is_manual = True  # 預設為手動操作
+            
             octype_info = {
-                'octype': inferred_octype,
-                'direction': order_info.get('action', 'Sell'),
+                'octype': oc_type,
+                'direction': direction,
                 'contract_name': contract_name,
-                'order_type': order_info.get('order_type', order_info.get('order_type', 'IOC')),  # 先取order內的order_type，預設IOC
-                'price_type': order_info.get('price_type', order_info.get('price_type', 'MKT')),  # 先取order內的price_type，預設MKT
-                'is_manual': inferred_manual
+                'order_type': order_type,
+                'price_type': price_type,
+                'is_manual': is_manual
             }
+            
+            # 調試信息
+            print(f"=== 找不到映射，使用備援機制 ===")
+            print(f"order_id: {order_id}")
+            print(f"從交易記錄讀取: oc_type={oc_type}, direction={direction}")
+            print(f"最終 octype_info: {octype_info}")
         
         octype = octype_info['octype']
         direction = octype_info['direction']
         order_type = octype_info['order_type']
         price_type = octype_info['price_type']
         is_manual = octype_info.get('is_manual', False)
+        
+        # 調試信息
+        print(f"=== order_callback 調試 ===")
+        print(f"octype: '{octype}'")
+        print(f"direction: '{direction}'")
+        print(f"order_type: '{order_type}'")
+        print(f"price_type: '{price_type}'")
+        print(f"is_manual: {is_manual}")
         
         # 獲取訂單數量和操作信息
         qty = deal.get('order', {}).get('quantity', 0)
@@ -2280,6 +2338,28 @@ def order_callback(state, deal, order=None):
                                 delivery_date_for_fail = str(contract_tmf.delivery_date)
                 except:
                     pass
+                
+                # 保存交易記錄（參考TXserver.py）
+                save_trade({
+                    'type': 'order',
+                    'trade_category': 'normal',
+                    'raw_data': deal,
+                    'deal_order_id': order_id,
+                    'contract_name': contract_name,
+                    'timestamp': datetime.now().isoformat(),
+                    'is_manual': is_manual
+                })
+                
+                # 保存交易記錄（參考TXserver.py）
+                save_trade({
+                    'type': 'cancel',
+                    'trade_category': 'normal',
+                    'raw_data': deal,
+                    'deal_order_id': order_id,
+                    'contract_name': contract_name,
+                    'timestamp': datetime.now().isoformat(),
+                    'is_manual': is_manual
+                })
                 
                 # 發送失敗通知
                 msg = get_formatted_order_message(
@@ -2346,6 +2426,17 @@ def order_callback(state, deal, order=None):
                                     delivery_date = str(contract_tmf.delivery_date)
                 except:
                     pass
+                
+                # 保存交易記錄（參考TXserver.py）
+                save_trade({
+                    'type': 'order',
+                    'trade_category': 'normal',
+                    'raw_data': deal,  # 保存完整的deal對象，包含order信息
+                    'deal_order_id': order_id,
+                    'contract_name': contract_name,
+                    'timestamp': datetime.now().isoformat(),
+                    'is_manual': is_manual
+                })
                 
                 # 發送提交成功通知
                 msg = get_formatted_order_message(
@@ -2461,6 +2552,24 @@ def get_contract_name_from_code(contract_code):
     else:
         return "未知"
 
+# 新增：參考TXserver.py的動作顯示邏輯
+def get_action_display_by_rule(octype, direction):
+    """根據開平倉類型和方向判斷動作顯示（與TXserver.py的get_formatted_order_message內部邏輯一致）"""
+    # 統一轉換為大寫進行比較
+    octype_upper = str(octype).upper()
+    direction_upper = str(direction).upper()
+    
+    if octype_upper == 'NEW':  # 開倉
+        if direction_upper == 'BUY':
+            return '多單買入'
+        else:  # SELL
+            return '空單買入'
+    else:  # 平倉 (COVER)
+        if direction_upper == 'BUY':
+            return '空單賣出'
+        else:  # SELL
+            return '多單賣出'
+
 def get_formatted_order_message(is_success, order_id, contract_name, qty, price, octype, direction, order_type, price_type, is_manual, reason=None, contract_code=None, delivery_date=None):
     """格式化訂單提交訊息（參考TXserver.py）"""
     current_time = datetime.now().strftime('%Y/%m/%d')
@@ -2521,24 +2630,8 @@ def get_formatted_order_message(is_success, order_id, contract_name, qty, price,
         octype_display = f"未知({octype})"  # 不預設為開倉，顯示實際值
     submit_type = f"{manual_type}{octype_display}"
     
-    # 提交動作 - 參考TXserver.py的get_action_display_by_rule邏輯
-    direction_str = str(direction).upper()
-    if str(octype).upper() == 'NEW':  # 開倉
-        if 'BUY' in direction_str:
-            submit_action = "多單買入"  # 開倉多單
-        elif 'SELL' in direction_str:
-            submit_action = "空單買入"  # 開倉空單
-        else:
-            submit_action = "未知動作"
-    elif str(octype).upper() == 'COVER':  # 平倉
-        if 'SELL' in direction_str:
-            submit_action = "多單賣出"  # 賣出平多單
-        elif 'BUY' in direction_str:
-            submit_action = "空單賣出"  # 買入平空單
-        else:
-            submit_action = "未知動作"
-    else:
-        submit_action = "未知動作"
+    # 提交動作 - 使用TXserver.py的get_action_display_by_rule邏輯
+    submit_action = get_action_display_by_rule(str(octype).upper(), str(direction).upper())
     
     # 提交價格
     if str(price_type).upper() == "MKT":
@@ -2636,24 +2729,8 @@ def get_formatted_trade_message(order_id, contract_name, qty, price, octype, dir
         octype_display = f"未知({octype})"  # 不預設為開倉，顯示實際值
     trade_type = f"{manual_type}{octype_display}"
     
-    # 成交動作 - 參考TXserver.py的get_action_display_by_rule邏輯
-    direction_str = str(direction).upper()
-    if str(octype).upper() == 'NEW':  # 開倉
-        if 'BUY' in direction_str:
-            trade_action = "多單買入"  # 開倉多單
-        elif 'SELL' in direction_str:
-            trade_action = "空單買入"  # 開倉空單
-        else:
-            trade_action = "未知動作"
-    elif str(octype).upper() == 'COVER':  # 平倉
-        if 'SELL' in direction_str:
-            trade_action = "多單賣出"  # 賣出平多單
-        elif 'BUY' in direction_str:
-            trade_action = "空單賣出"  # 買入平空單
-        else:
-            trade_action = "未知動作"
-    else:
-        trade_action = "未知動作"
+    # 成交動作 - 使用TXserver.py的get_action_display_by_rule邏輯
+    trade_action = get_action_display_by_rule(str(octype).upper(), str(direction).upper())
     
     msg = (f"✅ 成交通知（{current_time}）\n"
            f"選用合約：{contract_display}\n"
@@ -4038,10 +4115,14 @@ def place_futures_order_tx_style(contract, quantity, direction, price, order_typ
         contract_name = "大台" if contract.code.startswith('TXF') else "小台" if contract.code.startswith('MXF') else "微台"
         
         # 建立訂單映射（參考TXserver.py架構）
+        # 修正：將永豐API常數轉換為字符串
+        direction_str = 'Buy' if action == sj.constant.Action.Buy else 'Sell'
+        octype_str = 'New' if octype == 'New' else 'Cover'
+        
         with global_lock:
             order_octype_map[order_id] = {
-                'octype': octype,  # 使用前面判斷的octype
-                'direction': str(action),
+                'octype': octype_str,  # 使用轉換後的字符串
+                'direction': direction_str,  # 使用轉換後的字符串
                 'contract_name': contract_name,
                 'order_type': order_type,
                 'price_type': price_type,
@@ -4054,14 +4135,18 @@ def place_futures_order_tx_style(contract, quantity, direction, price, order_typ
             error_msg = trade.operation.get('op_msg')
             
             # 發送失敗通知
+            # 修正：將永豐API常數轉換為字符串
+            direction_str = 'Buy' if action == sj.constant.Action.Buy else 'Sell'
+            octype_str = 'New' if octype == 'New' else 'Cover'
+            
             fail_message = get_formatted_order_message(
                 is_success=False,
                 order_id=order_id,
                 contract_name=contract_name,
                 qty=quantity,
                 price=price,
-                octype=octype,  # 使用前面判斷的octype
-                direction=str(action),
+                octype=octype_str,  # 使用轉換後的字符串
+                direction=direction_str,  # 使用轉換後的字符串
                 order_type=order_type,
                 price_type=price_type,
                 is_manual=is_manual,
@@ -4298,14 +4383,18 @@ def place_futures_order(contract_code, quantity, direction, price=0, is_manual=F
             order_id = trade.order.id if trade and trade.order else "未知"
             
             # 發送失敗通知 - 延遲5秒發送
+            # 修正：將永豐API常數轉換為字符串
+            direction_str = 'Buy' if final_action == sj.constant.Action.Buy else 'Sell'
+            octype_str = 'New' if final_octype == sj.constant.FuturesOCType.New else 'Cover'
+            
             fail_message = get_formatted_order_message(
                 is_success=False,
                 order_id=order_id,
                 contract_name=contract_name,
                 qty=quantity,
                 price=price,
-                octype=str(final_octype),
-                direction=str(final_action),
+                octype=octype_str,
+                direction=direction_str,
                 order_type=str(final_order_type),
                 price_type=str(final_price_type),
                 is_manual=is_manual,
@@ -4336,9 +4425,13 @@ def place_futures_order(contract_code, quantity, direction, price=0, is_manual=F
         print(f"使用 final_action: {final_action}")
         print(f"使用 final_octype: {final_octype}")
         
+        # 修正：將永豐API常數轉換為字符串
+        direction_str = 'Buy' if final_action == sj.constant.Action.Buy else 'Sell'
+        octype_str = 'New' if final_octype == sj.constant.FuturesOCType.New else 'Cover'
+        
         order_info = {
-            'octype': str(final_octype),
-            'direction': str(final_action),
+            'octype': octype_str,
+            'direction': direction_str,
             'contract_name': contract_name,
             'order_type': str(final_order_type),
             'price_type': str(final_price_type),
@@ -4351,6 +4444,7 @@ def place_futures_order(contract_code, quantity, direction, price=0, is_manual=F
         
         print(f"訂單提交成功，單號: {order_id}")
         print(f"訂單映射已建立: {order_info}")
+        print(f"當前 order_octype_map 內容: {order_octype_map}")
         
         # 返回訂單資訊
         return {
@@ -4431,9 +4525,76 @@ def send_telegram_message(message):
 
 # 移除舊的send_order_notification函數，新的回調機制會自動處理
 
+# 新增：交易記錄目錄
+LOG_DIR = "transdata"
+
+def save_trade(data):
+    """保存交易記錄到JSON文件（參考TXserver.py）"""
+    try:
+        today = datetime.now().strftime("%Y%m%d")
+        filename = f"{LOG_DIR}/trades_{today}.json"
+        os.makedirs(LOG_DIR, exist_ok=True)
+        try:
+            trades = json.load(open(filename, 'r')) if os.path.exists(filename) else []
+        except json.JSONDecodeError:
+            print(f"交易記錄檔案 {filename} 格式錯誤，重置為空列表")
+            send_telegram_message(f"❌ 交易記錄檔案 {filename} 格式錯誤，已重置")
+            trades = []
+        data['timestamp'] = datetime.now().isoformat()
+        trades.append(data)
+        with open(filename, 'w') as f:
+            json.dump(trades, f, indent=2)
+        
+        # 清理舊的交易記錄檔案（保留30個交易日）
+        cleanup_old_trade_files()
+    except Exception as e:
+        print(f"儲存交易記錄失敗：{str(e)}")
+        send_telegram_message(f"❌ 儲存交易記錄失敗：{str(e)[:100]}")
+
+def cleanup_old_trade_files():
+    """清理舊的交易記錄檔案，保留30個交易日"""
+    try:
+        if not os.path.exists(LOG_DIR):
+            return
+        
+        # 獲取所有交易記錄檔案
+        trade_files = []
+        for filename in os.listdir(LOG_DIR):
+            if filename.startswith('trades_') and filename.endswith('.json'):
+                try:
+                    # 從檔案名提取日期
+                    date_str = filename.replace('trades_', '').replace('.json', '')
+                    file_date = datetime.strptime(date_str, '%Y%m%d')
+                    trade_files.append((filename, file_date))
+                except ValueError:
+                    # 如果檔案名格式不正確，跳過
+                    continue
+        
+        # 按日期排序
+        trade_files.sort(key=lambda x: x[1], reverse=True)
+        
+        # 保留最新的30個檔案，刪除其餘的
+        if len(trade_files) > 30:
+            files_to_delete = trade_files[30:]
+            for filename, file_date in files_to_delete:
+                file_path = os.path.join(LOG_DIR, filename)
+                try:
+                    os.remove(file_path)
+                    print(f"已刪除舊交易記錄檔案：{filename}")
+                except Exception as e:
+                    print(f"刪除檔案失敗 {filename}：{e}")
+            
+            print(f"清理完成：保留 {len(trade_files) - len(files_to_delete)} 個檔案，刪除 {len(files_to_delete)} 個舊檔案")
+    
+    except Exception as e:
+        print(f"清理舊交易記錄檔案失敗：{e}")
+
 if __name__ == '__main__':
     # 在其他初始化代碼之前添加
     notification_sent_date = None
+    
+    # 啟動時清理舊的交易記錄檔案
+    cleanup_old_trade_files()
     
     # 初始化保證金記錄
     if update_margin_requirements_from_api():
