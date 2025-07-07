@@ -1,5 +1,109 @@
 # API 參考文檔
 
+## 最新更新 (v1.3.7 - 2025-07-07)
+
+### 後端日誌顯示開關 API
+新增 `log_console` 設定，控制後端程式是否在背景執行：
+
+#### 設定檔案格式
+`port.txt` 現在支援兩個參數：
+```txt
+port:5000
+log_console:1
+```
+
+#### 參數說明
+- **port**: 系統端口號（1024-65535）
+- **log_console**: 日誌顯示模式
+  - `0` = 背景執行（隱藏命令行視窗）
+  - `1` = 正常顯示（顯示命令行視窗）
+
+#### 設定讀取 API
+```python
+def get_port():
+    """從根目錄的 port.txt 檔案讀取端口設置，若無則自動建立"""
+    try:
+        root_dir = os.path.dirname(os.path.dirname(__file__))
+        port_file = os.path.join(root_dir, 'port.txt')
+        
+        if not os.path.exists(port_file):
+            # 自動建立預設 port.txt
+            with open(port_file, 'w', encoding='utf-8') as f:
+                f.write('port:5000\nlog_console:1\n')
+            return 5000, 1
+        
+        with open(port_file, 'r', encoding='utf-8') as f:
+            lines = f.readlines()
+            port = 5000
+            log_console = 1
+            
+            for line in lines:
+                line = line.strip()
+                if line.startswith('port:'):
+                    try:
+                        port_str = line.split(':')[1].strip()
+                        port = int(port_str)
+                        if not (1024 <= port <= 65535):
+                            port = 5000
+                    except ValueError:
+                        port = 5000
+                elif line.startswith('log_console:'):
+                    try:
+                        log_str = line.split(':')[1].strip()
+                        log_console = int(log_str)
+                        if log_console not in [0, 1]:
+                            log_console = 1
+                    except ValueError:
+                        log_console = 1
+            
+            return port, log_console
+    except Exception as e:
+        print(f"讀取設置失敗: {e}，使用預設設置")
+        return 5000, 1
+```
+
+#### 視窗隱藏 API
+```python
+def start_webview():
+    # 根據 log_console 設定決定是否隱藏命令行視窗
+    if LOG_CONSOLE == 0:
+        # 隱藏命令行視窗（背景執行）
+        import ctypes
+        try:
+            # 獲取當前進程的句柄
+            hwnd = ctypes.windll.kernel32.GetConsoleWindow()
+            if hwnd:
+                # 隱藏命令行視窗
+                ctypes.windll.user32.ShowWindow(hwnd, 0)  # SW_HIDE = 0
+                print("已隱藏命令行視窗，程式在背景執行")
+        except Exception as e:
+            print(f"隱藏命令行視窗失敗: {e}")
+```
+
+#### 程式完全退出 API
+```python
+def on_window_closing():
+    print("視窗關閉中，正在清理資源...")
+    cleanup_on_exit()
+    # 確保程式完全退出
+    os._exit(0)
+    return True  # 允許關閉
+```
+
+#### 啟動訊息 API
+程式啟動時會顯示當前設定：
+```
+=== Auto91 交易系統啟動 ===
+端口設定: 5000
+日誌模式: 背景執行
+================================
+```
+
+### 錯誤處理
+- **設定讀取失敗**：使用預設值（port:5000, log_console:1）
+- **視窗隱藏失敗**：顯示錯誤訊息但不影響程式運行
+- **參數值錯誤**：自動修正為有效值
+
 ## 最新更新 (v1.3.6 - 2025-07-06)
 - 轉倉/保證金前端日誌、日誌格式優化、顏色說明、細節修正。
 

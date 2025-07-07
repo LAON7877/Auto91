@@ -2094,31 +2094,40 @@ def get_port():
         if not os.path.exists(port_file):
             # 自動建立預設 port.txt
             with open(port_file, 'w', encoding='utf-8') as f:
-                f.write('port:5000\n')
-            return 5000
+                f.write('port:5000\nlog_console:1\n')
+            return 5000, 1
         
         with open(port_file, 'r', encoding='utf-8') as f:
-            content = f.read().strip()
-            # 解析 port:5000 格式
-            if ':' in content:
-                port_str = content.split(':')[1].strip()
-                try:
-                    port = int(port_str)
-                    if 1024 <= port <= 65535:  # 檢查端口範圍
-                        return port
-                except ValueError:
-                    pass
+            lines = f.readlines()
+            port = 5000
+            log_console = 1
             
-        # 格式錯誤也自動重建
-        with open(port_file, 'w', encoding='utf-8') as f:
-            f.write('port:5000\n')
-        return 5000
+            for line in lines:
+                line = line.strip()
+                if line.startswith('port:'):
+                    try:
+                        port_str = line.split(':')[1].strip()
+                        port = int(port_str)
+                        if not (1024 <= port <= 65535):  # 檢查端口範圍
+                            port = 5000
+                    except ValueError:
+                        port = 5000
+                elif line.startswith('log_console:'):
+                    try:
+                        log_str = line.split(':')[1].strip()
+                        log_console = int(log_str)
+                        if log_console not in [0, 1]:  # 檢查值範圍
+                            log_console = 1
+                    except ValueError:
+                        log_console = 1
+            
+            return port, log_console
     except Exception as e:
-        print(f"讀取端口設置失敗: {e}，使用預設端口 5000")
-        return 5000
+        print(f"讀取設置失敗: {e}，使用預設設置")
+        return 5000, 1
 
-# 獲取當前端口
-CURRENT_PORT = get_port()
+# 獲取當前端口和日誌設置
+CURRENT_PORT, LOG_CONSOLE = get_port()
 
 def start_flask():
     # 啟用基本的 HTTP 請求日誌輸出（用於 webhook 調試）
@@ -2131,6 +2140,20 @@ def start_flask():
     app.run(port=CURRENT_PORT, threaded=True)
 
 def start_webview():
+    # 根據 log_console 設定決定是否隱藏命令行視窗
+    if LOG_CONSOLE == 0:
+        # 隱藏命令行視窗（背景執行）
+        import ctypes
+        try:
+            # 獲取當前進程的句柄
+            hwnd = ctypes.windll.kernel32.GetConsoleWindow()
+            if hwnd:
+                # 隱藏命令行視窗
+                ctypes.windll.user32.ShowWindow(hwnd, 0)  # SW_HIDE = 0
+                print("已隱藏命令行視窗，程式在背景執行")
+        except Exception as e:
+            print(f"隱藏命令行視窗失敗: {e}")
+    
     # 創建webview視窗
     window = webview.create_window(
         'Auto91－交易系統', 
@@ -2145,6 +2168,8 @@ def start_webview():
     def on_window_closing():
         print("視窗關閉中，正在清理資源...")
         cleanup_on_exit()
+        # 確保程式完全退出
+        os._exit(0)
         return True  # 允許關閉
     
     # 使用closing事件來確保在關閉前執行清理
@@ -2658,6 +2683,35 @@ def handle_futures_deal_callback(deal, octype_info):
             contract_code=full_contract_code or contract_code,
             delivery_date=delivery_date_for_deal
         )
+        
+        # 保存成交記錄
+        save_trade({
+            'type': 'deal',
+            'trade_category': 'normal',
+            'raw_data': {
+                'operation': {
+                    'op_type': 'Deal',
+                    'op_code': '00',
+                    'op_msg': ''
+                },
+                'order': {
+                    'id': order_id,
+                    'action': direction,
+                    'price': deal_price,
+                    'quantity': deal_quantity,
+                    'oc_type': octype,
+                    'order_type': order_type,
+                    'price_type': price_type
+                },
+                'contract': {
+                    'code': contract_code
+                }
+            },
+            'deal_order_id': order_id,
+            'contract_name': contract_name,
+            'timestamp': datetime.now().isoformat(),
+            'is_manual': is_manual
+        })
         
         # 延遲5秒發送成交通知，確保在提交通知之後
         def delayed_send():
@@ -3416,12 +3470,29 @@ def check_daily_startup_notification():
     try:
         global notification_sent_date
         
-        # 檢查是否為交易日
+        # 檢查是否為交易日且開市
         now = datetime.now()
         today = now.date()
-        if notification_sent_date != today:
-            send_daily_startup_notification()
-            notification_sent_date = today
+        current_time = now.hour * 100 + now.minute  # HHMM格式
+        
+        # 只在08:45-08:46之間檢查，確保只在開市時發送
+        if 845 <= current_time <= 846:
+            # 檢查今天是否為交易日且開市
+            response = requests.get(f'http://127.0.0.1:{CURRENT_PORT}/api/trading/status', timeout=5)
+            if response.status_code == 200:
+                data = response.json()
+                if data.get('is_trading_day', False) and data.get('is_market_open', False):
+                    # 確保今天還沒發送過通知
+                    if notification_sent_date != today:
+                        send_daily_startup_notification()
+                        notification_sent_date = today
+                        print(f"已發送每日啟動通知：{today}")
+                    else:
+                        print(f"今日已發送過啟動通知：{today}")
+                else:
+                    print(f"非交易日或非開市時間，跳過啟動通知：{today}")
+            else:
+                print(f"無法獲取交易狀態，跳過啟動通知：{today}")
             
     except Exception as e:
         print(f"檢查每日啟動通知失敗: {e}")
@@ -3431,15 +3502,23 @@ def schedule_next_check():
     # 清除所有現有的排程
     schedule.clear()
     
-    # 設定明天早上 8:44 的檢查
+    # 設定明天早上 8:45 的檢查
     tomorrow = datetime.now() + timedelta(days=1)
     schedule.every().day.at("08:45").do(check_daily_startup_notification)
     
-    # 設定今天下午 14:49 的夜盤檢查
+    # 設定今天下午 14:50 的夜盤檢查
     schedule.every().day.at("14:50").do(check_night_session_notification)
+    
+    # 設定今天晚上 23:59 的交易統計檢查
+    schedule.every().day.at("23:59").do(check_daily_trading_statistics)
+    
+    # 設定星期六早上 05:00 的交易統計檢查（週六夜盤統計）
+    schedule.every().saturday.at("05:00").do(check_saturday_trading_statistics)
     
     print(f"已排程下一次啟動通知檢查：{tomorrow.strftime('%Y-%m-%d')} 08:45")
     print(f"已排程下一次夜盤通知檢查：{datetime.now().strftime('%Y-%m-%d')} 14:50")
+    print(f"已排程下一次交易統計檢查：{datetime.now().strftime('%Y-%m-%d')} 23:59")
+    print(f"已排程週六交易統計檢查：每週六 05:00")
 
 def start_notification_checker():
     """啟動通知檢查器"""
@@ -3530,7 +3609,7 @@ def send_daily_startup_notification():
         message += f"風險指標：{account_data.get('風險指標', 0)}%\n"
         message += f"手續費：{account_data.get('手續費', 0)}\n"
         message += f"期交稅：{account_data.get('期交稅', 0)}\n"
-        message += f"本日平倉損益：{account_data.get('本日平倉損益', 0)}\n"
+        message += f"本日平倉損益＄{account_data.get('本日平倉損益', 0)} TWD\n"
         
         message += "═════ 持倉狀態 ═════\n"
         if not position_data.get('has_positions', False):
@@ -3549,9 +3628,13 @@ def send_daily_startup_notification():
             for code, contract_name in position_order:
                 pos = positions.get(code, {})
                 if pos.get('動作', '-') != '-':  # 有持倉的才顯示
-                    message += f"{contract_name}｜動作：{pos['動作']}｜數量：{pos['數量']}｜均價：{pos['均價']}\n"
+                    # 獲取該持倉的未實現盈虧
+                    unrealized_pnl = pos.get('未實現盈虧', '0')
+                    # 移除千分位符號並轉換為數字
+                    pnl_value = int(unrealized_pnl.replace(',', '')) if unrealized_pnl != '-' else 0
+                    message += f"{contract_name}｜{pos['動作']}｜{pos['數量']}｜{pos['均價']}｜＄{pnl_value:,} TWD\n"
             
-            message += f"損益：{int(total_pnl):,} TWD"
+            message += f"未平倉總損益＄{int(total_pnl):,} TWD"
         
         # 發送 Telegram 訊息
         url = f'https://api.telegram.org/bot{bot_token}/sendMessage'
@@ -3668,6 +3751,223 @@ def check_night_session_notification():
 
     except Exception as e:
         print(f"檢查夜盤通知失敗: {e}")
+
+def check_daily_trading_statistics():
+    """檢查是否需要發送每日交易統計"""
+    try:
+        # 檢查今天是否為交易日
+        response = requests.get(f'http://127.0.0.1:{CURRENT_PORT}/api/trading/status', timeout=5)
+        if response.status_code == 200:
+            data = response.json()
+            if data.get('is_trading_day', False):
+                send_daily_trading_statistics()
+            else:
+                print(f"非交易日，跳過交易統計：{datetime.now().date()}")
+        else:
+            print(f"無法獲取交易狀態，跳過交易統計：{datetime.now().date()}")
+            
+    except Exception as e:
+        print(f"檢查每日交易統計失敗: {e}")
+
+def check_saturday_trading_statistics():
+    """檢查是否需要發送週六交易統計（週六夜盤統計）"""
+    try:
+        # 週六固定發送夜盤統計
+        send_daily_trading_statistics()
+        print(f"已發送週六夜盤交易統計：{datetime.now().date()}")
+            
+    except Exception as e:
+        print(f"檢查週六交易統計失敗: {e}")
+
+def send_daily_trading_statistics():
+    """發送每日交易統計"""
+    try:
+        # 讀取 .env 檔案獲取 bot token 和 chat id
+        if not os.path.exists(ENV_PATH):
+            return
+        
+        load_dotenv(ENV_PATH)
+        bot_token = os.getenv('BOT_TOKEN')
+        chat_id = os.getenv('CHAT_ID')
+        
+        if not bot_token or not chat_id:
+            return
+        
+        # 獲取今天的交易記錄
+        today = datetime.now().strftime('%Y%m%d')
+        trades_file = os.path.join('transdata', f'trades_{today}.json')
+        
+        # 統計變數
+        total_orders = 0  # 委託單量
+        total_trades = 0  # 成交單量
+        total_cancels = 0  # 取消單量
+        total_cover_quantity = 0  # 平倉口數
+        cover_trades = []  # 平倉交易明細
+        
+        # 讀取交易記錄
+        if os.path.exists(trades_file):
+            try:
+                with open(trades_file, 'r', encoding='utf-8') as f:
+                    trades = json.load(f)
+                
+                # 用於追蹤已統計的訂單ID，避免重複計算
+                processed_orders = set()
+                
+                for trade in trades:
+                    raw_data = trade.get('raw_data', {})
+                    operation = raw_data.get('operation', {})
+                    order = raw_data.get('order', {})
+                    order_id = order.get('id', '')
+                    
+                    # 統計委託單量（所有提交成功的訂單，不重複計算）
+                    if trade.get('type') == 'order' and order_id not in processed_orders:
+                        total_orders += 1
+                        processed_orders.add(order_id)
+                    
+                    # 統計成交單量（有成交記錄的訂單）
+                    if trade.get('type') == 'deal':
+                        total_trades += 1
+                    
+                    # 統計取消單量
+                    if trade.get('type') == 'cancel':
+                        total_cancels += 1
+                    
+                    # 統計平倉口數和明細（只統計有成交的平倉）
+                    if order.get('oc_type') == 'Cover':
+                        # 查找對應的成交記錄
+                        has_deal = False
+                        deal_price = order.get('price', 0)  # 預設使用委託價格
+                        
+                        for deal_trade in trades:
+                            if (deal_trade.get('type') == 'deal' and 
+                                deal_trade.get('deal_order_id') == trade.get('deal_order_id')):
+                                has_deal = True
+                                deal_price = deal_trade.get('raw_data', {}).get('order', {}).get('price', order.get('price', 0))
+                                break
+                        
+                        # 只有有成交的平倉才統計
+                        if has_deal:
+                            quantity = order.get('quantity', 0)
+                            total_cover_quantity += quantity
+                            
+                            # 記錄平倉交易明細
+                            contract_code = order.get('contract', {}).get('code', '')
+                            contract_name = get_contract_name_from_code(contract_code)
+                            action = order.get('action', '')
+                            order_price = order.get('price', 0)  # 委託價格
+                            
+                            # 計算損益（這裡需要開倉價格，暫時設為0）
+                            # 實際的損益計算需要開倉價格，這裡先顯示成交價格
+                            pnl = 0  # 暫時設為0，實際需要開倉價格計算
+                            
+                            cover_trades.append({
+                                'contract_name': contract_name,
+                                'action': '空單' if action == 'Sell' else '多單',
+                                'quantity': f"{quantity}口",
+                                'order_price': f"{int(order_price):,}",
+                                'cover_price': f"{int(deal_price):,}",
+                                'pnl': pnl
+                            })
+                        
+            except Exception as e:
+                print(f"讀取交易記錄失敗: {e}")
+        
+        # 獲取帳戶狀態
+        account_response = requests.get(f'http://127.0.0.1:{CURRENT_PORT}/api/account/status', timeout=5)
+        account_data = account_response.json().get('data', {}) if account_response.status_code == 200 else {}
+        
+        # 獲取持倉狀態
+        position_response = requests.get(f'http://127.0.0.1:{CURRENT_PORT}/api/position/status', timeout=5)
+        position_data = position_response.json() if position_response.status_code == 200 else {}
+        
+        # 構建訊息
+        today_str = datetime.now().strftime('%Y/%m/%d')
+        message = f"📊 交易統計（{today_str}）\n"
+        
+        message += "═════ 總覽 ═════\n"
+        message += f"成交數量：{total_trades} 筆\n"
+        message += f"委託數量：{total_orders} 筆\n"
+        message += f"取消數量：{total_cancels} 筆\n"
+        message += f"平倉口數：{total_cover_quantity} 口\n"
+        
+        message += "═════ 帳戶狀態 ═════\n"
+        message += f"權益總值：{account_data.get('權益總值', 0)}\n"
+        message += f"權益總額：{account_data.get('權益總額', 0)}\n"
+        message += f"今日餘額：{account_data.get('今日餘額', 0)}\n"
+        message += f"昨日餘額：{account_data.get('昨日餘額', 0)}\n"
+        message += f"可用保證金：{account_data.get('可用保證金', 0)}\n"
+        message += f"原始保證金：{account_data.get('原始保證金', 0)}\n"
+        message += f"維持保證金：{account_data.get('維持保證金', 0)}\n"
+        message += f"風險指標：{account_data.get('風險指標', 0)}%\n"
+        message += f"手續費：{account_data.get('手續費', 0)}\n"
+        message += f"期交稅：{account_data.get('期交稅', 0)}\n"
+        message += f"本日平倉損益＄{account_data.get('本日平倉損益', 0)} TWD\n"
+        
+        message += "═════ 交易明細 ═════\n"
+        if not cover_trades:
+            message += "❌ 無平倉交易"
+        else:
+            # 按照指定順序排序：大台、小台、微台
+            def get_contract_order(contract_name):
+                order_map = {'大台': 0, '小台': 1, '微台': 2}
+                return order_map.get(contract_name, 3)
+            
+            # 排序交易明細
+            cover_trades.sort(key=lambda x: get_contract_order(x['contract_name']))
+            
+            for trade in cover_trades:
+                message += f"{trade['contract_name']}｜{trade['action']}｜{trade['quantity']}｜{trade['order_price']}｜{trade['cover_price']}\n＄{trade['pnl']:,} TWD\n"
+        
+        message += "═════ 持倉狀態 ═════\n"
+        if not position_data.get('has_positions', False):
+            message += "❌ 無持倉部位"
+        else:
+            positions = position_data.get('data', {})
+            total_pnl = position_data.get('total_pnl_value', 0)
+            
+            # 按照指定順序顯示持倉：大台、小台、微台
+            position_order = [
+                ('TXF', '大台'),
+                ('MXF', '小台'),
+                ('TMF', '微台')
+            ]
+            
+            for code, contract_name in position_order:
+                pos = positions.get(code, {})
+                if pos.get('動作', '-') != '-':  # 有持倉的才顯示
+                    # 獲取該持倉的未實現盈虧
+                    unrealized_pnl = pos.get('未實現盈虧', '0')
+                    # 移除千分位符號並轉換為數字
+                    pnl_value = int(unrealized_pnl.replace(',', '')) if unrealized_pnl != '-' else 0
+                    message += f"{contract_name}｜{pos['動作']}｜{pos['數量']}｜{pos['均價']}｜＄{pnl_value:,} TWD\n"
+            
+            message += f"未平倉總損益＄{int(total_pnl):,} TWD"
+        
+        # 發送 Telegram 訊息
+        url = f'https://api.telegram.org/bot{bot_token}/sendMessage'
+        payload = {
+            'chat_id': chat_id,
+            'text': message,
+            'parse_mode': 'HTML'
+        }
+        
+        response = requests.post(url, json=payload, timeout=10)
+        response.raise_for_status()
+        
+        print(f"已發送交易統計：{today_str}")
+        
+        # 發送前端系統日誌
+        try:
+            requests.post(
+                f'http://127.0.0.1:{CURRENT_PORT}/api/system_log',
+                json={'message': 'Telegram［交易統計］訊息發送成功！！！', 'type': 'success'},
+                timeout=5
+            )
+        except:
+            pass
+        
+    except Exception as e:
+        print(f"發送每日交易統計失敗: {e}")
 
 # 測試功能已移除
 
@@ -4805,6 +5105,10 @@ def send_telegram_message(message, log_type="info"):
                 log_message = "Telegram ［提交失敗］訊息發送成功！！！"
             elif "成交通知" in message:
                 log_message = "Telegram ［成交通知］訊息發送成功！！！"
+            elif "API連線異常" in message:
+                log_message = "Telegram ［API連線異常］訊息發送成功！！！"
+            elif "API重新連線成功" in message:
+                log_message = "Telegram ［API連線成功］訊息發送成功！！！"
             else:
                 log_message = "Telegram 訊息發送成功！！！"
             
@@ -5197,7 +5501,7 @@ def start_connection_monitor():
                         # 嘗試重連
                         if reconnect_api():
                             print("API重連成功！")
-                            send_telegram_message("✅ API重新連線成功！！！")
+                            send_telegram_message("✅ API連線成功！！！")
                             reconnect_attempts = 0
                             is_reconnecting = False
                         else:
@@ -5271,6 +5575,12 @@ def stop_connection_monitor():
 if __name__ == '__main__':
     # 在其他初始化代碼之前添加
     notification_sent_date = None
+    
+    # 顯示啟動設定
+    print(f"=== Auto91 交易系統啟動 ===")
+    print(f"端口設定: {CURRENT_PORT}")
+    print(f"日誌模式: {'背景執行' if LOG_CONSOLE == 0 else '正常顯示'}")
+    print(f"================================")
     
     # 啟動時清理舊的交易記錄檔案
     cleanup_old_trade_files()

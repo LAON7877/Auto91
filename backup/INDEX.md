@@ -1,19 +1,31 @@
 # 文檔導航索引
 
-**最新版本：v1.3.6** - 轉倉/保證金前端日誌與日誌格式優化 (2025-07-06)
+**最新版本：v1.3.7** - 後端日誌顯示開關功能 (2025-07-07)
+
+- 2025-07-07：後端日誌顯示開關功能、程式完全退出機制、視窗隱藏機制、設定透明化。
+
+**當前版本：v1.3.6** - 轉倉/保證金前端日誌與日誌格式優化 (2025-07-06)
 
 - 2025-07-06：轉倉/保證金前端日誌、日誌格式優化、顏色說明、細節修正。
 
-- [README.md](README.md) 系統概況與功能 **[v1.3.5 已更新]**
-- [QUICK_START.md](QUICK_START.md) 5 分鐘快速上手 **[v1.3.5 已更新]**
-- [API_REFERENCE.md](API_REFERENCE.md) API 技術參考 **[v1.3.5 已更新]**
-- [CHANGELOG.md](CHANGELOG.md) 版本變更紀錄 **[v1.3.5 已更新]**
-- [TROUBLESHOOTING.md](TROUBLESHOOTING.md) 故障排除 **[v1.3.5 已更新]**
-- [DEPLOYMENT.md](DEPLOYMENT.md) 生產部署指南 **[v1.3.5 已更新]**
-- [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md) 開發者指南 **[v1.3.5 已更新]**
-- [MAINTENANCE.md](MAINTENANCE.md) 維護運營指南 **[v1.3.5 已更新]**
+- [README.md](README.md) 系統概況與功能 **[v1.3.7 已更新]**
+- [QUICK_START.md](QUICK_START.md) 5 分鐘快速上手 **[v1.3.7 已更新]**
+- [API_REFERENCE.md](API_REFERENCE.md) API 技術參考 **[v1.3.7 已更新]**
+- [CHANGELOG.md](CHANGELOG.md) 版本變更紀錄 **[v1.3.7 已更新]**
+- [TROUBLESHOOTING.md](TROUBLESHOOTING.md) 故障排除 **[v1.3.7 已更新]**
+- [DEPLOYMENT.md](DEPLOYMENT.md) 生產部署指南 **[v1.3.7 已更新]**
+- [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md) 開發者指南 **[v1.3.7 已更新]**
+- [MAINTENANCE.md](MAINTENANCE.md) 維護運營指南 **[v1.3.7 已更新]**
 
 ## 重點功能文檔
+
+### 後端日誌顯示開關功能（v1.3.7新增）
+- **後端日誌顯示開關**：新增 `log_console` 設定，控制後端程式是否在背景執行
+- **程式完全退出機制**：關閉前端視窗時確保後端程式完全退出，避免背景殘留
+- **視窗隱藏機制**：使用 Windows API 隱藏命令行視窗
+- **設定透明化**：程式啟動時顯示當前端口和日誌模式設定
+- **設定檔案擴展**：`port.txt` 現在支援 `port` 和 `log_console` 兩個參數
+- **錯誤處理**：設定讀取失敗時使用預設值，視窗隱藏失敗時不影響程式運行
 
 ### 交易記錄持久化系統（v1.3.5重大更新）
 - **交易記錄 JSON 儲存**：新增 `save_trade()` 函數，將所有交易參數保存到 `transdata/trades_YYYYMMDD.json`

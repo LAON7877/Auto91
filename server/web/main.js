@@ -1475,11 +1475,31 @@ function updateSystemLogsFromBackend() {
                         };
                     });
                 
-                // 更新本地 systemLogs 陣列，保留最新的100條
+                // 合併本地和後端日誌，保留最新的100條
                 if (customLogs.length > 0) {
-                    systemLogs = customLogs.slice(-100);
-                    updateSystemLogsDisplay();
-                    console.log('同步後端系統日誌成功，共', customLogs.length, '條日誌');
+                    // 合併本地和後端日誌，避免重複
+                    const existingMessages = new Set(systemLogs.map(log => `${log.timestamp}-${log.message}`));
+                    const newLogs = customLogs.filter(log => {
+                        const logKey = `${log.timestamp}-${log.message}`;
+                        return !existingMessages.has(logKey);
+                    });
+                    
+                    if (newLogs.length > 0) {
+                        // 合併並按時間戳排序
+                        const allLogs = [...systemLogs, ...newLogs];
+                        
+                        // 按時間戳排序（假設時間戳格式為 HH:MM:SS）
+                        allLogs.sort((a, b) => {
+                            const timeA = a.timestamp || '';
+                            const timeB = b.timestamp || '';
+                            return timeA.localeCompare(timeB);
+                        });
+                        
+                        // 保留最新的100條記錄
+                        systemLogs = allLogs.slice(-100);
+                        updateSystemLogsDisplay();
+                        console.log('同步後端系統日誌成功，新增', newLogs.length, '條日誌');
+                    }
                 }
             }
         })
@@ -1526,7 +1546,15 @@ function updateSystemLogsDisplay() {
         const systemLogsContainer = logsContainer.parentElement;
         systemLogsContainer.scrollTop = systemLogsContainer.scrollHeight;
     } else {
-        logsContainer.innerHTML = '<div class="log-item" style="color: #666; text-align: center;">無系統日誌</div>';
+        logsContainer.innerHTML = '';
+        const noLogsMsg = document.createElement('div');
+        noLogsMsg.className = 'log-item';
+        noLogsMsg.style.justifyContent = 'center';
+        noLogsMsg.style.color = '#666';
+        noLogsMsg.style.textAlign = 'center';
+        noLogsMsg.style.width = '100%';
+        noLogsMsg.textContent = '無系統日誌';
+        logsContainer.appendChild(noLogsMsg);
     }
 }
 
