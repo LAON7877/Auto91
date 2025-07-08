@@ -1448,11 +1448,19 @@ function updateSystemLogsFromBackend() {
                         let formattedTimestamp = '';
                         if (log.timestamp) {
                             try {
-                                // 解析 ngrok 格式的時間戳 (HH:MM:SS.mmm CST)
+                                // 解析 ngrok 格式的時間戳 (YYYY-MM-DD HH:MM:SS.mmm CST 或 HH:MM:SS.mmm CST)
                                 if (log.timestamp.includes(' CST')) {
                                     const timePart = log.timestamp.replace(' CST', '');
-                                    const timeComponents = timePart.split('.')[0]; // 移除毫秒
-                                    formattedTimestamp = timeComponents;
+                                    
+                                    // 檢查是否包含日期
+                                    if (timePart.includes(' ') && timePart.length > 12) {
+                                        // 格式: YYYY-MM-DD HH:MM:SS.mmm - 只取時間部分
+                                        const timeOnly = timePart.split(' ')[1]; // 取第二部分（時間）
+                                        formattedTimestamp = timeOnly.split('.')[0]; // 移除毫秒
+                                    } else {
+                                        // 格式: HH:MM:SS.mmm - 直接處理
+                                        formattedTimestamp = timePart.split('.')[0]; // 移除毫秒
+                                    }
                                 } else {
                                     // 如果是其他格式，嘗試解析
                                     const date = new Date(log.timestamp);
@@ -1518,20 +1526,26 @@ function updateSystemLogsDisplay() {
             const logItem = document.createElement('div');
             logItem.className = 'log-item';
             
-            // 根據日誌類型設置顏色
+            // 根據日誌類型和內容設置顏色
             let typeClass = '';
-            switch(log.type) {
-                case 'error':
-                    typeClass = 'error';
-                    break;
-                case 'warning':
-                    typeClass = 'warning';
-                    break;
-                case 'success':
-                    typeClass = 'success';
-                    break;
-                default:
-                    typeClass = 'info';
+            
+            // 特殊處理API連線異常訊息，顯示為橘色
+            if (log.message && log.message.includes('API連線異常')) {
+                typeClass = 'warning';
+            } else {
+                switch(log.type) {
+                    case 'error':
+                        typeClass = 'error';
+                        break;
+                    case 'warning':
+                        typeClass = 'warning';
+                        break;
+                    case 'success':
+                        typeClass = 'success';
+                        break;
+                    default:
+                        typeClass = 'info';
+                }
             }
             
             logItem.innerHTML = `
@@ -2319,7 +2333,12 @@ function formatNumber(value) {
     }
     
     const num = parseFloat(value);
-    return num.toLocaleString('zh-TW');
+    // 如果是整數，去掉 .0；如果是小數，保留小數位
+    if (num === Math.floor(num)) {
+        return Math.floor(num).toLocaleString('zh-TW');
+    } else {
+        return num.toLocaleString('zh-TW');
+    }
 }
 
 // 更新持倉狀態

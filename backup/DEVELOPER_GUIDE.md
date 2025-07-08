@@ -1,5 +1,197 @@
 # 開發者指南
 
+## 最新更新 (v1.3.8 - 2025-07-08)
+
+### 交易統計格式優化與損益計算改善
+新增完整的交易明細顯示和單筆損益計算功能：
+
+```python
+def analyze_simple_trading_stats(trades):
+    """簡單分析交易統計（簡單配對開平倉，計算單筆損益）"""
+    cover_trades = []
+    total_cover_quantity = 0
+    
+    # 分別收集開倉和平倉交易
+    open_trades = []
+    close_trades = []
+    
+    for trade in trades:
+        # 只處理成交記錄
+        if trade.get('type') != 'deal':
+            continue
+            
+        raw_data = trade.get('raw_data', {})
+        order = raw_data.get('order', {})
+        
+        # 獲取基本資訊
+        oc_type = order.get('oc_type', '')
+        action = order.get('action', '')
+        quantity = order.get('quantity', 0)
+        price = order.get('price', 0)
+        timestamp = trade.get('timestamp', '')
+        
+        # 分類開倉和平倉
+        if oc_type == 'New':
+            open_trades.append({
+                'contract_code': contract_code,
+                'contract_name': contract_name,
+                'action': action,
+                'quantity': quantity,
+                'price': price,
+                'timestamp': timestamp
+            })
+        elif oc_type == 'Cover':
+            close_trades.append({
+                'contract_code': contract_code,
+                'contract_name': contract_name,
+                'action': action,
+                'quantity': quantity,
+                'price': price,
+                'timestamp': timestamp
+            })
+    
+    # 簡單配對平倉交易，找對應的開倉價格
+    for close_trade in close_trades:
+        total_cover_quantity += close_trade['quantity']
+        
+        # 找對應的開倉交易（簡單配對：同合約、反向動作）
+        required_open_action = 'Buy' if close_trade['action'] == 'Sell' else 'Sell'
+        open_price = None
+        
+        # 從開倉交易中找最接近的價格（時間上最早的）
+        for open_trade in open_trades:
+            if (open_trade['contract_code'] == close_trade['contract_code'] and
+                open_trade['action'] == required_open_action):
+                open_price = open_trade['price']
+                break  # 使用第一個找到的開倉價格
+        
+        # 計算單筆損益（如果找到開倉價格）
+        pnl = 0
+        if open_price is not None:
+            point_value = get_contract_point_value(close_trade['contract_code'])
+            if close_trade['action'] == 'Sell':  # 平多倉
+                pnl = (close_trade['price'] - open_price) * close_trade['quantity'] * point_value
+            else:  # 平空倉
+                pnl = (open_price - close_trade['price']) * close_trade['quantity'] * point_value
+        
+        action_display = '多單' if close_trade['action'] == 'Sell' else '空單'
+        
+        cover_trades.append({
+            'contract_name': close_trade['contract_name'],
+            'action': action_display,
+            'quantity': f"{close_trade['quantity']}口",
+            'open_price': f"{int(open_price):,}" if open_price is not None else "未知",
+            'cover_price': f"{int(close_trade['price']):,}",
+            'pnl': int(pnl),
+            'timestamp': close_trade['timestamp']
+        })
+    
+    return cover_trades, total_cover_quantity
+```
+
+### 點值系統
+正確設定各合約點值：
+
+```python
+def get_contract_point_value(contract_code):
+    """獲取合約點值"""
+    if 'TXF' in contract_code:
+        return 200  # 大台每點200元
+    elif 'MXF' in contract_code:
+        return 50   # 小台每點50元
+    elif 'TMF' in contract_code:
+        return 10   # 微台每點10元
+    else:
+        return 200  # 預設值
+```
+
+### 數字格式化改善
+修復數字格式化問題，去除不必要的 `.0` 後綴：
+
+```python
+def format_number_for_notification(value):
+    """格式化數字用於通知（去除.0後綴）"""
+    if value is None:
+        return "0"
+    
+    # 轉換為數字
+    try:
+        num = float(value)
+    except (ValueError, TypeError):
+        return "0"
+    
+    # 如果是整數，去除小數點
+    if num == int(num):
+        return f"{int(num):,}"
+    else:
+        return f"{num:,.2f}"
+```
+
+### 日誌時間戳格式改善
+改善日誌時間戳格式，支援新舊格式：
+
+```python
+def parse_time(timestamp):
+    """解析時間戳，支援新舊格式"""
+    try:
+        # 嘗試解析新格式：YYYY-MM-DD HH:MM:SS.mmm CST
+        if len(timestamp) >= 23 and timestamp[10] == ' ':
+            return datetime.strptime(timestamp[:23], '%Y-%m-%d %H:%M:%S.%f')
+        else:
+            # 舊格式：HH:MM:SS.mmm CST
+            time_part = timestamp.split(' CST')[0]
+            return datetime.strptime(time_part, '%H:%M:%S.%f')
+    except:
+        return datetime.now()
+```
+
+### port.txt 預設值修正
+修正 port.txt 預設值為背景執行模式：
+
+```python
+def get_port():
+    """從根目錄的 port.txt 檔案讀取端口設置，若無則自動建立"""
+    try:
+        # 獲取根目錄路徑（server 資料夾的上一層）
+        root_dir = os.path.dirname(os.path.dirname(__file__))
+        port_file = os.path.join(root_dir, 'port.txt')
+        
+        if not os.path.exists(port_file):
+            # 自動建立預設 port.txt
+            with open(port_file, 'w', encoding='utf-8') as f:
+                f.write('port:5000\nlog_console:0\n')  # 預設背景執行
+            return 5000, 0
+        
+        with open(port_file, 'r', encoding='utf-8') as f:
+            lines = f.readlines()
+            port = 5000
+            log_console = 0  # 預設背景執行
+            
+            for line in lines:
+                line = line.strip()
+                if line.startswith('port:'):
+                    try:
+                        port_str = line.split(':')[1].strip()
+                        port = int(port_str)
+                        if not (1024 <= port <= 65535):
+                            port = 5000
+                    except ValueError:
+                        port = 5000
+                elif line.startswith('log_console:'):
+                    try:
+                        log_str = line.split(':')[1].strip()
+                        log_console = int(log_str)
+                        if log_console not in [0, 1]:
+                            log_console = 0  # 預設背景執行
+                    except ValueError:
+                        log_console = 0  # 預設背景執行
+            
+            return port, log_console
+    except Exception as e:
+        print(f"讀取設置失敗: {e}，使用預設設置")
+        return 5000, 0  # 預設背景執行
+```
+
 ## 最新更新 (v1.3.7 - 2025-07-07)
 
 ### 後端日誌顯示開關功能

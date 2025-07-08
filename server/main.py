@@ -747,9 +747,9 @@ def add_custom_request_log(method, uri, status, extra_info=None):
     """添加自定義請求記錄"""
     global custom_request_logs
     
-    # 建立時間戳（ngrok 格式）
+    # 建立時間戳（加上日期但前端會只顯示時分秒）
     now = datetime.now()
-    time_str = now.strftime('%H:%M:%S.%f')[:-3] + ' CST'
+    time_str = now.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3] + ' CST'
     
     # 建立請求記錄
     log_entry = {
@@ -825,10 +825,14 @@ def get_ngrok_requests():
         try:
             if ' CST' in timestamp:
                 time_part = timestamp.replace(' CST', '')
-                return datetime.strptime(time_part, '%H:%M:%S.%f').time()
+                # 支援新的日期時間格式和舊的時間格式
+                if len(time_part) > 12:  # 包含日期的格式
+                    return datetime.strptime(time_part, '%Y-%m-%d %H:%M:%S.%f')
+                else:  # 只有時間的格式
+                    return datetime.strptime(time_part, '%H:%M:%S.%f').time()
         except:
             pass
-        return datetime.min.time()
+        return datetime.min
     
     all_requests.sort(key=lambda x: parse_time(x.get('timestamp', '')))
     
@@ -2094,13 +2098,13 @@ def get_port():
         if not os.path.exists(port_file):
             # 自動建立預設 port.txt
             with open(port_file, 'w', encoding='utf-8') as f:
-                f.write('port:5000\nlog_console:1\n')
-            return 5000, 1
+                f.write('port:5000\nlog_console:0\n')
+            return 5000, 0
         
         with open(port_file, 'r', encoding='utf-8') as f:
             lines = f.readlines()
             port = 5000
-            log_console = 1
+            log_console = 0
             
             for line in lines:
                 line = line.strip()
@@ -2117,14 +2121,14 @@ def get_port():
                         log_str = line.split(':')[1].strip()
                         log_console = int(log_str)
                         if log_console not in [0, 1]:  # 檢查值範圍
-                            log_console = 1
+                            log_console = 0
                     except ValueError:
-                        log_console = 1
+                        log_console = 0
             
             return port, log_console
     except Exception as e:
         print(f"讀取設置失敗: {e}，使用預設設置")
-        return 5000, 1
+        return 5000, 0
 
 # 獲取當前端口和日誌設置
 CURRENT_PORT, LOG_CONSOLE = get_port()
@@ -3536,6 +3540,22 @@ def start_notification_checker():
     notification_thread = threading.Thread(target=schedule_loop, daemon=True)
     notification_thread.start()
 
+def format_number_for_notification(value):
+    """格式化數字用於通知，移除整數的 .0"""
+    if value is None or value == '':
+        return '0'
+    
+    try:
+        num = float(value)
+        # 如果是整數，返回整數格式
+        if num == int(num):
+            return str(int(num))
+        else:
+            # 如果是小數，保留小數位
+            return str(num)
+    except (ValueError, TypeError):
+        return str(value)
+
 def send_daily_startup_notification():
     """發送每日啟動通知"""
     try:
@@ -3599,17 +3619,17 @@ def send_daily_startup_notification():
                 message += f"{contract_name} {code_part} ({delivery_part}) ${int(margin_part):,}\n"
         
         message += "═════ 帳戶狀態 ═════\n"
-        message += f"權益總值：{account_data.get('權益總值', 0)}\n"
-        message += f"權益總額：{account_data.get('權益總額', 0)}\n"
-        message += f"今日餘額：{account_data.get('今日餘額', 0)}\n"
-        message += f"昨日餘額：{account_data.get('昨日餘額', 0)}\n"
-        message += f"可用保證金：{account_data.get('可用保證金', 0)}\n"
-        message += f"原始保證金：{account_data.get('原始保證金', 0)}\n"
-        message += f"維持保證金：{account_data.get('維持保證金', 0)}\n"
-        message += f"風險指標：{account_data.get('風險指標', 0)}%\n"
-        message += f"手續費：{account_data.get('手續費', 0)}\n"
-        message += f"期交稅：{account_data.get('期交稅', 0)}\n"
-        message += f"本日平倉損益＄{account_data.get('本日平倉損益', 0)} TWD\n"
+        message += f"權益總值：{format_number_for_notification(account_data.get('權益總值', 0))}\n"
+        message += f"權益總額：{format_number_for_notification(account_data.get('權益總額', 0))}\n"
+        message += f"今日餘額：{format_number_for_notification(account_data.get('今日餘額', 0))}\n"
+        message += f"昨日餘額：{format_number_for_notification(account_data.get('昨日餘額', 0))}\n"
+        message += f"可用保證金：{format_number_for_notification(account_data.get('可用保證金', 0))}\n"
+        message += f"原始保證金：{format_number_for_notification(account_data.get('原始保證金', 0))}\n"
+        message += f"維持保證金：{format_number_for_notification(account_data.get('維持保證金', 0))}\n"
+        message += f"風險指標：{format_number_for_notification(account_data.get('風險指標', 0))}%\n"
+        message += f"手續費：{format_number_for_notification(account_data.get('手續費', 0))}\n"
+        message += f"期交稅：{format_number_for_notification(account_data.get('期交稅', 0))}\n"
+        message += f"本日平倉損益＄{format_number_for_notification(account_data.get('本日平倉損益', 0))} TWD\n"
         
         message += "═════ 持倉狀態 ═════\n"
         if not position_data.get('has_positions', False):
@@ -3634,7 +3654,7 @@ def send_daily_startup_notification():
                     pnl_value = int(unrealized_pnl.replace(',', '')) if unrealized_pnl != '-' else 0
                     message += f"{contract_name}｜{pos['動作']}｜{pos['數量']}｜{pos['均價']}｜＄{pnl_value:,} TWD\n"
             
-            message += f"未平倉總損益＄{int(total_pnl):,} TWD"
+            message += f"未實現總損益＄{int(total_pnl):,} TWD"
         
         # 發送 Telegram 訊息
         url = f'https://api.telegram.org/bot{bot_token}/sendMessage'
@@ -3813,6 +3833,7 @@ def send_daily_trading_statistics():
                 # 用於追蹤已統計的訂單ID，避免重複計算
                 processed_orders = set()
                 
+                # 基本統計（委託、成交、取消）
                 for trade in trades:
                     raw_data = trade.get('raw_data', {})
                     operation = raw_data.get('operation', {})
@@ -3831,46 +3852,18 @@ def send_daily_trading_statistics():
                     # 統計取消單量
                     if trade.get('type') == 'cancel':
                         total_cancels += 1
-                    
-                    # 統計平倉口數和明細（只統計有成交的平倉）
-                    if order.get('oc_type') == 'Cover':
-                        # 查找對應的成交記錄
-                        has_deal = False
-                        deal_price = order.get('price', 0)  # 預設使用委託價格
-                        
-                        for deal_trade in trades:
-                            if (deal_trade.get('type') == 'deal' and 
-                                deal_trade.get('deal_order_id') == trade.get('deal_order_id')):
-                                has_deal = True
-                                deal_price = deal_trade.get('raw_data', {}).get('order', {}).get('price', order.get('price', 0))
-                                break
-                        
-                        # 只有有成交的平倉才統計
-                        if has_deal:
-                            quantity = order.get('quantity', 0)
-                            total_cover_quantity += quantity
-                            
-                            # 記錄平倉交易明細
-                            contract_code = order.get('contract', {}).get('code', '')
-                            contract_name = get_contract_name_from_code(contract_code)
-                            action = order.get('action', '')
-                            order_price = order.get('price', 0)  # 委託價格
-                            
-                            # 計算損益（這裡需要開倉價格，暫時設為0）
-                            # 實際的損益計算需要開倉價格，這裡先顯示成交價格
-                            pnl = 0  # 暫時設為0，實際需要開倉價格計算
-                            
-                            cover_trades.append({
-                                'contract_name': contract_name,
-                                'action': '空單' if action == 'Sell' else '多單',
-                                'quantity': f"{quantity}口",
-                                'order_price': f"{int(order_price):,}",
-                                'cover_price': f"{int(deal_price):,}",
-                                'pnl': pnl
-                            })
+                
+                # 使用基本統計分析平倉口數（不重新計算損益，使用永豐API提供的數據）
+                print(f"正在統計 {len(trades)} 筆交易記錄...")
+                cover_trades, total_cover_quantity = analyze_simple_trading_stats(trades)
+                print(f"統計完成：平倉 {total_cover_quantity} 口，{len(cover_trades)} 筆交易")
                         
             except Exception as e:
                 print(f"讀取交易記錄失敗: {e}")
+                # 如果新系統失敗，回退到舊系統
+                print("使用空白統計...")
+                cover_trades = []
+                total_cover_quantity = 0
         
         # 獲取帳戶狀態
         account_response = requests.get(f'http://127.0.0.1:{CURRENT_PORT}/api/account/status', timeout=5)
@@ -3883,29 +3876,27 @@ def send_daily_trading_statistics():
         # 構建訊息
         today_str = datetime.now().strftime('%Y/%m/%d')
         message = f"📊 交易統計（{today_str}）\n"
-        
-        message += "═════ 總覽 ═════\n"
-        message += f"成交數量：{total_trades} 筆\n"
+        message += "═════ 交易總覽 ═════\n"
         message += f"委託數量：{total_orders} 筆\n"
         message += f"取消數量：{total_cancels} 筆\n"
+        message += f"成交數量：{total_trades} 筆\n"
         message += f"平倉口數：{total_cover_quantity} 口\n"
-        
         message += "═════ 帳戶狀態 ═════\n"
-        message += f"權益總值：{account_data.get('權益總值', 0)}\n"
-        message += f"權益總額：{account_data.get('權益總額', 0)}\n"
-        message += f"今日餘額：{account_data.get('今日餘額', 0)}\n"
-        message += f"昨日餘額：{account_data.get('昨日餘額', 0)}\n"
-        message += f"可用保證金：{account_data.get('可用保證金', 0)}\n"
-        message += f"原始保證金：{account_data.get('原始保證金', 0)}\n"
-        message += f"維持保證金：{account_data.get('維持保證金', 0)}\n"
-        message += f"風險指標：{account_data.get('風險指標', 0)}%\n"
-        message += f"手續費：{account_data.get('手續費', 0)}\n"
-        message += f"期交稅：{account_data.get('期交稅', 0)}\n"
-        message += f"本日平倉損益＄{account_data.get('本日平倉損益', 0)} TWD\n"
+        message += f"權益總值：{format_number_for_notification(account_data.get('權益總值', 0))}\n"
+        message += f"權益總額：{format_number_for_notification(account_data.get('權益總額', 0))}\n"
+        message += f"今日餘額：{format_number_for_notification(account_data.get('今日餘額', 0))}\n"
+        message += f"昨日餘額：{format_number_for_notification(account_data.get('昨日餘額', 0))}\n"
+        message += f"可用保證金：{format_number_for_notification(account_data.get('可用保證金', 0))}\n"
+        message += f"原始保證金：{format_number_for_notification(account_data.get('原始保證金', 0))}\n"
+        message += f"維持保證金：{format_number_for_notification(account_data.get('維持保證金', 0))}\n"
+        message += f"風險指標：{format_number_for_notification(account_data.get('風險指標', 0))}%\n"
+        message += f"手續費：{format_number_for_notification(account_data.get('手續費', 0))}\n"
+        message += f"期交稅：{format_number_for_notification(account_data.get('期交稅', 0))}\n"
+        message += f"本日平倉損益＄{format_number_for_notification(account_data.get('本日平倉損益', 0))} TWD\n"
         
         message += "═════ 交易明細 ═════\n"
         if not cover_trades:
-            message += "❌ 無平倉交易"
+            message += "❌ 無平倉交易\n"
         else:
             # 按照指定順序排序：大台、小台、微台
             def get_contract_order(contract_name):
@@ -3916,7 +3907,10 @@ def send_daily_trading_statistics():
             cover_trades.sort(key=lambda x: get_contract_order(x['contract_name']))
             
             for trade in cover_trades:
-                message += f"{trade['contract_name']}｜{trade['action']}｜{trade['quantity']}｜{trade['order_price']}｜{trade['cover_price']}\n＄{trade['pnl']:,} TWD\n"
+                message += f"{trade['contract_name']}｜{trade['action']}｜{trade['quantity']}｜{trade['open_price']}｜{trade['cover_price']}\n"
+                if trade['pnl'] != 0:
+                    message += f"＄{trade['pnl']:,} TWD"
+                message += "\n"
         
         message += "═════ 持倉狀態 ═════\n"
         if not position_data.get('has_positions', False):
@@ -3941,7 +3935,7 @@ def send_daily_trading_statistics():
                     pnl_value = int(unrealized_pnl.replace(',', '')) if unrealized_pnl != '-' else 0
                     message += f"{contract_name}｜{pos['動作']}｜{pos['數量']}｜{pos['均價']}｜＄{pnl_value:,} TWD\n"
             
-            message += f"未平倉總損益＄{int(total_pnl):,} TWD"
+            message += f"未實現總損益＄{int(total_pnl):,} TWD"
         
         # 發送 Telegram 訊息
         url = f'https://api.telegram.org/bot{bot_token}/sendMessage'
@@ -5107,16 +5101,18 @@ def send_telegram_message(message, log_type="info"):
                 log_message = "Telegram ［成交通知］訊息發送成功！！！"
             elif "API連線異常" in message:
                 log_message = "Telegram ［API連線異常］訊息發送成功！！！"
-            elif "API重新連線成功" in message:
+            elif "API連線成功" in message or "API重新連線成功" in message:
                 log_message = "Telegram ［API連線成功］訊息發送成功！！！"
             else:
                 log_message = "Telegram 訊息發送成功！！！"
             
             # 發送前端系統日誌
             try:
+                # 判斷日誌類型：API連線異常為warning，其他為success
+                log_type = 'warning' if 'API連線異常' in log_message else 'success'
                 requests.post(
                     f'http://127.0.0.1:{CURRENT_PORT}/api/system_log',
-                    json={'message': log_message, 'type': 'success'},
+                    json={'message': log_message, 'type': log_type},
                     timeout=5
                 )
             except:
@@ -5452,7 +5448,7 @@ def get_dynamic_check_interval():
                 return 60  # 1分鐘
             # 非交易時間：每10分鐘檢查
             else:
-                return 600  # 10分鐘
+                return 3600  # 60分鐘
         else:
             # 如果無法獲取交易狀態，預設使用較長的間隔
             return 600
@@ -5571,6 +5567,300 @@ def stop_connection_monitor():
         connection_monitor_timer.cancel()
         connection_monitor_timer = None
         print("已停止連線監控器")
+
+def get_contract_point_value(contract_code):
+    """獲取合約點值"""
+    if 'TXF' in contract_code:
+        return 200  # 大台每點200元
+    elif 'MXF' in contract_code:
+        return 50   # 小台每點50元
+    elif 'TMF' in contract_code:
+        return 10   # 微台每點10元
+    else:
+        return 200  # 預設值
+
+def analyze_position_changes(trades):
+    """分析持倉變化來改善開平倉判斷"""
+    position_tracker = {}  # 追蹤每個合約的持倉狀態
+    enhanced_trades = []
+    
+    for trade in trades:
+        raw_data = trade.get('raw_data', {})
+        order = raw_data.get('order', {})
+        
+        # 只處理有成交的訂單
+        if trade.get('type') != 'deal':
+            continue
+            
+        # 嘗試多種方式獲取合約代碼
+        contract_code = ''
+        contract_data = order.get('contract', {})
+        
+        if isinstance(contract_data, dict):
+            contract_code = contract_data.get('code', '')
+        elif isinstance(contract_data, str):
+            contract_code = contract_data
+        
+        # 如果仍然沒有找到，嘗試從原始交易記錄中獲取
+        if not contract_code:
+            contract_code = trade.get('raw_data', {}).get('contract', {}).get('code', '')
+        
+        if not contract_code:
+            continue
+            
+        action = order.get('action', '')
+        quantity = order.get('quantity', 0)
+        price = order.get('price', 0)
+        declared_oc_type = order.get('oc_type', '')
+        
+        # 初始化合約追蹤器
+        if contract_code not in position_tracker:
+            position_tracker[contract_code] = {'net_position': 0, 'trades': []}
+        
+        # 計算實際的開平倉類型
+        current_position = position_tracker[contract_code]['net_position']
+        actual_oc_type = declared_oc_type
+        
+        # 如果沒有明確的 oc_type，根據持倉狀態推斷
+        if not declared_oc_type or declared_oc_type not in ['New', 'Cover']:
+            if action == 'Buy':
+                # 買入：如果目前是空單持倉，則為平倉；否則為開倉
+                actual_oc_type = 'Cover' if current_position < 0 else 'New'
+            elif action == 'Sell':
+                # 賣出：如果目前是多單持倉，則為平倉；否則為開倉
+                actual_oc_type = 'Cover' if current_position > 0 else 'New'
+        
+        # 更新持倉
+        if action == 'Buy':
+            position_tracker[contract_code]['net_position'] += quantity
+        elif action == 'Sell':
+            position_tracker[contract_code]['net_position'] -= quantity
+        
+        # 記錄交易
+        trade_info = {
+            'original_trade': trade,
+            'contract_code': contract_code,
+            'action': action,
+            'quantity': quantity,
+            'price': price,
+            'actual_oc_type': actual_oc_type,
+            'declared_oc_type': declared_oc_type,
+            'timestamp': trade.get('timestamp', ''),
+            'order_id': order.get('id', '')
+        }
+        
+        position_tracker[contract_code]['trades'].append(trade_info)
+        enhanced_trades.append(trade_info)
+    
+    return enhanced_trades, position_tracker
+
+def calculate_trade_pnl(open_trades, close_trade):
+    """計算平倉損益（FIFO 先進先出原則）"""
+    if not open_trades or close_trade['actual_oc_type'] != 'Cover':
+        return 0, []
+    
+    contract_code = close_trade['contract_code']
+    point_value = get_contract_point_value(contract_code)
+    close_action = close_trade['action']
+    close_price = close_trade['price']
+    close_quantity = close_trade['quantity']
+    
+    total_pnl = 0
+    used_opens = []
+    remaining_quantity = close_quantity
+    
+    # 根據平倉方向確定需要配對的開倉類型
+    required_open_action = 'Buy' if close_action == 'Sell' else 'Sell'
+    
+    # 按時間順序處理開倉（FIFO）
+    for open_trade in open_trades:
+        if (remaining_quantity <= 0 or 
+            open_trade['actual_oc_type'] != 'New' or 
+            open_trade['action'] != required_open_action):
+            continue
+        
+        # 計算可配對的數量
+        available_quantity = open_trade['quantity'] - open_trade.get('used_quantity', 0)
+        if available_quantity <= 0:
+            continue
+        
+        paired_quantity = min(remaining_quantity, available_quantity)
+        
+        # 計算損益
+        open_price = open_trade['price']
+        if close_action == 'Sell':  # 平多倉
+            pnl = (close_price - open_price) * paired_quantity * point_value
+        else:  # 平空倉
+            pnl = (open_price - close_price) * paired_quantity * point_value
+        
+        total_pnl += pnl
+        
+        # 記錄使用的開倉
+        used_opens.append({
+            'open_trade': open_trade,
+            'paired_quantity': paired_quantity,
+            'pnl': pnl
+        })
+        
+        # 更新剩餘數量
+        remaining_quantity -= paired_quantity
+        open_trade['used_quantity'] = open_trade.get('used_quantity', 0) + paired_quantity
+    
+    return total_pnl, used_opens
+
+def analyze_simple_trading_stats(trades):
+    """簡單分析交易統計（簡單配對開平倉，計算單筆損益）"""
+    cover_trades = []
+    total_cover_quantity = 0
+    
+    # 分別收集開倉和平倉交易
+    open_trades = []
+    close_trades = []
+    
+    for trade in trades:
+        # 只處理成交記錄
+        if trade.get('type') != 'deal':
+            continue
+            
+        raw_data = trade.get('raw_data', {})
+        order = raw_data.get('order', {})
+        
+        # 獲取基本資訊
+        oc_type = order.get('oc_type', '')
+        action = order.get('action', '')
+        quantity = order.get('quantity', 0)
+        price = order.get('price', 0)
+        timestamp = trade.get('timestamp', '')
+        
+        # 獲取合約資訊
+        contract_code = ''
+        contract_data = order.get('contract', {})
+        if isinstance(contract_data, dict):
+            contract_code = contract_data.get('code', '')
+        elif isinstance(contract_data, str):
+            contract_code = contract_data
+        
+        if not contract_code:
+            contract_code = trade.get('raw_data', {}).get('contract', {}).get('code', '')
+        
+        if not contract_code:
+            continue
+            
+        contract_name = get_contract_name_from_code(contract_code)
+        
+        # 分類開倉和平倉
+        if oc_type == 'New':
+            open_trades.append({
+                'contract_code': contract_code,
+                'contract_name': contract_name,
+                'action': action,
+                'quantity': quantity,
+                'price': price,
+                'timestamp': timestamp
+            })
+        elif oc_type == 'Cover':
+            close_trades.append({
+                'contract_code': contract_code,
+                'contract_name': contract_name,
+                'action': action,
+                'quantity': quantity,
+                'price': price,
+                'timestamp': timestamp
+            })
+    
+    # 簡單配對平倉交易，找對應的開倉價格
+    for close_trade in close_trades:
+        total_cover_quantity += close_trade['quantity']
+        
+        # 找對應的開倉交易（簡單配對：同合約、反向動作）
+        required_open_action = 'Buy' if close_trade['action'] == 'Sell' else 'Sell'
+        open_price = None
+        
+        # 從開倉交易中找最接近的價格（時間上最早的）
+        for open_trade in open_trades:
+            if (open_trade['contract_code'] == close_trade['contract_code'] and
+                open_trade['action'] == required_open_action):
+                open_price = open_trade['price']
+                break  # 使用第一個找到的開倉價格
+        
+        # 計算單筆損益（如果找到開倉價格）
+        pnl = 0
+        if open_price is not None:
+            point_value = get_contract_point_value(close_trade['contract_code'])
+            if close_trade['action'] == 'Sell':  # 平多倉
+                pnl = (close_trade['price'] - open_price) * close_trade['quantity'] * point_value
+            else:  # 平空倉
+                pnl = (open_price - close_trade['price']) * close_trade['quantity'] * point_value
+        
+        action_display = '多單' if close_trade['action'] == 'Sell' else '空單'
+        
+        cover_trades.append({
+            'contract_name': close_trade['contract_name'],
+            'action': action_display,
+            'quantity': f"{close_trade['quantity']}口",
+            'open_price': f"{int(open_price):,}" if open_price is not None else "未知",
+            'cover_price': f"{int(close_trade['price']):,}",
+            'pnl': int(pnl),
+            'timestamp': close_trade['timestamp']
+        })
+    
+    return cover_trades, total_cover_quantity
+
+def analyze_daily_trades_with_pnl(trades):
+    """分析每日交易並計算損益"""
+    print(f"  開始分析 {len(trades)} 筆交易記錄...")
+    enhanced_trades, position_tracker = analyze_position_changes(trades)
+    print(f"  識別出 {len(enhanced_trades)} 筆有效成交記錄")
+    
+    # 為每個合約建立開倉列表
+    open_positions = {}
+    cover_trades_with_pnl = []
+    total_cover_quantity = 0
+    
+    # 統計開平倉數量
+    open_count = sum(1 for t in enhanced_trades if t['actual_oc_type'] == 'New')
+    close_count = sum(1 for t in enhanced_trades if t['actual_oc_type'] == 'Cover')
+    print(f"  開倉交易：{open_count} 筆，平倉交易：{close_count} 筆")
+    
+    for trade_info in enhanced_trades:
+        contract_code = trade_info['contract_code']
+        
+        if contract_code not in open_positions:
+            open_positions[contract_code] = []
+        
+        if trade_info['actual_oc_type'] == 'New':
+            # 開倉交易：加入開倉列表
+            open_positions[contract_code].append(trade_info)
+        
+        elif trade_info['actual_oc_type'] == 'Cover':
+            # 平倉交易：計算損益
+            pnl, used_opens = calculate_trade_pnl(
+                open_positions[contract_code], 
+                trade_info
+            )
+            
+            total_cover_quantity += trade_info['quantity']
+            
+            # 構建平倉交易明細
+            contract_name = get_contract_name_from_code(contract_code)
+            action_display = '多單' if trade_info['action'] == 'Sell' else '空單'
+            
+            cover_trades_with_pnl.append({
+                'contract_name': contract_name,
+                'action': action_display,
+                'quantity': f"{trade_info['quantity']}口",
+                'order_price': f"{int(trade_info['price']):,}",
+                'cover_price': f"{int(trade_info['price']):,}",
+                'pnl': int(pnl),
+                'used_opens': used_opens,
+                                 'timestamp': trade_info['timestamp']
+                          })
+     
+     # 最終統計
+    total_pnl = sum(trade.get('pnl', 0) for trade in cover_trades_with_pnl)
+    print(f"  損益計算完成：{len(cover_trades_with_pnl)} 筆平倉，總損益 {total_pnl:,} TWD")
+     
+    return cover_trades_with_pnl, total_cover_quantity
 
 if __name__ == '__main__':
     # 在其他初始化代碼之前添加
