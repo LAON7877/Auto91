@@ -1,5 +1,139 @@
 # 開發者指南
 
+## 最新更新 (v1.3.9 - 2025-07-09)
+
+### 交易月報功能實現
+
+#### 功能概述
+交易月報功能在每月最後一個交易日的日報生成後自動生成，提供當月完整的交易統計和分析。
+
+#### 實現細節
+
+1. **月末交易日判斷**
+```python
+def is_last_trading_day_of_month():
+    """判斷今天是否為當月最後一個交易日"""
+    try:
+        today = datetime.now()
+        last_day = today.replace(day=1) + timedelta(days=32)
+        last_day = last_day.replace(day=1) - timedelta(days=1)
+        
+        # 從今天開始往後找，直到找到下一個交易日
+        current_date = today
+        while current_date <= last_day:
+            # 檢查是否為交易日
+            response = requests.get(
+                f'http://127.0.0.1:{CURRENT_PORT}/api/trading/status?date={current_date.strftime("%Y-%m-%d")}',
+                timeout=5
+            )
+            if response.status_code == 200:
+                data = response.json()
+                # 如果今天是交易日，且下一個交易日已經是下個月了，則今天是本月最後一個交易日
+                if data.get('is_trading_day', False) and current_date == today:
+                    return True
+            current_date += timedelta(days=1)
+        
+        return False
+        
+    except Exception as e:
+        print(f"檢查月末交易日失敗: {e}")
+        return False
+```
+
+2. **月報生成流程**
+```python
+def generate_monthly_trading_report():
+    """生成當月交易月報"""
+    try:
+        # 建立月報資料夾
+        report_dir = os.path.join(os.path.dirname(__file__), 'monthly_reports')
+        os.makedirs(report_dir, exist_ok=True)
+        
+        # 設定月報檔案名稱
+        report_file = os.path.join(report_dir, f'{year}-{month}月交易報表.xlsx')
+        
+        # 建立工作簿和工作表
+        wb = Workbook()
+        ws = wb.active
+        
+        # 設定格式
+        for col in ws.columns:
+            ws.column_dimensions[col[0].column_letter].width = 19
+            
+        # 生成四個區塊
+        generate_overview_section(ws)  # 交易總覽
+        generate_account_section(ws)   # 帳戶狀態
+        generate_trades_section(ws)    # 交易明細
+        generate_position_section(ws)  # 持倉狀態
+        
+        # 儲存並通知
+        wb.save(report_file)
+        send_notification(report_file)
+        
+        return True
+        
+    except Exception as e:
+        print(f"生成月報失敗: {e}")
+        return False
+```
+
+3. **延遲生成機制**
+```python
+def delayed_generate_reports():
+    """延遲生成日報和月報"""
+    try:
+        # 先等待30秒後生成日報
+        time.sleep(30)
+        generate_daily_report()
+        
+        # 如果是月末最後交易日，再等30秒生成月報
+        if is_last_trading_day_of_month():
+            time.sleep(30)
+            generate_monthly_trading_report()
+            
+    except Exception as e:
+        print(f"延遲生成報表失敗: {e}")
+```
+
+#### 月報格式規範
+
+1. **基本設定**
+   - 所有欄寬固定為 19
+   - 區塊標題使用藍色背景（B8CCE4）
+   - 標題置中對齊
+
+2. **區塊內容**
+   - 交易總覽：當月統計數據
+   - 帳戶狀態：當月帳戶變化
+   - 交易明細：當月平倉記錄
+   - 持倉狀態：月底持倉情況
+
+3. **數字格式**
+   - 整數使用千分位逗號
+   - 百分比保留兩位小數
+   - 金額顯示 TWD 單位
+
+#### 注意事項
+
+1. **生成時機**
+   - 每月最後一個交易日
+   - 日報生成後延遲30秒
+   - 確保當月有交易記錄
+
+2. **錯誤處理**
+   - 檢查資料夾存在
+   - 驗證數據完整性
+   - 異常時提供錯誤日誌
+
+3. **通知機制**
+   - 前端系統日誌
+   - Telegram 即時通知
+   - 包含檔案路徑資訊
+
+---
+
+# 開發者指南
+
 ## 最新更新 (v1.3.8 - 2025-07-08)
 
 ### 交易統計格式優化與損益計算改善

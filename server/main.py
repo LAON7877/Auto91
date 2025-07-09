@@ -18,6 +18,9 @@ from datetime import datetime, timezone, timedelta
 import csv
 import logging
 import schedule
+import openpyxl
+from openpyxl.styles import Alignment, PatternFill, Font
+from openpyxl.utils import get_column_letter
 
 # 永豐API相關
 try:
@@ -3700,6 +3703,166 @@ def check_margin_changes():
     except Exception as e:
         print(f"檢查保證金變更失敗: {e}")
 
+def generate_trading_report(trades, account_data, position_data, cover_trades, total_orders, total_cancels, total_trades, total_cover_quantity, contract_pnl):
+    """生成交易日報Excel文件"""
+    try:
+        # 創建交易日報目錄
+        report_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), '交易日報')
+        os.makedirs(report_dir, exist_ok=True)
+        
+        # 創建工作簿和工作表
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        
+        # 設置所有欄寬為19
+        for col in range(1, 12):
+            ws.column_dimensions[get_column_letter(col)].width = 19
+            
+        # 設置藍色背景和置中對齊
+        blue_fill = PatternFill(start_color='B8CCE4', end_color='B8CCE4', fill_type='solid')
+        center_alignment = Alignment(horizontal='center', vertical='center')
+        
+        # 交易總覽區塊
+        ws['A1'] = '交易總覽'
+        ws['A1'].fill = blue_fill
+        ws['A1'].alignment = center_alignment
+        
+        # 交易總覽標題
+        titles = ['委託數量', '取消數量', '成交數量', '平倉口數', '大台損益', '小台損益', '微台損益']
+        for i, title in enumerate(titles, 2):
+            ws[f'A{i}'] = title
+            ws[f'A{i}'].alignment = center_alignment
+        
+        # 交易總覽內容
+        ws['B2'] = f"{total_orders} 筆"
+        ws['B3'] = f"{total_cancels} 筆"
+        ws['B4'] = f"{total_trades} 筆"
+        ws['B5'] = f"{total_cover_quantity} 口"
+        ws['B6'] = f"＄{format_number_for_notification(contract_pnl['TXF'])} TWD"
+        ws['B7'] = f"＄{format_number_for_notification(contract_pnl['MXF'])} TWD"
+        ws['B8'] = f"＄{format_number_for_notification(contract_pnl['TMF'])} TWD"
+        
+        # 帳戶狀態區塊
+        current_row = 10
+        ws[f'A{current_row}'] = '帳戶狀態'
+        ws[f'A{current_row}'].fill = blue_fill
+        ws[f'A{current_row}'].alignment = center_alignment
+        
+        # 帳戶狀態標題和內容
+        account_titles = ['權益總值', '權益總額', '今日餘額', '昨日餘額', '可用保證金', '原始保證金', 
+                         '維持保證金', '風險指標', '手續費', '期交稅', '本日平倉損益']
+        for i, title in enumerate(account_titles):
+            row = current_row + i + 1
+            ws[f'A{row}'] = title
+            ws[f'A{row}'].alignment = center_alignment
+            
+            value = account_data.get(title, 0)
+            if title == '風險指標':
+                ws[f'B{row}'] = f"{format_number_for_notification(value)}%"
+            elif title == '本日平倉損益':
+                ws[f'B{row}'] = f"＄{format_number_for_notification(value)} TWD"
+            else:
+                ws[f'B{row}'] = format_number_for_notification(value)
+        
+        # 交易明細區塊
+        current_row += len(account_titles) + 2
+        ws[f'A{current_row}'] = '交易明細'
+        ws[f'A{current_row}'].fill = blue_fill
+        ws[f'A{current_row}'].alignment = center_alignment
+        
+        # 交易明細標題
+        detail_titles = ['成交時間', '成交單號', '選用合約', '訂單類型', '成交類型', '成交部位', 
+                        '成交動作', '成交數量', '開倉價格', '平倉價格', '平倉損益']
+        for i, title in enumerate(detail_titles):
+            col = get_column_letter(i + 1)
+            ws[f'{col}{current_row + 1}'] = title
+            ws[f'{col}{current_row + 1}'].alignment = center_alignment
+        
+        # 交易明細內容
+        if cover_trades:
+            for i, trade in enumerate(cover_trades):
+                row = current_row + i + 2
+                # 從 trades 中找到對應的完整交易信息
+                trade_info = next((t for t in trades if t.get('type') == 'deal' and 
+                                 t.get('raw_data', {}).get('order', {}).get('id') == trade.get('order_id')), None)
+                
+                if trade_info:
+                    order = trade_info.get('raw_data', {}).get('order', {})
+                    ws[f'A{row}'] = trade.get('timestamp', '')
+                    ws[f'B{row}'] = order.get('id', '')
+                    ws[f'C{row}'] = f"{trade['contract_name']} ({order.get('delivery_date', '')})"
+                    ws[f'D{row}'] = f"{order.get('price_type', '')} {order.get('order_type', '')}"
+                    ws[f'E{row}'] = '手動平倉' if order.get('is_manual', False) else '自動平倉'
+                    ws[f'F{row}'] = trade['contract_name']
+                    ws[f'G{row}'] = trade['action']
+                    ws[f'H{row}'] = trade['quantity']
+                    ws[f'I{row}'] = trade['open_price']
+                    ws[f'J{row}'] = trade['cover_price']
+                    ws[f'K{row}'] = f"＄{trade['pnl']:,} TWD" if trade['pnl'] != 0 else ''
+        
+        # 持倉狀態區塊
+        current_row = current_row + (len(cover_trades) if cover_trades else 0) + 3
+        ws[f'A{current_row}'] = '持倉狀態'
+        ws[f'A{current_row}'].fill = blue_fill
+        ws[f'A{current_row}'].alignment = center_alignment
+        
+        # 持倉狀態標題
+        position_titles = ['成交時間', '成交單號', '選用合約', '訂單類型', '成交類型', '成交部位', 
+                         '成交動作', '成交數量', '開倉價格', '平倉價格', '未實現損益']
+        for i, title in enumerate(position_titles):
+            col = get_column_letter(i + 1)
+            ws[f'{col}{current_row + 1}'] = title
+            ws[f'{col}{current_row + 1}'].alignment = center_alignment
+        
+        # 持倉狀態內容
+        if position_data.get('has_positions', False):
+            positions = position_data.get('data', {})
+            row_offset = 2
+            for code, pos in positions.items():
+                if pos.get('動作', '-') != '-':
+                    ws[f'A{current_row + row_offset}'] = pos.get('開倉時間', '')
+                    ws[f'B{current_row + row_offset}'] = pos.get('委託單號', '')
+                    ws[f'C{current_row + row_offset}'] = f"{pos.get('商品名稱', '')} ({pos.get('到期月份', '')})"
+                    ws[f'D{current_row + row_offset}'] = f"{pos.get('委託價格類型', '')} {pos.get('委託條件', '')}"
+                    ws[f'E{current_row + row_offset}'] = '手動開倉' if pos.get('is_manual', False) else '自動開倉'
+                    ws[f'F{current_row + row_offset}'] = pos.get('商品名稱', '')
+                    ws[f'G{current_row + row_offset}'] = pos.get('動作', '')
+                    ws[f'H{current_row + row_offset}'] = f"{pos.get('數量', '')} 口"
+                    ws[f'I{current_row + row_offset}'] = pos.get('均價', '')
+                    ws[f'J{current_row + row_offset}'] = '0'
+                    
+                    unrealized_pnl = pos.get('未實現盈虧', '0')
+                    pnl_value = int(unrealized_pnl.replace(',', '')) if unrealized_pnl != '-' else 0
+                    ws[f'K{current_row + row_offset}'] = f"＄{pnl_value:,} TWD"
+                    
+                    row_offset += 1
+        
+        # 保存文件
+        today = datetime.now().strftime('%Y-%m-%d')
+        filename = f"{today}.xlsx"
+        filepath = os.path.join(report_dir, filename)
+        wb.save(filepath)
+        
+        # 發送 Telegram 通知
+        message = f"{filename} 交易日報已生成！！！"
+        send_telegram_message(message)
+        
+        # 添加前端日誌
+        try:
+            requests.post(
+                f'http://127.0.0.1:{CURRENT_PORT}/api/system_log',
+                json={'message': "Telegram［交易日報］訊息發送成功！！！", 'type': 'info'},
+                timeout=5
+            )
+        except:
+            pass
+            
+        return True
+        
+    except Exception as e:
+        print(f"生成交易日報失敗: {e}")
+        return False
+
 def send_margin_change_notification(changes):
     """發送保證金變更通知"""
     try:
@@ -3799,6 +3962,369 @@ def check_saturday_trading_statistics():
     except Exception as e:
         print(f"檢查週六交易統計失敗: {e}")
 
+def is_last_trading_day_of_month():
+    """檢查今天是否為當月最後一個交易日"""
+    try:
+        today = datetime.now().date()
+        
+        # 獲取當月最後一天
+        next_month = today.replace(day=28) + timedelta(days=4)
+        last_day = next_month - timedelta(days=next_month.day)
+        
+        # 如果今天就是當月最後一天，直接檢查是否為交易日
+        if today == last_day:
+            response = requests.get(f'http://127.0.0.1:{CURRENT_PORT}/api/trading/status', timeout=5)
+            if response.status_code == 200:
+                return response.json().get('is_trading_day', False)
+            return False
+        
+        # 從今天開始往後找，直到找到下一個交易日
+        current_date = today
+        while current_date <= last_day:
+            response = requests.get(
+                f'http://127.0.0.1:{CURRENT_PORT}/api/trading/status?date={current_date.strftime("%Y-%m-%d")}',
+                timeout=5
+            )
+            if response.status_code == 200:
+                data = response.json()
+                # 如果今天是交易日，且下一個交易日已經是下個月了，則今天是本月最後一個交易日
+                if data.get('is_trading_day', False) and current_date == today:
+                    next_date = current_date + timedelta(days=1)
+                    while next_date <= last_day:
+                        next_response = requests.get(
+                            f'http://127.0.0.1:{CURRENT_PORT}/api/trading/status?date={next_date.strftime("%Y-%m-%d")}',
+                            timeout=5
+                        )
+                        if next_response.status_code == 200:
+                            if next_response.json().get('is_trading_day', False):
+                                return False
+                        next_date += timedelta(days=1)
+                    return True
+            current_date += timedelta(days=1)
+        
+        return False
+        
+    except Exception as e:
+        print(f"檢查月末交易日失敗: {e}")
+        return False
+
+def generate_monthly_trading_report():
+    """生成當月交易月報"""
+    try:
+        # 獲取當月日期範圍
+        today = datetime.now()
+        year = today.year
+        month = today.month
+        
+        # 創建交易月報目錄
+        monthly_report_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), '交易月報')
+        os.makedirs(monthly_report_dir, exist_ok=True)
+        
+        # 讀取當月所有日報
+        daily_report_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), '交易日報')
+        monthly_data = {
+            'total_orders': 0,
+            'total_cancels': 0,
+            'total_trades': 0,
+            'total_cover_quantity': 0,
+            'contract_pnl': {'TXF': 0, 'MXF': 0, 'TMF': 0},
+            'account_data': {
+                '權益總值': 0,
+                '權益總額': 0,
+                '今日餘額': 0,
+                '昨日餘額': 0,
+                '可用保證金': 0,
+                '原始保證金': 0,
+                '維持保證金': 0,
+                '風險指標': 0,
+                '手續費': 0,
+                '期交稅': 0,
+                '本日平倉損益': 0
+            },
+            'cover_trades': [],
+            'position_data': None  # 使用最後一天的持倉數據
+        }
+        
+        # 檢查是否有當月的日報
+        has_reports = False
+        for filename in os.listdir(daily_report_dir):
+            if filename.endswith('.xlsx'):
+                try:
+                    file_date = datetime.strptime(filename.split('.')[0], '%Y-%m-%d')
+                    if file_date.year == year and file_date.month == month:
+                        has_reports = True
+                        filepath = os.path.join(daily_report_dir, filename)
+                        wb = openpyxl.load_workbook(filepath, data_only=True)
+                        ws = wb.active
+                        
+                        # 讀取交易總覽數據
+                        monthly_data['total_orders'] += int(ws['B2'].value.split()[0])
+                        monthly_data['total_cancels'] += int(ws['B3'].value.split()[0])
+                        monthly_data['total_trades'] += int(ws['B4'].value.split()[0])
+                        monthly_data['total_cover_quantity'] += int(ws['B5'].value.split()[0])
+                        
+                        # 讀取合約損益
+                        monthly_data['contract_pnl']['TXF'] += int(ws['B6'].value.strip('＄').strip(' TWD').replace(',', ''))
+                        monthly_data['contract_pnl']['MXF'] += int(ws['B7'].value.strip('＄').strip(' TWD').replace(',', ''))
+                        monthly_data['contract_pnl']['TMF'] += int(ws['B8'].value.strip('＄').strip(' TWD').replace(',', ''))
+                        
+                        # 讀取帳戶數據
+                        # 讀取所有帳戶狀態數據
+                        account_row = 11  # 帳戶狀態從第11行開始
+                        for title in monthly_data['account_data'].keys():
+                            value = ws[f'B{account_row}'].value
+                            if value:
+                                # 移除金額格式
+                                if isinstance(value, str):
+                                    value = value.strip('＄').strip(' TWD').strip('%').replace(',', '')
+                                # 轉換為數字並加總
+                                try:
+                                    if title == '風險指標':
+                                        # 風險指標取平均值
+                                        current_count = monthly_data['account_data'][title]
+                                        if current_count == 0:
+                                            monthly_data['account_data'][title] = float(value)
+                                        else:
+                                            monthly_data['account_data'][title] = (monthly_data['account_data'][title] + float(value)) / 2
+                                    else:
+                                        monthly_data['account_data'][title] += int(value)
+                                except ValueError as e:
+                                    print(f"轉換數值失敗 {title}: {value} - {e}")
+                            account_row += 1
+                        
+                except Exception as e:
+                    print(f"讀取日報 {filename} 失敗: {e}")
+                    continue
+        
+        if not has_reports:
+            print("當月無交易日報，不生成月報")
+            return False
+        
+        # 創建月報 Excel
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        
+        # 設置所有欄寬為19
+        for col in range(1, 12):
+            ws.column_dimensions[get_column_letter(col)].width = 19
+        
+        # 設置藍色背景和置中對齊
+        blue_fill = PatternFill(start_color='B8CCE4', end_color='B8CCE4', fill_type='solid')
+        center_alignment = Alignment(horizontal='center', vertical='center')
+        
+        # 交易總覽區塊
+        ws['A1'] = '交易總覽'
+        ws['A1'].fill = blue_fill
+        ws['A1'].alignment = center_alignment
+        
+        # 交易總覽標題和內容
+        titles = ['委託數量', '取消數量', '成交數量', '平倉口數', '大台損益', '小台損益', '微台損益']
+        values = [
+            f"{monthly_data['total_orders']} 筆",
+            f"{monthly_data['total_cancels']} 筆",
+            f"{monthly_data['total_trades']} 筆",
+            f"{monthly_data['total_cover_quantity']} 口",
+            f"＄{format_number_for_notification(monthly_data['contract_pnl']['TXF'])} TWD",
+            f"＄{format_number_for_notification(monthly_data['contract_pnl']['MXF'])} TWD",
+            f"＄{format_number_for_notification(monthly_data['contract_pnl']['TMF'])} TWD"
+        ]
+        
+        for i, (title, value) in enumerate(zip(titles, values), 2):
+            ws[f'A{i}'] = title
+            ws[f'A{i}'].alignment = center_alignment
+            ws[f'B{i}'] = value
+        
+        # 帳戶狀態區塊
+        current_row = 10
+        ws[f'A{current_row}'] = '帳戶狀態'
+        ws[f'A{current_row}'].fill = blue_fill
+        ws[f'A{current_row}'].alignment = center_alignment
+        
+        # 帳戶狀態標題和內容
+        account_titles = list(monthly_data['account_data'].keys())
+        for i, title in enumerate(account_titles):
+            row = current_row + i + 1
+            ws[f'A{row}'] = title
+            ws[f'A{row}'].alignment = center_alignment
+            
+            value = monthly_data['account_data'][title]
+            if title == '風險指標':
+                ws[f'B{row}'] = f"{format_number_for_notification(value)}%"
+            elif title == '本日平倉損益':
+                ws[f'B{row}'] = f"＄{format_number_for_notification(value)} TWD"
+            else:
+                ws[f'B{row}'] = format_number_for_notification(value)
+        
+        # 交易明細區塊
+        current_row += len(account_titles) + 2
+        ws[f'A{current_row}'] = '交易明細'
+        ws[f'A{current_row}'].fill = blue_fill
+        ws[f'A{current_row}'].alignment = center_alignment
+        
+        # 交易明細標題
+        detail_titles = ['成交時間', '成交單號', '選用合約', '訂單類型', '成交類型', '成交部位', 
+                        '成交動作', '成交數量', '開倉價格', '平倉價格', '平倉損益']
+        for i, title in enumerate(detail_titles):
+            col = get_column_letter(i + 1)
+            ws[f'{col}{current_row + 1}'] = title
+            ws[f'{col}{current_row + 1}'].alignment = center_alignment
+        
+        # 收集所有平倉交易
+        all_cover_trades = []
+        for filename in os.listdir(daily_report_dir):
+            if filename.endswith('.xlsx'):
+                try:
+                    file_date = datetime.strptime(filename.split('.')[0], '%Y-%m-%d')
+                    if file_date.year == year and file_date.month == month:
+                        filepath = os.path.join(daily_report_dir, filename)
+                        wb_daily = openpyxl.load_workbook(filepath, data_only=True)
+                        ws_daily = wb_daily.active
+                        
+                        # 找到交易明細區塊
+                        detail_start = None
+                        for row in range(1, ws_daily.max_row + 1):
+                            if ws_daily[f'A{row}'].value == '交易明細':
+                                detail_start = row + 2  # 跳過標題行
+                                break
+                        
+                        if detail_start:
+                            row = detail_start
+                            while row < ws_daily.max_row and ws_daily[f'A{row}'].value:
+                                trade_detail = {
+                                    'timestamp': ws_daily[f'A{row}'].value,
+                                    'order_id': ws_daily[f'B{row}'].value,
+                                    'contract': ws_daily[f'C{row}'].value,
+                                    'order_type': ws_daily[f'D{row}'].value,
+                                    'exec_type': ws_daily[f'E{row}'].value,
+                                    'position': ws_daily[f'F{row}'].value,
+                                    'action': ws_daily[f'G{row}'].value,
+                                    'quantity': ws_daily[f'H{row}'].value,
+                                    'open_price': ws_daily[f'I{row}'].value,
+                                    'cover_price': ws_daily[f'J{row}'].value,
+                                    'pnl': ws_daily[f'K{row}'].value
+                                }
+                                all_cover_trades.append(trade_detail)
+                                row += 1
+                        
+                except Exception as e:
+                    print(f"讀取日報交易明細失敗 {filename}: {e}")
+                    continue
+        
+        # 寫入所有平倉交易
+        if all_cover_trades:
+            for i, trade in enumerate(all_cover_trades):
+                row = current_row + i + 2
+                ws[f'A{row}'] = trade['timestamp']
+                ws[f'B{row}'] = trade['order_id']
+                ws[f'C{row}'] = trade['contract']
+                ws[f'D{row}'] = trade['order_type']
+                ws[f'E{row}'] = trade['exec_type']
+                ws[f'F{row}'] = trade['position']
+                ws[f'G{row}'] = trade['action']
+                ws[f'H{row}'] = trade['quantity']
+                ws[f'I{row}'] = trade['open_price']
+                ws[f'J{row}'] = trade['cover_price']
+                ws[f'K{row}'] = trade['pnl']
+        
+        # 持倉狀態區塊
+        current_row = current_row + (len(all_cover_trades) if all_cover_trades else 0) + 3
+        ws[f'A{current_row}'] = '持倉狀態'
+        ws[f'A{current_row}'].fill = blue_fill
+        ws[f'A{current_row}'].alignment = center_alignment
+        
+        # 持倉狀態標題
+        position_titles = ['成交時間', '成交單號', '選用合約', '訂單類型', '成交類型', '成交部位', 
+                         '成交動作', '成交數量', '開倉價格', '平倉價格', '未實現損益']
+        for i, title in enumerate(position_titles):
+            col = get_column_letter(i + 1)
+            ws[f'{col}{current_row + 1}'] = title
+            ws[f'{col}{current_row + 1}'].alignment = center_alignment
+        
+        # 讀取最後一天的持倉狀態
+        latest_position_data = None
+        latest_date = None
+        for filename in os.listdir(daily_report_dir):
+            if filename.endswith('.xlsx'):
+                try:
+                    file_date = datetime.strptime(filename.split('.')[0], '%Y-%m-%d')
+                    if file_date.year == year and file_date.month == month:
+                        if latest_date is None or file_date > latest_date:
+                            latest_date = file_date
+                            filepath = os.path.join(daily_report_dir, filename)
+                            wb_daily = openpyxl.load_workbook(filepath, data_only=True)
+                            ws_daily = wb_daily.active
+                            
+                            # 找到持倉狀態區塊
+                            position_start = None
+                            for row in range(1, ws_daily.max_row + 1):
+                                if ws_daily[f'A{row}'].value == '持倉狀態':
+                                    position_start = row + 2  # 跳過標題行
+                                    break
+                            
+                            if position_start:
+                                latest_position_data = []
+                                row = position_start
+                                while row < ws_daily.max_row and ws_daily[f'A{row}'].value:
+                                    position = {
+                                        'timestamp': ws_daily[f'A{row}'].value,
+                                        'order_id': ws_daily[f'B{row}'].value,
+                                        'contract': ws_daily[f'C{row}'].value,
+                                        'order_type': ws_daily[f'D{row}'].value,
+                                        'exec_type': ws_daily[f'E{row}'].value,
+                                        'position': ws_daily[f'F{row}'].value,
+                                        'action': ws_daily[f'G{row}'].value,
+                                        'quantity': ws_daily[f'H{row}'].value,
+                                        'price': ws_daily[f'I{row}'].value,
+                                        'cover_price': ws_daily[f'J{row}'].value,
+                                        'unrealized_pnl': ws_daily[f'K{row}'].value
+                                    }
+                                    latest_position_data.append(position)
+                                    row += 1
+                except Exception as e:
+                    print(f"讀取日報持倉狀態失敗 {filename}: {e}")
+                    continue
+        
+        # 寫入最後一天的持倉狀態
+        if latest_position_data:
+            for i, position in enumerate(latest_position_data):
+                row = current_row + i + 2
+                ws[f'A{row}'] = position['timestamp']
+                ws[f'B{row}'] = position['order_id']
+                ws[f'C{row}'] = position['contract']
+                ws[f'D{row}'] = position['order_type']
+                ws[f'E{row}'] = position['exec_type']
+                ws[f'F{row}'] = position['position']
+                ws[f'G{row}'] = position['action']
+                ws[f'H{row}'] = position['quantity']
+                ws[f'I{row}'] = position['price']
+                ws[f'J{row}'] = position['cover_price']
+                ws[f'K{row}'] = position['unrealized_pnl']
+        
+        # 保存文件
+        filename = f"{year}-{month}月交易報表.xlsx"
+        filepath = os.path.join(monthly_report_dir, filename)
+        wb.save(filepath)
+        
+        # 發送 Telegram 通知
+        message = f"{filename} 交易月報已生成！！！"
+        send_telegram_message(message)
+        
+        # 添加前端日誌
+        try:
+            requests.post(
+                f'http://127.0.0.1:{CURRENT_PORT}/api/system_log',
+                json={'message': "Telegram［交易月報］訊息發送成功！！！", 'type': 'info'},
+                timeout=5
+            )
+        except:
+            pass
+        
+        return True
+        
+    except Exception as e:
+        print(f"生成交易月報失敗: {e}")
+        return False
+
 def send_daily_trading_statistics():
     """發送每日交易統計"""
     try:
@@ -3823,6 +4349,13 @@ def send_daily_trading_statistics():
         total_cancels = 0  # 取消單量
         total_cover_quantity = 0  # 平倉口數
         cover_trades = []  # 平倉交易明細
+        
+        # 各合約類型的損益統計
+        contract_pnl = {
+            'TXF': 0,  # 大台損益
+            'MXF': 0,  # 小台損益
+            'TMF': 0   # 微台損益
+        }
         
         # 讀取交易記錄
         if os.path.exists(trades_file):
@@ -3855,7 +4388,7 @@ def send_daily_trading_statistics():
                 
                 # 使用基本統計分析平倉口數（不重新計算損益，使用永豐API提供的數據）
                 print(f"正在統計 {len(trades)} 筆交易記錄...")
-                cover_trades, total_cover_quantity = analyze_simple_trading_stats(trades)
+                cover_trades, total_cover_quantity, contract_pnl = analyze_simple_trading_stats(trades)
                 print(f"統計完成：平倉 {total_cover_quantity} 口，{len(cover_trades)} 筆交易")
                         
             except Exception as e:
@@ -3881,6 +4414,9 @@ def send_daily_trading_statistics():
         message += f"取消數量：{total_cancels} 筆\n"
         message += f"成交數量：{total_trades} 筆\n"
         message += f"平倉口數：{total_cover_quantity} 口\n"
+        message += f"大台損益＄{format_number_for_notification(contract_pnl['TXF'])} TWD\n"
+        message += f"小台損益＄{format_number_for_notification(contract_pnl['MXF'])} TWD\n"
+        message += f"微台損益＄{format_number_for_notification(contract_pnl['TMF'])} TWD\n"
         message += "═════ 帳戶狀態 ═════\n"
         message += f"權益總值：{format_number_for_notification(account_data.get('權益總值', 0))}\n"
         message += f"權益總額：{format_number_for_notification(account_data.get('權益總額', 0))}\n"
@@ -3959,6 +4495,30 @@ def send_daily_trading_statistics():
             )
         except:
             pass
+            
+                    # 延遲生成報表
+            def delayed_generate_reports():
+                # 先等待30秒後生成日報
+                time.sleep(30)
+                daily_report_result = generate_trading_report(
+                    trades=trades,
+                    account_data=account_data,
+                    position_data=position_data,
+                    cover_trades=cover_trades,
+                    total_orders=total_orders,
+                    total_cancels=total_cancels,
+                    total_trades=total_trades,
+                    total_cover_quantity=total_cover_quantity,
+                    contract_pnl=contract_pnl
+                )
+                
+                # 如果是月末最後一個交易日且日報生成成功，再等待30秒後生成月報
+                if daily_report_result and is_last_trading_day_of_month():
+                    time.sleep(30)
+                    generate_monthly_trading_report()
+            
+            # 在新線程中執行延遲生成報表
+            threading.Thread(target=delayed_generate_reports, daemon=True).start()
         
     except Exception as e:
         print(f"發送每日交易統計失敗: {e}")
@@ -5717,6 +6277,13 @@ def analyze_simple_trading_stats(trades):
     open_trades = []
     close_trades = []
     
+    # 各合約類型的損益統計
+    contract_pnl = {
+        'TXF': 0,  # 大台損益
+        'MXF': 0,  # 小台損益
+        'TMF': 0   # 微台損益
+    }
+    
     for trade in trades:
         # 只處理成交記錄
         if trade.get('type') != 'deal':
@@ -5791,6 +6358,11 @@ def analyze_simple_trading_stats(trades):
                 pnl = (close_trade['price'] - open_price) * close_trade['quantity'] * point_value
             else:  # 平空倉
                 pnl = (open_price - close_trade['price']) * close_trade['quantity'] * point_value
+            
+            # 更新對應合約類型的損益
+            contract_type = close_trade['contract_code'][:3]  # 取前三個字符判斷合約類型
+            if contract_type in contract_pnl:
+                contract_pnl[contract_type] += pnl
         
         action_display = '多單' if close_trade['action'] == 'Sell' else '空單'
         
@@ -5804,7 +6376,7 @@ def analyze_simple_trading_stats(trades):
             'timestamp': close_trade['timestamp']
         })
     
-    return cover_trades, total_cover_quantity
+    return cover_trades, total_cover_quantity, contract_pnl
 
 def analyze_daily_trades_with_pnl(trades):
     """分析每日交易並計算損益"""

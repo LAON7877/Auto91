@@ -1,5 +1,162 @@
 # API 參考文檔
 
+## 最新更新 (v1.3.9 - 2025-07-09)
+
+### 交易月報功能 API
+
+#### 月末交易日判斷 API
+```python
+def is_last_trading_day_of_month():
+    """判斷今天是否為當月最後一個交易日"""
+    try:
+        today = datetime.now()
+        last_day = today.replace(day=1) + timedelta(days=32)
+        last_day = last_day.replace(day=1) - timedelta(days=1)
+        
+        # 從今天開始往後找，直到找到下一個交易日
+        current_date = today
+        while current_date <= last_day:
+            response = requests.get(
+                f'http://127.0.0.1:{CURRENT_PORT}/api/trading/status?date={current_date.strftime("%Y-%m-%d")}',
+                timeout=5
+            )
+            if response.status_code == 200:
+                data = response.json()
+                # 如果今天是交易日，且下一個交易日已經是下個月了，則今天是本月最後一個交易日
+                if data.get('is_trading_day', False) and current_date == today:
+                    next_date = current_date + timedelta(days=1)
+                    while next_date <= last_day:
+                        next_response = requests.get(
+                            f'http://127.0.0.1:{CURRENT_PORT}/api/trading/status?date={next_date.strftime("%Y-%m-%d")}',
+                            timeout=5
+                        )
+                        if next_response.status_code == 200:
+                            if next_response.json().get('is_trading_day', False):
+                                return False
+                        next_date += timedelta(days=1)
+                    return True
+            current_date += timedelta(days=1)
+        
+        return False
+        
+    except Exception as e:
+        print(f"檢查月末交易日失敗: {e}")
+        return False
+```
+
+#### 月報生成 API
+```python
+def generate_monthly_trading_report():
+    """生成當月交易月報"""
+    try:
+        # 獲取當月日期範圍
+        today = datetime.now()
+        year = today.year
+        month = today.month
+        
+        # 建立月報資料夾
+        report_dir = os.path.join(os.path.dirname(__file__), 'monthly_reports')
+        os.makedirs(report_dir, exist_ok=True)
+        
+        # 設定月報檔案名稱
+        report_file = os.path.join(report_dir, f'{year}-{month}月交易報表.xlsx')
+        
+        # 建立工作簿和工作表
+        wb = Workbook()
+        ws = wb.active
+        
+        # 設定所有欄寬為19
+        for col in ws.columns:
+            ws.column_dimensions[col[0].column_letter].width = 19
+            
+        # 設定區塊標題格式（藍色背景、置中）
+        title_fill = PatternFill(start_color='B8CCE4', end_color='B8CCE4', fill_type='solid')
+        title_alignment = Alignment(horizontal='center', vertical='center')
+        
+        # 生成四個區塊：交易總覽、帳戶狀態、交易明細、持倉狀態
+        # ... 具體實現略（與日報格式保持一致）
+        
+        # 儲存檔案
+        wb.save(report_file)
+        
+        # 發送通知
+        message = f"📊 {month}月交易月報已生成！\n檔案：{report_file}"
+        send_telegram_message(message)
+        
+        return True
+        
+    except Exception as e:
+        print(f"生成月報失敗: {e}")
+        return False
+```
+
+#### 延遲生成報表 API
+```python
+def delayed_generate_reports():
+    """延遲生成日報和月報"""
+    try:
+        # 先等待30秒後生成日報
+        time.sleep(30)
+        # 生成日報的代碼...
+        
+        # 如果是月末最後交易日，再等30秒生成月報
+        if is_last_trading_day_of_month():
+            time.sleep(30)
+            generate_monthly_trading_report()
+            
+    except Exception as e:
+        print(f"延遲生成報表失敗: {e}")
+```
+
+### 月報格式
+月報包含四個主要區塊：
+
+#### 1. 交易總覽
+```
+═════ 交易總覽 ═════
+委託數量：xxx 筆
+取消數量：xxx 筆
+成交數量：xxx 筆
+平倉口數：xxx 口
+大台損益：＄xxx,xxx TWD
+小台損益：＄xxx,xxx TWD
+微台損益：＄xxx,xxx TWD
+```
+
+#### 2. 帳戶狀態
+```
+═════ 帳戶狀態 ═════
+權益總值：x,xxx,xxx
+權益總額：x,xxx,xxx
+本月餘額：x,xxx,xxx
+上月餘額：x,xxx,xxx
+可用保證金：xxx,xxx
+原始保證金：xxx,xxx
+維持保證金：xxx,xxx
+風險指標：xx%
+手續費：x,xxx
+期交稅：xxx
+本月平倉損益＄xxx,xxx TWD
+```
+
+#### 3. 交易明細
+```
+═════ 交易明細 ═════
+大台｜多單｜1口｜23,100｜23,200
+＄20,000 TWD
+小台｜空單｜1口｜23,050｜23,000
+＄2,500 TWD
+```
+
+#### 4. 持倉狀態
+```
+═════ 持倉狀態 ═════
+大台｜多單｜2口｜23,050｜＄-200 TWD
+未實現總損益＄-200 TWD
+```
+
+---
+
 ## 最新更新 (v1.3.8 - 2025-07-08)
 
 ### 交易統計格式優化與損益計算 API
