@@ -725,8 +725,15 @@ def get_ngrok_connections():
                         leg = data['session']['legs'][0]
                         connections = leg.get('connections', {})
                         
+                        # 計算webhook請求數量
+                        webhook_count = 0
+                        with global_lock:
+                            for log in custom_request_logs:
+                                if log.get('uri') == '/webhook':
+                                    webhook_count += 1
+                        
                         return {
-                            'ttl': connections.get('ttl', 0),
+                            'ttl': webhook_count,  # 使用webhook請求數量
                             'opn': connections.get('opn', 0),
                             'rt1': connections.get('rt1', 0.00),
                             'rt5': connections.get('rt5', 0.00),
@@ -753,10 +760,12 @@ def add_custom_request_log(method, uri, status, extra_info=None):
     # 建立時間戳（加上日期但前端會只顯示時分秒）
     now = datetime.now()
     time_str = now.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3] + ' CST'
+    display_time_str = now.strftime('%H:%M:%S.%f')[:-3] + ' CST'
     
     # 建立請求記錄
     log_entry = {
         'timestamp': time_str,
+        'display_timestamp': display_time_str,
         'method': method,
         'uri': uri,
         'status': status,
@@ -791,6 +800,7 @@ def get_ngrok_requests():
                 # 格式化時間戳為 ngrok 格式
                 started_at = req.get('started_at', '')
                 time_str = ''
+                display_time_str = ''
                 if started_at:
                     try:
                         # 解析時間戳
@@ -798,10 +808,13 @@ def get_ngrok_requests():
                         # 轉換為台灣時區 (CST)
                         taiwan_tz = timezone(timedelta(hours=8))
                         dt_taiwan = dt.astimezone(taiwan_tz)
-                        # 格式化為 ngrok 格式: HH:MM:SS.mmm CST
-                        time_str = dt_taiwan.strftime('%H:%M:%S.%f')[:-3] + ' CST'
+                        # 完整時間戳用於排序
+                        time_str = dt_taiwan.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3] + ' CST'
+                        # 顯示用時間戳（只有時分秒）
+                        display_time_str = dt_taiwan.strftime('%H:%M:%S.%f')[:-3] + ' CST'
                     except:
                         time_str = ''
+                        display_time_str = ''
                 
                 # 獲取狀態文字
                 status_code = req.get('status', 200)
@@ -809,6 +822,7 @@ def get_ngrok_requests():
                 
                 all_requests.append({
                     'timestamp': time_str,
+                    'display_timestamp': display_time_str,
                     'method': req.get('method', 'GET'),
                     'uri': req.get('uri', '/'),
                     'status': status_code,
@@ -2968,15 +2982,27 @@ def get_simple_order_log_message(contract_name, direction, qty, price, order_id,
         if price == 0:
             price_display = '市價'
         else:
-            price_display = f'$ {price:,.0f}'
+            price_display = f'{price:,.0f}'
         
-        # 格式化方向
-        if str(direction).upper() == 'BUY':
-            direction_display = '多單'
-        elif str(direction).upper() == 'SELL':
-            direction_display = '空單'
+        # 格式化方向 - 修正邏輯
+        if str(octype).upper() == 'NEW':
+            # 開倉：BUY=多單, SELL=空單
+            if str(direction).upper() == 'BUY':
+                direction_display = '多單'
+            else:
+                direction_display = '空單'
+        elif str(octype).upper() == 'COVER':
+            # 平倉：BUY=平空單, SELL=平多單
+            if str(direction).upper() == 'BUY':
+                direction_display = '空單'  # 平空單
+            else:
+                direction_display = '多單'  # 平多單
         else:
-            direction_display = direction
+            # 備援邏輯
+            if str(direction).upper() == 'BUY':
+                direction_display = '多單'
+            else:
+                direction_display = '空單'
         
         # 格式化訂單類型和價格類型
         order_type_display = order_type or 'ROD'
@@ -3718,87 +3744,114 @@ def generate_trading_report(trades, account_data, position_data, cover_trades, t
         for col in range(1, 12):
             ws.column_dimensions[get_column_letter(col)].width = 19
             
-        # 設置藍色背景和置中對齊
-        blue_fill = PatternFill(start_color='B8CCE4', end_color='B8CCE4', fill_type='solid')
+        # 設置灰色背景和置中對齊
+        gray_fill = PatternFill(start_color='D9D9D9', end_color='D9D9D9', fill_type='solid')
         center_alignment = Alignment(horizontal='center', vertical='center')
         
         # 交易總覽區塊
         ws['A1'] = '交易總覽'
-        ws['A1'].fill = blue_fill
+        ws['A1'].fill = gray_fill
         ws['A1'].alignment = center_alignment
         
-        # 交易總覽標題
+        # 交易總覽標題（橫向）
         titles = ['委託數量', '取消數量', '成交數量', '平倉口數', '大台損益', '小台損益', '微台損益']
-        for i, title in enumerate(titles, 2):
-            ws[f'A{i}'] = title
-            ws[f'A{i}'].alignment = center_alignment
+        for i, title in enumerate(titles):
+            col = get_column_letter(i + 1)
+            ws[f'{col}2'] = title
+            ws[f'{col}2'].alignment = center_alignment
+            ws[f'{col}2'].fill = gray_fill
         
         # 交易總覽內容
-        ws['B2'] = f"{total_orders} 筆"
+        ws['A3'] = f"{total_orders} 筆"
         ws['B3'] = f"{total_cancels} 筆"
-        ws['B4'] = f"{total_trades} 筆"
-        ws['B5'] = f"{total_cover_quantity} 口"
-        ws['B6'] = f"＄{format_number_for_notification(contract_pnl['TXF'])} TWD"
-        ws['B7'] = f"＄{format_number_for_notification(contract_pnl['MXF'])} TWD"
-        ws['B8'] = f"＄{format_number_for_notification(contract_pnl['TMF'])} TWD"
+        ws['C3'] = f"{total_trades} 筆"
+        ws['D3'] = f"{total_cover_quantity} 口"
+        ws['E3'] = f"＄{format_number_for_notification(contract_pnl['TXF'])} TWD"
+        ws['F3'] = f"＄{format_number_for_notification(contract_pnl['MXF'])} TWD"
+        ws['G3'] = f"＄{format_number_for_notification(contract_pnl['TMF'])} TWD"
         
         # 帳戶狀態區塊
-        current_row = 10
+        current_row = 5
         ws[f'A{current_row}'] = '帳戶狀態'
-        ws[f'A{current_row}'].fill = blue_fill
+        ws[f'A{current_row}'].fill = gray_fill
         ws[f'A{current_row}'].alignment = center_alignment
         
-        # 帳戶狀態標題和內容
+        # 帳戶狀態標題（橫向）
         account_titles = ['權益總值', '權益總額', '今日餘額', '昨日餘額', '可用保證金', '原始保證金', 
                          '維持保證金', '風險指標', '手續費', '期交稅', '本日平倉損益']
         for i, title in enumerate(account_titles):
-            row = current_row + i + 1
-            ws[f'A{row}'] = title
-            ws[f'A{row}'].alignment = center_alignment
-            
+            col = get_column_letter(i + 1)
+            ws[f'{col}{current_row + 1}'] = title
+            ws[f'{col}{current_row + 1}'].alignment = center_alignment
+            ws[f'{col}{current_row + 1}'].fill = gray_fill
+        
+        # 帳戶狀態內容
+        for i, title in enumerate(account_titles):
+            col = get_column_letter(i + 1)
             value = account_data.get(title, 0)
             if title == '風險指標':
-                ws[f'B{row}'] = f"{format_number_for_notification(value)}%"
+                ws[f'{col}{current_row + 2}'] = f"{format_number_for_notification(value)}%"
             elif title == '本日平倉損益':
-                ws[f'B{row}'] = f"＄{format_number_for_notification(value)} TWD"
+                ws[f'{col}{current_row + 2}'] = f"＄{format_number_for_notification(value)} TWD"
             else:
-                ws[f'B{row}'] = format_number_for_notification(value)
+                ws[f'{col}{current_row + 2}'] = format_number_for_notification(value)
         
         # 交易明細區塊
-        current_row += len(account_titles) + 2
+        current_row += 4
         ws[f'A{current_row}'] = '交易明細'
         ws[f'A{current_row}'].fill = blue_fill
         ws[f'A{current_row}'].alignment = center_alignment
         
         # 交易明細標題
         detail_titles = ['成交時間', '成交單號', '選用合約', '訂單類型', '成交類型', '成交部位', 
-                        '成交動作', '成交數量', '開倉價格', '平倉價格', '平倉損益']
+                        '成交動作', '成交數量', '開倉價格', '平倉價格', '已實現損益']
         for i, title in enumerate(detail_titles):
             col = get_column_letter(i + 1)
             ws[f'{col}{current_row + 1}'] = title
             ws[f'{col}{current_row + 1}'].alignment = center_alignment
+            ws[f'{col}{current_row + 1}'].fill = gray_fill
         
         # 交易明細內容
         if cover_trades:
             for i, trade in enumerate(cover_trades):
                 row = current_row + i + 2
-                # 從 trades 中找到對應的完整交易信息
-                trade_info = next((t for t in trades if t.get('type') == 'deal' and 
-                                 t.get('raw_data', {}).get('order', {}).get('id') == trade.get('order_id')), None)
+                ws[f'A{row}'] = trade.get('timestamp', '')
+                ws[f'B{row}'] = trade.get('order_id', '')
                 
-                if trade_info:
-                    order = trade_info.get('raw_data', {}).get('order', {})
-                    ws[f'A{row}'] = trade.get('timestamp', '')
-                    ws[f'B{row}'] = order.get('id', '')
-                    ws[f'C{row}'] = f"{trade['contract_name']} ({order.get('delivery_date', '')})"
-                    ws[f'D{row}'] = f"{order.get('price_type', '')} {order.get('order_type', '')}"
-                    ws[f'E{row}'] = '手動平倉' if order.get('is_manual', False) else '自動平倉'
-                    ws[f'F{row}'] = trade['contract_name']
-                    ws[f'G{row}'] = trade['action']
-                    ws[f'H{row}'] = trade['quantity']
-                    ws[f'I{row}'] = trade['open_price']
-                    ws[f'J{row}'] = trade['cover_price']
-                    ws[f'K{row}'] = f"＄{trade['pnl']:,} TWD" if trade['pnl'] != 0 else ''
+                # 選用合約顯示英文代碼和實際交割日
+                contract_code = 'TXF' if trade['contract_name'] == '大台' else 'MXF' if trade['contract_name'] == '小台' else 'TMF'
+                delivery_date = trade.get('delivery_date', '')  # 使用實際交割日，沒有則留空
+                ws[f'C{row}'] = f"{contract_code} ({delivery_date})" if delivery_date else f"{contract_code}"
+                
+                # 訂單類型中文顯示
+                price_type = trade.get('price_type', '')
+                order_type = trade.get('order_type', '')
+                if price_type == 'MKT':
+                    order_type_str = '市價單'
+                elif price_type == 'LMT':
+                    order_type_str = '限價單'
+                else:
+                    order_type_str = ''
+                if order_type_str and order_type:
+                    ws[f'D{row}'] = f"{order_type_str}（{order_type}）"
+                elif order_type_str:
+                    ws[f'D{row}'] = order_type_str
+                elif order_type:
+                    ws[f'D{row}'] = f"（{order_type}）"
+                else:
+                    ws[f'D{row}'] = ''
+                
+                ws[f'E{row}'] = '手動平倉' if trade.get('is_manual', False) else '自動平倉'
+                ws[f'F{row}'] = trade['contract_name']
+                
+                # 成交動作顯示多單/空單
+                action_text = '多單' if '多' in trade['action'] else '空單'
+                ws[f'G{row}'] = action_text
+                
+                ws[f'H{row}'] = f"{trade['quantity']} 口"
+                ws[f'I{row}'] = trade['open_price']
+                ws[f'J{row}'] = trade['cover_price']
+                ws[f'K{row}'] = f"＄{trade['pnl']:,} TWD" if trade['pnl'] != 0 else ''
         
         # 持倉狀態區塊
         current_row = current_row + (len(cover_trades) if cover_trades else 0) + 3
@@ -3822,11 +3875,33 @@ def generate_trading_report(trades, account_data, position_data, cover_trades, t
                 if pos.get('動作', '-') != '-':
                     ws[f'A{current_row + row_offset}'] = pos.get('開倉時間', '')
                     ws[f'B{current_row + row_offset}'] = pos.get('委託單號', '')
-                    ws[f'C{current_row + row_offset}'] = f"{pos.get('商品名稱', '')} ({pos.get('到期月份', '')})"
-                    ws[f'D{current_row + row_offset}'] = f"{pos.get('委託價格類型', '')} {pos.get('委託條件', '')}"
+                    
+                    # 選用合約顯示英文代碼和實際交割日
+                    contract_name = pos.get('商品名稱', '')
+                    contract_code = 'TXF' if contract_name == '大台' else 'MXF' if contract_name == '小台' else 'TMF'
+                    delivery_date = pos.get('到期月份', '')  # 使用實際交割日，沒有則留空
+                    ws[f'C{current_row + row_offset}'] = f"{contract_code} ({delivery_date})" if delivery_date else f"{contract_code}"
+                    
+                    # 訂單類型顯示原始格式
+                    price_type = pos.get('委託價格類型', '')
+                    order_type = pos.get('委託條件', '')
+                    if price_type and order_type:
+                        ws[f'D{current_row + row_offset}'] = f"{price_type} {order_type}"
+                    elif price_type:
+                        ws[f'D{current_row + row_offset}'] = price_type
+                    elif order_type:
+                        ws[f'D{current_row + row_offset}'] = order_type
+                    else:
+                        ws[f'D{current_row + row_offset}'] = ''
+                    
                     ws[f'E{current_row + row_offset}'] = '手動開倉' if pos.get('is_manual', False) else '自動開倉'
                     ws[f'F{current_row + row_offset}'] = pos.get('商品名稱', '')
-                    ws[f'G{current_row + row_offset}'] = pos.get('動作', '')
+                    
+                    # 成交動作顯示多單/空單
+                    action = pos.get('動作', '')
+                    action_text = '多單' if '多' in action else '空單'
+                    ws[f'G{current_row + row_offset}'] = action_text
+                    
                     ws[f'H{current_row + row_offset}'] = f"{pos.get('數量', '')} 口"
                     ws[f'I{current_row + row_offset}'] = pos.get('均價', '')
                     ws[f'J{current_row + row_offset}'] = '0'
@@ -3902,7 +3977,7 @@ def send_margin_change_notification(changes):
             margin_log_message = "保證金已更新！"
             for contract in ['大台', '小台', '微台']:
                 margin = margin_requirements.get(contract, 0)
-                margin_log_message += f" {contract}/{margin:,}"
+                margin_log_message += f" {contract}＄{margin:,}"
             margin_log_message += "！！！"
             
             requests.post(
@@ -4343,6 +4418,9 @@ def send_daily_trading_statistics():
         today = datetime.now().strftime('%Y%m%d')
         trades_file = os.path.join('transdata', f'trades_{today}.json')
         
+        # 初始化 trades 變數
+        trades = []
+        
         # 統計變數
         total_orders = 0  # 委託單量
         total_trades = 0  # 成交單量
@@ -4495,30 +4573,30 @@ def send_daily_trading_statistics():
             )
         except:
             pass
+        
+        # 延遲生成報表
+        def delayed_generate_reports():
+            # 先等待30秒後生成日報
+            time.sleep(30)
+            daily_report_result = generate_trading_report(
+                trades=trades,
+                account_data=account_data,
+                position_data=position_data,
+                cover_trades=cover_trades,
+                total_orders=total_orders,
+                total_cancels=total_cancels,
+                total_trades=total_trades,
+                total_cover_quantity=total_cover_quantity,
+                contract_pnl=contract_pnl
+            )
             
-                    # 延遲生成報表
-            def delayed_generate_reports():
-                # 先等待30秒後生成日報
+            # 如果是月末最後一個交易日且日報生成成功，再等待30秒後生成月報
+            if daily_report_result and is_last_trading_day_of_month():
                 time.sleep(30)
-                daily_report_result = generate_trading_report(
-                    trades=trades,
-                    account_data=account_data,
-                    position_data=position_data,
-                    cover_trades=cover_trades,
-                    total_orders=total_orders,
-                    total_cancels=total_cancels,
-                    total_trades=total_trades,
-                    total_cover_quantity=total_cover_quantity,
-                    contract_pnl=contract_pnl
-                )
-                
-                # 如果是月末最後一個交易日且日報生成成功，再等待30秒後生成月報
-                if daily_report_result and is_last_trading_day_of_month():
-                    time.sleep(30)
-                    generate_monthly_trading_report()
-            
-            # 在新線程中執行延遲生成報表
-            threading.Thread(target=delayed_generate_reports, daemon=True).start()
+                generate_monthly_trading_report()
+        
+        # 在新線程中執行延遲生成報表
+        threading.Thread(target=delayed_generate_reports, daemon=True).start()
         
     except Exception as e:
         print(f"發送每日交易統計失敗: {e}")
@@ -4680,6 +4758,37 @@ def tradingview_webhook():
             'client_ip': client_ip,
             'contracts': f"TXF:{data.get('txf', 0)} MXF:{data.get('mxf', 0)} TMF:{data.get('tmf', 0)}"
         })
+        
+        # 添加前端日誌 - 顯示訊號類型
+        signal_type = data.get('type', 'entry')
+        direction = data.get('direction', '未知')
+        
+        if signal_type == 'entry':
+            if direction == '開多':
+                log_message = f"來自 webhook開倉訊號：開多"
+            elif direction == '開空':
+                log_message = f"來自 webhook開倉訊號：開空"
+            else:
+                log_message = f"來自 webhook開倉訊號：{direction}"
+        elif signal_type == 'exit':
+            if direction == '平多':
+                log_message = f"來自 webhook平倉訊號：平多"
+            elif direction == '平空':
+                log_message = f"來自 webhook平倉訊號：平空"
+            else:
+                log_message = f"來自 webhook平倉訊號：{direction}"
+        else:
+            log_message = f"來自 webhook訊號：{signal_type} - {direction}"
+        
+        # 發送到前端系統日誌
+        try:
+            requests.post(
+                f'http://127.0.0.1:{CURRENT_PORT}/api/system_log',
+                json={'message': log_message, 'type': 'info'},
+                timeout=5
+            )
+        except:
+            pass
         
         return 'OK', 200
         
@@ -6366,6 +6475,16 @@ def analyze_simple_trading_stats(trades):
         
         action_display = '多單' if close_trade['action'] == 'Sell' else '空單'
         
+        # 從原始交易數據中獲取訂單信息
+        original_trade = next((t for t in trades if t.get('type') == 'deal' and 
+                             t.get('raw_data', {}).get('order', {}).get('action') == close_trade['action'] and
+                             t.get('raw_data', {}).get('order', {}).get('quantity') == close_trade['quantity'] and
+                             t.get('raw_data', {}).get('order', {}).get('price') == close_trade['price']), None)
+        
+        order_info = {}
+        if original_trade:
+            order_info = original_trade.get('raw_data', {}).get('order', {})
+        
         cover_trades.append({
             'contract_name': close_trade['contract_name'],
             'action': action_display,
@@ -6373,7 +6492,11 @@ def analyze_simple_trading_stats(trades):
             'open_price': f"{int(open_price):,}" if open_price is not None else "未知",
             'cover_price': f"{int(close_trade['price']):,}",
             'pnl': int(pnl),
-            'timestamp': close_trade['timestamp']
+            'timestamp': close_trade['timestamp'],
+            'order_id': order_info.get('id', ''),
+            'price_type': order_info.get('price_type', ''),
+            'order_type': order_info.get('order_type', ''),
+            'delivery_date': order_info.get('delivery_date', '')
         })
     
     return cover_trades, total_cover_quantity, contract_pnl

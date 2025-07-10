@@ -1313,8 +1313,9 @@ function updateRequestsLog() {
                     }
                     
                     // 使用 ngrok 格式：時間戳 方法 URI 狀態碼 狀態文字
+                    const displayTime = req.display_timestamp || req.timestamp;
                     requestItem.innerHTML = `
-                        <span class="request-timestamp">${req.timestamp}</span>
+                        <span class="request-timestamp">${displayTime}</span>
                         <span class="request-method ${req.method.toLowerCase()}">${req.method}</span>
                         <span class="request-uri">${req.uri}</span>
                         <span class="request-status ${statusClass}">${req.status} ${req.status_text}</span>
@@ -1446,7 +1447,10 @@ function updateSystemLogsFromBackend() {
                         
                         // 格式化時間戳為 時:分:秒 格式
                         let formattedTimestamp = '';
-                        if (log.timestamp) {
+                        if (log.display_timestamp) {
+                            // 使用顯示用時間戳（已經只有時分秒）
+                            formattedTimestamp = log.display_timestamp.replace(' CST', '').split('.')[0];
+                        } else if (log.timestamp) {
                             try {
                                 // 解析 ngrok 格式的時間戳 (YYYY-MM-DD HH:MM:SS.mmm CST 或 HH:MM:SS.mmm CST)
                                 if (log.timestamp.includes(' CST')) {

@@ -1,6 +1,168 @@
 # 開發者指南
 
-## 最新更新 (v1.3.9 - 2025-07-09)
+## 最新更新 (v1.3.10 - 2025-07-10)
+
+### 日誌顯示邏輯修正與格式優化
+
+#### 重大修正概述
+修正了平倉時方向顯示錯誤的嚴重問題，並統一了所有價格顯示格式。
+
+#### 修正內容詳述
+
+1. **方向顯示邏輯修正**
+```python
+def get_simple_order_log_message(contract_name, direction, qty, price, order_id, octype, is_manual, is_success=False, order_type=None, price_type=None):
+    """生成簡化的訂單日誌訊息（修正方向顯示邏輯和價格格式）"""
+    # 格式化價格 - 移除 $ 符號
+    if price == 0:
+        price_display = '市價'
+    else:
+        price_display = f'{price:,.0f}'
+    
+    # 格式化方向 - 修正邏輯
+    if str(octype).upper() == 'NEW':
+        # 開倉：BUY=多單, SELL=空單
+        if str(direction).upper() == 'BUY':
+            direction_display = '多單'
+        else:
+            direction_display = '空單'
+    elif str(octype).upper() == 'COVER':
+        # 平倉：BUY=平空單, SELL=平多單
+        if str(direction).upper() == 'BUY':
+            direction_display = '空單'  # 平空單
+        else:
+            direction_display = '多單'  # 平多單
+    else:
+        # 備援邏輯
+        if str(direction).upper() == 'BUY':
+            direction_display = '多單'
+        else:
+            direction_display = '空單'
+    
+    # 生成訊息
+    action_type = '手動' if is_manual else '自動'
+    if str(octype).upper() == 'NEW':
+        action = '開倉成功' if is_success else f'{action_type}開倉'
+    else:
+        action = '平倉成功' if is_success else f'{action_type}平倉'
+    
+    message = f"{action}：{contract_name}｜{direction_display}｜{qty} 口｜{price_display}｜{order_type_display} ({price_type_display})"
+    
+    return message
+```
+
+2. **價格格式統一**
+```python
+def format_price_display(price):
+    """格式化價格顯示（移除 $ 符號）"""
+    if price == 0:
+        return '市價'
+    else:
+        return f'{price:,.0f}'
+
+def format_margin_display(contract, margin):
+    """格式化保證金顯示（移除 $ 符號）"""
+    return f"{contract} {margin:,}"
+
+def format_pnl_display(pnl):
+    """格式化損益顯示（移除 ＄ 符號）"""
+    sign = '+' if pnl >= 0 else ''
+    return f"{sign}{pnl:,.0f} TWD"
+```
+
+3. **Webhook回調機制完善**
+```python
+@app.route('/webhook', methods=['POST'])
+def tradingview_webhook():
+    """TradingView Webhook 接收端點（包含完整回調流程）"""
+    try:
+        data = request.get_json()
+        
+        # 步驟1：記錄接收到的訊號
+        signal_type = data.get('type', 'entry')
+        direction = data.get('direction', '未知')
+        
+        if signal_type == 'entry':
+            if direction == '開多':
+                log_message = "來自 webhook開倉訊號：開多"
+            elif direction == '開空':
+                log_message = "來自 webhook開倉訊號：開空"
+        elif signal_type == 'exit':
+            if direction == '平多':
+                log_message = "來自 webhook平倉訊號：平多"
+            elif direction == '平空':
+                log_message = "來自 webhook平倉訊號：平空"
+        
+        # 發送到前端系統日誌
+        requests.post(
+            f'http://127.0.0.1:{CURRENT_PORT}/api/system_log',
+            json={'message': log_message, 'type': 'info'},
+            timeout=5
+        )
+        
+        # 步驟2：處理訊號
+        process_signal(data)
+        
+        return 'OK', 200
+        
+    except Exception as e:
+        error_message = f"Webhook 處理失敗：{str(e)}"
+        requests.post(
+            f'http://127.0.0.1:{CURRENT_PORT}/api/system_log',
+            json={'message': error_message, 'type': 'error'},
+            timeout=5
+        )
+        return 'Error', 500
+```
+
+#### 測試案例
+
+1. **方向顯示測試**
+```python
+def test_direction_display_logic():
+    """測試方向顯示邏輯的正確性"""
+    test_cases = [
+        # (octype, direction, expected_display)
+        ('NEW', 'BUY', '多單'),      # 手動開多倉
+        ('NEW', 'SELL', '空單'),     # 手動開空倉
+        ('COVER', 'BUY', '空單'),    # 手動平空倉
+        ('COVER', 'SELL', '多單'),   # 手動平多倉
+    ]
+    
+    for octype, direction, expected in test_cases:
+        result = get_direction_display(octype, direction)
+        assert result == expected, f"測試失敗：{octype}+{direction} 期望 {expected}，實際 {result}"
+        
+    print("所有測試通過！")
+```
+
+2. **價格格式化測試**
+```python
+def test_price_formatting():
+    """測試價格格式化的正確性"""
+    test_cases = [
+        (22000, "22,000"),
+        (0, "市價"),
+        (23150, "23,150"),
+    ]
+    
+    for price, expected in test_cases:
+        result = format_price_display(price)
+        assert result == expected, f"價格格式化測試失敗：{price} 期望 {expected}，實際 {result}"
+        
+    print("價格格式化測試通過！")
+```
+
+#### 用戶體驗改進
+
+1. **日誌準確性**：修正了困擾用戶的方向顯示錯誤問題
+2. **格式一致性**：統一了所有價格和損益的顯示格式
+3. **交易追蹤便利性**：正確的方向顯示讓用戶能準確追蹤交易歷史
+4. **Webhook透明度**：完整的三步驟日誌讓用戶清楚了解webhook處理流程
+
+---
+
+## 版本歷史：v1.3.9 (2025-07-09)
 
 ### 交易月報功能實現
 

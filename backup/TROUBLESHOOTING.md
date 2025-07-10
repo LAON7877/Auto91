@@ -1,5 +1,157 @@
 # 故障排除指南
 
+## 最新更新 (v1.3.10 - 2025-07-10)
+
+### 日誌顯示邏輯修正與格式優化問題
+**重大修復**：修正平倉交易的方向顯示錯誤問題和價格格式統一
+
+#### 問題：平倉交易方向顯示錯誤
+**症狀**：
+- 平空單顯示為「多單」，實際應該顯示為「空單」
+- 平多單顯示為「空單」，實際應該顯示為「多單」
+- 交易日誌讓人誤解實際的交易方向
+
+**解決方案**：
+1. **已修復**：v1.3.10版本已修正方向顯示邏輯
+2. **檢查更新**：確認使用最新版本的 `get_simple_order_log_message()` 函數
+3. **測試案例**：
+   - 手動平空單 (BUY + COVER) → 應顯示「手動平倉：大台｜空單｜...」
+   - 手動平多單 (SELL + COVER) → 應顯示「手動平倉：大台｜多單｜...」
+
+**故障排查步驟**：
+```python
+# 檢查方向顯示邏輯
+def debug_direction_display(octype, direction):
+    if str(octype).upper() == 'NEW':
+        result = '多單' if direction.upper() == 'BUY' else '空單'
+    elif str(octype).upper() == 'COVER':
+        result = '空單' if direction.upper() == 'BUY' else '多單'  # 關鍵邏輯
+    print(f"octype={octype}, direction={direction} → {result}")
+    return result
+```
+
+#### 問題：價格顯示格式不一致
+**症狀**：
+- 某些地方顯示 `$ 22,000`，某些地方顯示 `22,000`
+- 保證金通知顯示 `大台$184,000`
+- 統計報表顯示 `＄20,000 TWD`
+
+**解決方案**：
+1. **已修復**：v1.3.10版本已統一移除所有「$」符號
+2. **檢查所有格式化函數**：確認以下函數已更新
+   - `get_simple_order_log_message()`
+   - `send_margin_change_notification()`
+   - `generate_trading_report()`
+3. **清除快取**：重新啟動程式確保所有修改生效
+
+**檢查清單**：
+- [ ] 日誌訊息不再包含 `$` 符號
+- [ ] 保證金通知格式為 `大台 184,000`
+- [ ] 統計報表格式為 `20,000 TWD`
+- [ ] 千分位逗號分隔仍然保留
+
+#### 問題：Webhook 回調流程不完整
+**症狀**：
+- 只收到部分 webhook 相關日誌
+- 無法追蹤完整的交易生命週期
+- 訊號接收後沒有後續日誌
+
+**解決方案**：
+1. **檢查回調流程**：確認三個步驟都正常執行
+   - 步驟1：`來自 webhook開倉訊號：開多`
+   - 步驟2：`自動開倉：大台｜多單｜1 口｜22,000｜限價 (ROD)`
+   - 步驟3：`開倉成功：大台｜多單｜1 口｜22,000｜限價 (ROD)`
+2. **檢查前端日誌API**：確認 `/api/system_log` 端點正常響應
+3. **檢查網路連線**：確認內部API調用正常
+
+**故障排查步驟**：
+```python
+# 測試前端日誌API
+import requests
+response = requests.post(
+    'http://127.0.0.1:5000/api/system_log',
+    json={'message': '測試訊息', 'type': 'info'},
+    timeout=5
+)
+print(f"API回應：{response.status_code}")
+```
+
+#### 問題：備援邏輯被觸發
+**症狀**：
+- 日誌中出現使用備援邏輯的情況
+- 方向顯示可能不正確
+
+**解決方案**：
+1. **檢查參數傳遞**：確認 `octype` 參數正確傳遞
+2. **檢查參數值**：確認 `octype` 為 'NEW' 或 'COVER'
+3. **加入調試日誌**：暫時加入調試輸出確認參數值
+
+**調試代碼**：
+```python
+print(f"DEBUG: octype={octype}, type={type(octype)}")
+print(f"DEBUG: direction={direction}, type={type(direction)}")
+```
+
+#### 問題：舊版本函數仍在使用
+**症狀**：
+- 更新後仍然出現舊的格式問題
+- 方向顯示邏輯沒有改變
+
+**解決方案**：
+1. **重新啟動程式**：確保所有修改都已載入
+2. **檢查函數版本**：確認使用的是最新版本的函數
+3. **清除Python快取**：刪除 `__pycache__` 資料夾
+
+#### 問題：測試環境與生產環境不一致
+**症狀**：
+- 測試時方向顯示正確，實際使用時仍有問題
+- 不同交易場景結果不一致
+
+**解決方案**：
+1. **完整測試案例**：執行所有組合的測試
+   - NEW + BUY = 多單
+   - NEW + SELL = 空單  
+   - COVER + BUY = 空單
+   - COVER + SELL = 多單
+2. **檢查實際參數**：在實際交易時記錄參數值
+3. **端到端測試**：從 webhook 到最終日誌的完整測試
+
+**測試腳本**：
+```python
+def test_all_combinations():
+    test_cases = [
+        ('NEW', 'BUY', '多單'),
+        ('NEW', 'SELL', '空單'),
+        ('COVER', 'BUY', '空單'),
+        ('COVER', 'SELL', '多單'),
+    ]
+    
+    for octype, direction, expected in test_cases:
+        result = get_direction_display(octype, direction)
+        status = "✅" if result == expected else "❌"
+        print(f"{status} {octype}+{direction} → {result} (期望:{expected})")
+```
+
+---
+
+## 最新更新 (v1.3.9 - 2025-07-09)
+
+### 交易月報功能實現問題
+**新增功能**：每月最後一個交易日自動生成月報
+
+#### 問題：月末交易日判斷錯誤
+**症狀**：
+- 非月末交易日也生成月報
+- 月末交易日沒有生成月報
+- 判斷邏輯不正確
+
+**解決方案**：
+1. **檢查判斷邏輯**：確認 `is_last_trading_day_of_month()` 函數正確
+2. **檢查交易日API**：確認 `/api/trading/status` 端點正常
+3. **手動測試**：在月末交易日手動測試功能
+
+---
+
 ## 最新更新 (v1.3.8 - 2025-07-08)
 
 ### 交易統計格式優化與損益計算改善問題

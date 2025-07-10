@@ -791,8 +791,9 @@ button[type="submit"]:hover {
     display: inline-block;
     width: 60px;
     font-weight: bold;
-    text-align: left;
+    text-align: center;
     flex-shrink: 0;
+    margin-left: 20px;
 }
 
 .request-method.get {
@@ -817,7 +818,7 @@ button[type="submit"]:hover {
     color: #fff;
     font-family: 'Courier New', monospace;
     text-align: left;
-    margin: 0 10px;
+    margin: 0 20px;
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
