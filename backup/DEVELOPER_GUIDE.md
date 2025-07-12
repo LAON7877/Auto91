@@ -1,6 +1,157 @@
 # 開發者指南
 
-## 最新更新 (v1.3.10 - 2025-07-10)
+## 最新更新 (v1.3.11 - 2025-07-12)
+
+### 隧道服務架構重構
+
+#### 模組重命名與簡化
+```python
+# 舊導入方式
+from cloudflare_tunnel import CloudflareTunnel
+
+# 新導入方式 
+from tunnel import CloudflareTunnel
+```
+
+#### Cloudflare Tunnel 域名模式更新
+```python
+class CloudflareTunnel:
+    def __init__(self, port=5000, mode="temporary"):
+        self.mode = mode  # custom, temporary (移除 workers 模式)
+```
+
+**域名模式說明：**
+- **temporary**: 臨時域名 (*.trycloudflare.com) - 完全免費，推薦使用
+- **custom**: 自訂域名 - 需要擁有域名和 Cloudflare 設定
+
+#### 新增時間戳格式化函數
+```python
+def format_timestamp(timestamp_str):
+    """格式化時間戳為顯示用格式"""
+    if not timestamp_str:
+        return ''
+    
+    try:
+        # 嘗試解析 ISO 格式的時間戳
+        if 'T' in timestamp_str:
+            dt = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
+        else:
+            # 如果不是 ISO 格式，嘗試其他常見格式
+            dt = datetime.strptime(timestamp_str, '%Y-%m-%d %H:%M:%S')
+        
+        # 轉換為本地時間並格式化
+        local_dt = dt.replace(tzinfo=timezone.utc).astimezone()
+        return local_dt.strftime('%H:%M:%S')
+    except:
+        # 如果解析失敗，返回原始字符串的最後8個字符
+        return timestamp_str[-8:] if len(timestamp_str) >= 8 else timestamp_str
+```
+
+### 前端界面優化
+
+#### CSS 狀態對齊修正
+```css
+/* 確保所有狀態文字靠下對齊 */
+#ngrok-status,
+#sinopac-api-status,
+#tunnel-status {
+    display: flex !important;
+    align-items: flex-end !important;
+    line-height: 1 !important;
+    min-height: 24px;
+}
+
+/* 請求數量顯示樣式統一 */
+.requests-count {
+    color: #495057;
+    font-size: 0.9rem;
+    font-weight: 500;
+    font-family: 'Courier New', monospace;
+    background: #e9ecef;
+    padding: 2px 6px;
+    border-radius: 3px;
+    min-width: 40px;
+    text-align: center;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 1;
+}
+```
+
+#### JavaScript 日誌記錄優化
+```javascript
+// 移除初啟動時的版本日誌記錄
+function getSinopacVersion() {
+    fetch('/api/sinopac/version')
+    .then(res => res.json())
+    .then(data => {
+        const versionElement = document.getElementById('sinopac-version');
+        
+        if (data.available && data.version && data.version !== 'unknown') {
+            versionElement.textContent = `sj${data.version}`;
+            // 移除初啟動時的版本日誌記錄，只有更新檢查時才記錄
+        }
+        // ... 其他邏輯
+    });
+}
+
+// 請求數量顯示優化
+function updateRequestsLog() {
+    // ... 獲取數據邏輯
+    if (requestsCount) {
+        requestsCount.textContent = `${webhookRequests.length}`; // 移除「筆」字
+    }
+}
+```
+
+### 系統日誌與報表生成改進
+
+#### 報表生成日誌記錄
+```python
+def generate_trading_report(...):
+    # 保存文件
+    wb.save(filepath)
+    
+    # 添加xlsx生成成功的前端日誌
+    try:
+        requests.post(
+            f'http://127.0.0.1:{CURRENT_PORT}/api/system_log',
+            json={'message': f"交易日報 {filename} 生成成功！", 'type': 'success'},
+            timeout=5
+        )
+    except:
+        pass
+    
+    # 發送 TG 通知（不再記錄額外的前端日誌）
+    send_telegram_message(message)
+```
+
+#### 交易統計排程
+```python
+# 確保週六夜盤統計正確執行
+schedule.every().saturday.at("05:00").do(check_saturday_trading_statistics)
+
+def check_saturday_trading_statistics():
+    """週六夜盤統計（固定執行）"""
+    try:
+        send_daily_trading_statistics()
+        print(f"已發送週六夜盤交易統計：{datetime.now().date()}")
+    except Exception as e:
+        print(f"檢查週六交易統計失敗: {e}")
+```
+
+### 開發注意事項
+
+1. **模組導入**：使用新的 `tunnel` 模組名稱
+2. **域名模式**：不再支援 workers.dev 免費域名
+3. **日誌記錄**：避免重複的 TG 發送日誌
+4. **狀態顯示**：確保所有狀態文字垂直對齊一致
+5. **報表生成**：即使無交易記錄也會生成空白報表
+
+---
+
+## 歷史更新 (v1.3.10 - 2025-07-10)
 
 ### 日誌顯示邏輯修正與格式優化
 

@@ -1,3 +1,59 @@
+## v1.3.11 - 隧道服務重構與界面優化 (2025-07-12)
+
+### 重大重構
+- **隧道模組重命名**：`cloudflare_tunnel.py` → `tunnel.py`，簡化命名
+- **Cloudflare Tunnel 域名選項修正**：移除已停用的 workers.dev 免費域名
+- **時間戳處理修復**：新增 `format_timestamp` 函數，解決 Cloudflare Tunnel 記錄失敗問題
+
+### 新增
+- **時間戳格式化函數**：
+  ```python
+  def format_timestamp(timestamp_str):
+      # 支援 ISO 格式和標準時間格式轉換
+      # 自動轉換為本地時間並格式化為 HH:MM:SS
+  ```
+- **請求數量樣式統一**：新增 `.requests-count` CSS 類，與其他狀態指標保持一致
+- **xlsx 報表生成日誌**：新增文件生成成功的前端日誌記錄
+
+### 修改
+- **域名模式更新**：
+  - 移除：workers 模式（已停用）
+  - 保留：temporary（臨時域名，推薦）、custom（自訂域名）
+- **狀態文字對齊修正**：
+  ```css
+  #ngrok-status, #sinopac-api-status, #tunnel-status {
+      display: flex !important;
+      align-items: flex-end !important;
+      line-height: 1 !important;
+  }
+  ```
+- **請求數量顯示優化**：移除「筆」字，純數字顯示
+- **版本日誌控制**：移除初啟動時的重複永豐版本日誌記錄
+
+### 修復
+- **Cloudflare Tunnel 記錄錯誤**：修復 `format_timestamp` 未定義導致的記錄失敗
+- **界面對齊問題**：修正 online/offline/checking 狀態文字的垂直對齊
+- **日誌重複問題**：移除多餘的 TG 發送成功日誌記錄
+
+### 優化
+- **交易統計邏輯**：確保週六夜盤統計正確執行
+- **報表生成流程**：即使無交易記錄也生成空白報表（非交易日除外）
+- **系統日誌簡化**：避免重複和冗餘的日誌記錄
+
+### 技術細節
+- **模組導入更新**：`from tunnel import CloudflareTunnel`
+- **CSS 樣式統一**：所有狀態顯示使用相同的對齊和格式
+- **JavaScript 優化**：移除不必要的版本日誌記錄邏輯
+- **排程確認**：週六 05:00 夜盤統計正確執行
+
+### 用戶體驗改進
+- **隧道設置簡化**：突出免費臨時域名選項，移除誤導性選項
+- **界面一致性**：所有狀態指標保持相同的視覺風格
+- **日誌清晰度**：減少重複日誌，提高信息密度
+- **報表可靠性**：確保 xlsx 文件生成的完整性
+
+---
+
 ## v1.3.10 - 日誌顯示邏輯修正與格式優化 (2025-07-10)
 
 ### 重大修正

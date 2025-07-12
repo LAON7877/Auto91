@@ -15,7 +15,7 @@
         <div class="panel-header">
             <h2>帳戶設置面板</h2>
             <div class="button-group">
-                <button id="register-ngrok-btn" type="button" onclick="showNgrokSetupModal()">設置ngrok</button>
+                <button id="register-tunnel-btn" type="button" onclick="showTunnelSetupModal()">設置隧道</button>
                 <button id="save-btn" type="button" onclick="saveEnv(event)">儲存</button>
                 <button id="login-btn" type="button" onclick="login()" disabled>登入</button>
             </div>
@@ -91,30 +91,14 @@
         <div class="trade-content">
             <!-- 左側容器 -->
             <div class="left-info-section">
-                <!-- ngrok狀態區域 -->
-                <div class="ngrok-status-section">
-                    <div class="ngrok-header">
-                        <h3>ngrok 狀態</h3>
-                        <span id="ngrok-status" class="status-value">加載中...</span>
-                        <span id="ngrok-latency" class="ngrok-latency">-</span>
-                        <div class="ngrok-version-info">
-                            <span id="ngrok-version" class="ngrok-version">v-</span>
-                            <button id="update-check-btn" class="update-check-btn" onclick="checkNgrokUpdate()" title="檢查更新">
-                                <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
-                                    <path d="M11.534 7h3.932a.25.25 0 0 1 .192.41l-1.966 2.36a.25.25 0 0 1-.384 0l-1.966-2.36a.25.25 0 0 1 .192-.41zm-11 2h3.932a.25.25 0 0 0 .192-.41L2.692 6.23a.25.25 0 0 0-.384 0L.342 8.59A.25.25 0 0 0 .534 9z"/>
-                                    <path fill-rule="evenodd" d="M8 3c-1.552 0-2.94.707-3.857 1.818a.5.5 0 1 1-.771-.636A6.002 6.002 0 0 1 13.917 7H12.9A5.002 5.002 0 0 0 8 3zM3.1 9a5.002 5.002 0 0 0 8.757 2.182.5.5 0 1 1 .771.636A6.002 6.002 0 0 1 2.083 9H3.1z"/>
-                                </svg>
-                            </button>
-                            <button id="update-available-btn" class="update-available-btn" onclick="updateNgrok()" title="有更新可用，點擊更新" style="display: none;">
-                                <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
-                                    <path d="M8 15A7 7 0 1 1 8 1a7 7 0 0 1 0 14zm0 1A8 8 0 1 0 8 0a8 8 0 0 0 0 16z"/>
-                                    <path d="m10.97 4.97-.02.022-3.473 4.425-2.093-2.094a.75.75 0 0 0-1.06 1.06L6.97 11.03a.75.75 0 0 0 1.079-.02l3.992-4.99a.75.75 0 0 0-1.071-1.05z"/>
-                                </svg>
-                            </button>
-                        </div>
+                <!-- 隧道狀態區域 -->
+                <div class="tunnel-status-section">
+                    <div class="tunnel-header">
+                        <h3>Cloudflare Tunnel</h3>
+                        <span id="tunnel-status" class="status-value">加載中...</span>
                     </div>
-                    <div class="ngrok-info">
-                        <div id="ngrok-urls-container" class="urls-container">
+                    <div class="tunnel-info">
+                        <div id="tunnel-urls-container" class="urls-container">
                             <!-- 動態生成的URL列表 -->
                         </div>
                         
@@ -122,7 +106,7 @@
                         <div class="requests-section">
                             <div class="requests-header">
                                 <h4>請求日誌</h4>
-                                <span id="ngrok-ttl" class="ngrok-latency">-</span>
+                                <span id="requests-count" class="requests-count">0</span>
                             </div>
                             <div id="requests-container" class="requests-container">
                                 <!-- 動態生成的請求日誌 -->
@@ -135,7 +119,7 @@
                 <div class="system-logs-section">
                     <div class="system-logs-header">
                         <h3>系統日誌</h3>
-                        <span id="connection-duration" class="ngrok-latency">-</span>
+                        <span id="connection-duration" class="tunnel-latency">-</span>
                     </div>
                     <div class="system-logs-container">
                         <!-- 系統日誌內容將在這裡顯示 -->
@@ -417,59 +401,7 @@
         </div>
     </div>
 
-    <!-- ngrok 更新模態框 -->
-    <div id="ngrok-update-modal" class="modal" style="display: none;">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h3>ngrok 更新</h3>
-                <span class="close" onclick="closeNgrokUpdateModal()">&times;</span>
-            </div>
-            <div class="modal-body">
-                <div id="ngrok-update-info">
-                    <p>檢查更新中...</p>
-                </div>
-                <div id="ngrok-update-actions" style="display: none;">
-                    <div class="update-version-info">
-                        <p><strong>當前版本：</strong><span id="ngrok-current-version">-</span></p>
-                        <p><strong>最新版本：</strong><span id="ngrok-latest-version">-</span></p>
-                    </div>
-                    <div class="update-warning">
-                        <p><strong>更新說明：</strong></p>
-                        <ul>
-                            <li>更新過程中 ngrok 服務將暫時中斷</li>
-                            <li>更新完成後會自動重新啟動 ngrok 服務</li>
-                            <li>更新過程約需 10-30 秒</li>
-                        </ul>
-                    </div>
-                    <div class="update-buttons">
-                        <button id="ngrok-auto-update-btn" class="btn-primary" onclick="startNgrokUpdate()">確認更新</button>
-                        <button class="btn-secondary" onclick="closeNgrokUpdateModal()">取消</button>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
 
-    <!-- ngrok 更新進度模態框 -->
-    <div id="ngrok-update-progress-modal" class="modal" style="display: none;">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h3>ngrok 更新中</h3>
-            </div>
-            <div class="modal-body">
-                <div class="update-progress">
-                    <div class="progress-bar">
-                        <div id="ngrok-progress-fill" class="progress-fill"></div>
-                    </div>
-                    <p id="ngrok-update-status">正在更新...</p>
-                </div>
-                <div id="ngrok-update-output" class="update-output" style="display: none;">
-                    <h4>更新日誌：</h4>
-                    <pre id="ngrok-update-log"></pre>
-                </div>
-            </div>
-        </div>
-    </div>
 
     <!-- shioaji 更新模態框 -->
     <div id="sinopac-update-modal" class="modal" style="display: none;">
@@ -525,44 +457,74 @@
         </div>
     </div>
 
-    <!-- ngrok設置模態窗口 -->
-    <div id="ngrok-setup-modal" class="modal" style="display: none;">
+    <!-- 隧道設置模態窗口 -->
+    <div id="tunnel-setup-modal" class="modal" style="display: none;">
         <div class="modal-content">
             <div class="modal-header">
-                <h3>管理 ngrok Token</h3>
-                <span class="close" onclick="closeNgrokSetupModal()">&times;</span>
+                <h3>設置隧道</h3>
+                <span class="close" onclick="closeTunnelSetupModal()">&times;</span>
             </div>
             <div class="modal-body">
-                <div class="form-group">
-                    <label for="ngrok-authtoken">ngrok Authtoken:</label>
-                    <div class="password-input-container">
-                        <input type="password" id="ngrok-authtoken" placeholder="輸入您的 ngrok Authtoken">
-                        <button type="button" class="password-toggle-btn" onclick="toggleTokenVisibility()">
-                            <svg class="eye-open" viewBox="0 0 16 16" fill="currentColor">
-                                <path d="M16 8s-3-5.5-8-5.5S0 8 0 8s3 5.5 8 5.5S16 8 16 8zM1.173 8a13.133 13.133 0 0 1 1.66-2.043C4.12 4.668 5.88 3.5 8 3.5c2.12 0 3.879 1.168 5.168 2.457A13.133 13.133 0 0 1 14.828 8c-.058.087-.122.183-.195.288-.335.48-.83 1.12-1.465 1.755C11.879 11.332 10.119 12.5 8 12.5c-2.12 0-3.879-1.168-5.168-2.457A13.134 13.134 0 0 1 1.172 8z"/>
-                                <path d="M8 5.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5zM4.5 8a3.5 3.5 0 1 1 7 0 3.5 3.5 0 0 1-7 0z"/>
-                            </svg>
-                            <svg class="eye-closed" viewBox="0 0 16 16" fill="currentColor" style="display: none;">
-                                <path d="m10.79 12.912-1.614-1.615a3.5 3.5 0 0 1-4.474-4.474l-2.06-2.06C.938 6.278 0 8 0 8s3 5.5 8 5.5a7.029 7.029 0 0 0 2.79-.588zM5.21 3.088A7.028 7.028 0 0 1 8 2.5c5 0 8 5.5 8 5.5s-.939 1.721-2.641 3.238l-2.062-2.062a3.5 3.5 0 0 0-4.474-4.474L5.21 3.089z"/>
-                                <path d="M5.525 7.646a2.5 2.5 0 0 0 2.829 2.829l-2.83-2.829zm4.95.708-2.829-2.83a2.5 2.5 0 0 1 2.829 2.829zm3.171 6-12-12 .708-.708 12 12-.708.708z"/>
-                            </svg>
-                        </button>
+                <!-- Cloudflare Tunnel 設定 -->
+                <div id="cloudflare-config" class="service-config">
+                    <!-- 隱藏的token輸入框 -->
+                    <input type="hidden" id="cloudflare-token" value="temporary-mode">
+                    
+                    <div class="service-features">
+                        <h5>Cloudflare Tunnel 優勢</h5>
+                        <ul>
+                            <li>完全免費．無流量限制</li>
+                            <li>自訂域名．客製化配置</li>
+                            <li>全球CDN優化加速</li>
+                            <li>擁有企業級安全性</li>
+                        </ul>
                     </div>
-                    <small style="color: #666;">
-                        還沒有authtoken？ 
-                        <a href="https://ngrok.com/signup" target="_blank" style="color: #007bff;">點此註冊免費帳戶</a>
-                    </small>
+                    
+                    <div class="service-setup">
+                        <h5>選擇您的域名模式：</h5>
+                        
+                        <div class="domain-options" style="margin: 15px 0;">
+                            <div class="domain-option" style="border: 2px solid #27ae60; border-radius: 8px; padding: 15px; margin: 10px 0; background: #f8fff8;">
+                                <h6 style="color: #27ae60; margin: 0 0 10px 0;">臨時域名（推薦使用）</h6>
+                                <p style="margin: 5px 0; color: #666;">無需註冊，立即獲得可用域名</p>
+                                <p style="margin: 5px 0; font-weight: bold;">域名格式：<code>random.trycloudflare.com</code></p>
+                                <p style="margin: 5px 0; color: #27ae60; font-size: 0.9rem;">✓ 完全免費 ✓ 立即可用 ✓ 無需設定</p>
+                                <button onclick="setDomainMode('temporary')" style="background: #27ae60; color: white; border: none; padding: 8px 15px; border-radius: 4px; cursor: pointer;">選擇此模式</button>
+                            </div>
+                            
+                            <div class="domain-option" style="border: 2px solid #e0e0e0; border-radius: 8px; padding: 15px; margin: 10px 0;">
+                                <h6 style="color: #FF9800; margin: 0 0 10px 0;">自訂域名（高級用戶）</h6>
+                                <p style="margin: 5px 0; color: #666;">使用您擁有的域名，完全自主控制</p>
+                                <p style="margin: 5px 0; font-weight: bold;">域名格式：<code>app.yourdomain.com</code></p>
+                                <p style="margin: 5px 0; color: #FF9800; font-size: 0.9rem;">需要：域名 + Cloudflare 帳戶 + DNS 設定</p>
+                                <button onclick="setDomainMode('custom')" style="background: #FF9800; color: white; border: none; padding: 8px 15px; border-radius: 4px; cursor: pointer;">選擇此模式</button>
+                            </div>
+                        </div>
+                        
+                        <div id="setup-instructions" style="display: block; background: #f0f8ff; padding: 15px; border-radius: 8px; margin: 15px 0;">
+                            <h6>臨時域名設置：</h6>
+                            <ol>
+                                <li>無需任何準備工作</li>
+                                <li>無需註冊帳戶</li>
+                                <li>直接點選「儲存並啟動」</li>
+                                <li>立即獲得可用域名</li>
+                            </ol>
+                            <p style="color: #2196F3;">完全免費，立即可用</p>
+                        </div>
+                    </div>
                 </div>
+
 
                 <div id="setup-status" style="margin: 10px 0;"></div>
             </div>
             <div class="modal-footer">
-                <button type="button" onclick="setupNgrok()" class="btn-primary" id="setup-ngrok-btn">儲存並啟動</button>
-                <button type="button" onclick="clearNgrokToken()" class="btn-warning" id="clear-token-btn">清除 Token</button>
-                <button type="button" onclick="closeNgrokSetupModal()" class="btn-secondary">取消</button>
+                <button type="button" onclick="setupTunnel()" class="btn-primary" id="setup-tunnel-btn">儲存並啟動</button>
+                <button type="button" onclick="clearTunnelToken()" class="btn-warning" id="clear-token-btn">清除 Token</button>
+                <button type="button" onclick="closeTunnelSetupModal()" class="btn-secondary">取消</button>
             </div>
         </div>
     </div>
+
 
     <script src="main.js"></script>
 </body>

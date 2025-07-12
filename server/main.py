@@ -22,6 +22,14 @@ import openpyxl
 from openpyxl.styles import Alignment, PatternFill, Font
 from openpyxl.utils import get_column_letter
 
+# 導入 Tunnel
+try:
+    from tunnel import CloudflareTunnel
+    CLOUDFLARE_TUNNEL_AVAILABLE = True
+except ImportError:
+    CLOUDFLARE_TUNNEL_AVAILABLE = False
+    print("警告: Tunnel 模組未找到")
+
 # 永豐API相關
 try:
     import shioaji as sj
@@ -121,15 +129,71 @@ class SafeConstants:
 
 safe_constants = SafeConstants()
 
+def compare_versions(version1, version2):
+    """
+    比較兩個版本號
+    返回值: 1 表示 version1 > version2, 0 表示相等, -1 表示 version1 < version2
+    """
+    def version_to_tuple(v):
+        return tuple(map(int, (v.split("."))))
+    
+    v1_tuple = version_to_tuple(version1)
+    v2_tuple = version_to_tuple(version2)
+    
+    if v1_tuple > v2_tuple:
+        return 1
+    elif v1_tuple < v2_tuple:
+        return -1
+    else:
+        return 0
+
 app = Flask(__name__, static_folder='web', static_url_path='')
 CORS(app, origins=['*'])  # 允許所有域名的跨域請求
 
-# ngrok相關變數
+# 請求記錄中間件
+@app.before_request
+def log_request():
+    """記錄所有進入的請求"""
+    if tunnel_service and hasattr(tunnel_service, 'add_request_log'):
+        try:
+            # 記錄請求開始時間
+            request.start_time = time.time()
+        except Exception as e:
+            print(f"記錄請求開始時間失敗: {e}")
+
+@app.after_request
+def log_response(response):
+    """記錄所有請求的響應"""
+    if tunnel_service and hasattr(tunnel_service, 'add_request_log'):
+        try:
+            # 計算響應時間
+            response_time = None
+            if hasattr(request, 'start_time'):
+                response_time = round((time.time() - request.start_time) * 1000, 2)  # 轉換為毫秒
+            
+            # 記錄請求日誌
+            tunnel_service.add_request_log(
+                method=request.method,
+                path=request.path,
+                status_code=response.status_code,
+                response_time=response_time
+            )
+        except Exception as e:
+            print(f"記錄請求日誌失敗: {e}")
+    
+    return response
+
+# Cloudflare Tunnel 相關變數（直接替換 ngrok）
+tunnel_service = None  # Cloudflare Tunnel 服務實例
+tunnel_process = None
+tunnel_status = "stopped"  # stopped, starting, running, error
+tunnel_version = None
+tunnel_update_available = False
+tunnel_auto_restart_timer = None  # 自動重啟定時器
+
+# 為了保持兼容性，保留 ngrok 變數名但使用 Cloudflare Tunnel
 ngrok_process = None
-ngrok_status = "stopped"  # stopped, starting, running, error
-ngrok_version = None
-ngrok_update_available = False
-ngrok_auto_restart_timer = None  # 自動重啟定時器
+ngrok_status = "stopped"
 
 # 永豐API相關變數
 sinopac_api = None
@@ -163,6 +227,7 @@ last_margin_requirements = {
 
 # 新增：訂單映射管理（參考TXserver.py架構）
 order_octype_map = {}  # 記錄訂單詳細資訊
+duplicate_signal_window = {}  # 重複訊號時間窗口記錄
 global_lock = threading.Lock()  # 線程鎖
 
 # TXserver 風格的全域變數和狀態管理
@@ -281,477 +346,205 @@ def update_login_status(status):
         with open(ENV_PATH, 'w', encoding='utf-8') as f:
             f.writelines(lines)
 
-def get_ngrok_version():
-    """獲取當前ngrok版本"""
-    global ngrok_version
-    try:
-        ngrok_exe_path = os.path.join(os.path.dirname(__file__), 'ngrok.exe')
-        if not os.path.exists(ngrok_exe_path):
-            return None
-        
-        result = subprocess.run(
-            [ngrok_exe_path, 'version'],
-            capture_output=True,
-            text=True,
-            timeout=10
-        )
-        
-        if result.returncode == 0:
-            # 解析版本信息，通常格式為 "ngrok version 3.x.x"
-            output = result.stdout.strip()
-            if 'version' in output:
-                version_line = output.split('\n')[0]
-                version_match = re.search(r'version\s+([\d\.]+)', version_line)
-                if version_match:
-                    ngrok_version = version_match.group(1)
-                    return ngrok_version
-        return None
-    except Exception as e:
-        print(f"獲取ngrok版本失敗: {e}")
-        return None
 
-def check_ngrok_update():
-    global ngrok_update_available
-    try:
-        # 獲取GitHub最新版本信息
-        response = requests.get(
-            'https://api.github.com/repos/ngrok/ngrok-go/releases/latest',
-            timeout=10
-        )
-        if response.status_code == 200:
-            latest_release = response.json()
-            latest_version = latest_release['tag_name'].lstrip('v')
-            current_version = get_ngrok_version()
-            if current_version:
-                if compare_versions(latest_version, current_version) > 0:
-                    ngrok_update_available = True
-                    return {
-                        'update_available': True,
-                        'current_version': current_version,
-                        'latest_version': latest_version,
-                        'download_url': get_download_url(latest_release)
-                    }
-                else:
-                    ngrok_update_available = False
-                    return {
-                        'update_available': False,
-                        'current_version': current_version,
-                        'latest_version': latest_version
-                    }
-            else:
-                return {
-                    'update_available': True,
-                    'current_version': 'unknown',
-                    'latest_version': latest_version,
-                    'download_url': get_download_url(latest_release)
-                }
-        else:
-            return None
-    except Exception:
-        return check_ngrok_update_alternative()
 
-def compare_versions(version1, version2):
-    """比較版本號，返回1表示version1更新，-1表示version2更新，0表示相同"""
-    try:
-        v1_parts = [int(x) for x in version1.split('.')]
-        v2_parts = [int(x) for x in version2.split('.')]
-        
-        # 補齊位數
-        max_len = max(len(v1_parts), len(v2_parts))
-        v1_parts.extend([0] * (max_len - len(v1_parts)))
-        v2_parts.extend([0] * (max_len - len(v2_parts)))
-        
-        for i in range(max_len):
-            if v1_parts[i] > v2_parts[i]:
-                return 1
-            elif v1_parts[i] < v2_parts[i]:
-                return -1
-        return 0
-    except:
-        return 0
 
-def get_download_url(release_data):
-    """獲取適合當前系統的ngrok下載URL"""
-    try:
-        system = platform.system().lower()
-        arch = platform.machine().lower()
-        
-        # 確定系統類型
-        if system == 'windows':
-            if '64' in arch or 'amd64' in arch:
-                target = 'windows_amd64'
-            else:
-                target = 'windows_386'
-        elif system == 'darwin':  # macOS
-            if 'arm' in arch or 'aarch64' in arch:
-                target = 'darwin_arm64'
-            else:
-                target = 'darwin_amd64'
-        elif system == 'linux':
-            if 'arm' in arch:
-                target = 'linux_arm64'
-            elif '64' in arch:
-                target = 'linux_amd64'
-            else:
-                target = 'linux_386'
-        else:
-            return None
-        
-        # 在release資產中尋找匹配的下載鏈接
-        for asset in release_data['assets']:
-            if target in asset['name'] and asset['name'].endswith('.zip'):
-                return asset['browser_download_url']
-        
-        return None
-    except Exception as e:
-        print(f"獲取下載URL失敗: {e}")
-        return None
 
-def download_and_update_ngrok(download_url, backup=True):
-    """下載並更新ngrok"""
-    try:
-        ngrok_exe_path = os.path.join(os.path.dirname(__file__), 'ngrok.exe')
-        temp_dir = os.path.join(os.path.dirname(__file__), 'temp_ngrok')
-        
-        # 創建臨時目錄
-        os.makedirs(temp_dir, exist_ok=True)
-        
-        # 停止當前ngrok
-        stop_ngrok()
-        
-        # 備份舊版本
-        if backup and os.path.exists(ngrok_exe_path):
-            backup_path = ngrok_exe_path + '.backup'
-            shutil.copy2(ngrok_exe_path, backup_path)
-            print(f"已備份舊版本到: {backup_path}")
-        
-        # 下載新版本
-        print(f"正在下載ngrok更新...")
-        response = requests.get(download_url, stream=True, timeout=300)
-        response.raise_for_status()
-        
-        zip_path = os.path.join(temp_dir, 'ngrok.zip')
-        with open(zip_path, 'wb') as f:
-            for chunk in response.iter_content(chunk_size=8192):
-                f.write(chunk)
-        
-        # 解壓縮
-        with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-            zip_ref.extractall(temp_dir)
-        
-        # 找到ngrok執行檔並替換
-        for file in os.listdir(temp_dir):
-            if file.startswith('ngrok') and (file.endswith('.exe') or '.' not in file):
-                source_path = os.path.join(temp_dir, file)
-                if os.path.exists(ngrok_exe_path):
-                    os.remove(ngrok_exe_path)
-                shutil.move(source_path, ngrok_exe_path)
-                
-                # 在Unix系統上設置執行權限
-                if not ngrok_exe_path.endswith('.exe'):
-                    os.chmod(ngrok_exe_path, 0o755)
-                
-                print(f"ngrok更新完成！")
-                break
-        
-        # 清理臨時檔案
-        shutil.rmtree(temp_dir, ignore_errors=True)
-        
-        # 更新版本信息
-        get_ngrok_version()
-        
-        return True
-        
-    except Exception as e:
-        print(f"ngrok更新失敗: {e}")
-        # 嘗試還原備份
-        if backup:
-            backup_path = ngrok_exe_path + '.backup'
-            if os.path.exists(backup_path):
-                try:
-                    shutil.copy2(backup_path, ngrok_exe_path)
-                    print("已還原備份版本")
-                except:
-                    pass
-        return False
-
-def auto_update_ngrok_if_needed():
-    """如果需要且用戶同意，自動更新ngrok"""
-    try:
-        update_info = check_ngrok_update()
-        if update_info and update_info.get('update_available'):
-            current_ver = update_info.get('current_version', 'unknown')
-            latest_ver = update_info.get('latest_version', 'unknown')
-            download_url = update_info.get('download_url')
-            
-            if download_url:
-                print(f"檢測到ngrok更新: {current_ver} -> {latest_ver}")
-                # 這裡可以添加用戶確認機制，暫時自動更新
-                return download_and_update_ngrok(download_url)
-        return False
-    except Exception as e:
-        print(f"自動更新檢查失敗: {e}")
-        return False
-
-def start_ngrok():
-    """啟動ngrok"""
-    global ngrok_process, ngrok_status
+def init_tunnel_service(mode="temporary"):
+    """初始化隧道服務（直接使用 Cloudflare Tunnel）"""
+    global tunnel_service
     
     try:
-        print("開始啟動 ngrok...")
+        if CLOUDFLARE_TUNNEL_AVAILABLE:
+            tunnel_service = CloudflareTunnel(port=CURRENT_PORT, mode=mode)
+            print(f"已初始化 Cloudflare Tunnel 服務 (模式: {mode})")
+        else:
+            print("警告: Cloudflare Tunnel 不可用，請檢查模組")
+    except Exception as e:
+        print(f"初始化 Cloudflare Tunnel 失敗: {e}")
+        tunnel_service = None
+
+def start_tunnel():
+    """啟動隧道服務（直接使用 Cloudflare Tunnel）"""
+    return start_cloudflare_tunnel()
+
+def start_ngrok():
+    """啟動 ngrok（現在直接使用 Cloudflare Tunnel）"""
+    return start_cloudflare_tunnel()
+
+def start_cloudflare_tunnel():
+    """啟動 Cloudflare Tunnel"""
+    global tunnel_service, tunnel_status, ngrok_status
+    
+    try:
+        if not tunnel_service:
+            print("Cloudflare Tunnel 服務未初始化")
+            tunnel_status = "error"
+            ngrok_status = "error"
+            return False
+        
+        # 設定狀態為啟動中
+        tunnel_status = "starting"
         ngrok_status = "starting"
-        ngrok_exe_path = os.path.join(os.path.dirname(__file__), 'ngrok.exe')
         
-        # 檢查ngrok是否需要更新（在背景執行，不阻塞啟動）
-        def check_update_background():
-            try:
-                auto_update_ngrok_if_needed()
-            except Exception as e:
-                print(f"背景更新檢查失敗: {e}")
+        # 根據模式決定啟動方式
+        if tunnel_service.mode == 'temporary':
+            # 臨時模式：直接啟動，無需token
+            print("使用臨時域名模式，無需token")
+            success = tunnel_service.start_tunnel()
+        else:
+            # 其他模式：需要token
+            token_file = os.path.join(os.path.dirname(__file__), 'config', 'cloudflare_token.txt')
+            if not os.path.exists(token_file):
+                print("未找到 Cloudflare Token，請先設定")
+                tunnel_status = "error"
+                ngrok_status = "error"
+                return False
+            
+            with open(token_file, 'r') as f:
+                token = f.read().strip()
+            
+            if not token:
+                print("Cloudflare Token 為空，請先設定")
+                tunnel_status = "error"
+                ngrok_status = "error"
+                return False
+                
+            # 使用快速設定
+            success = tunnel_service.quick_setup(token)
         
-        threading.Thread(target=check_update_background, daemon=True).start()
-        
-        if not os.path.exists(ngrok_exe_path):
-            print(f"ngrok.exe 不存在於路徑: {ngrok_exe_path}")
+        if success:
+            tunnel_status = "running"
+            ngrok_status = "running"
+            print("Cloudflare Tunnel 啟動成功!")
+        else:
+            tunnel_status = "error"
             ngrok_status = "error"
-            return False
+            print("Cloudflare Tunnel 啟動失敗!")
         
-        print(f"找到 ngrok.exe: {ngrok_exe_path}")
-        
-        # 先檢查是否已經有ngrok在運行
-        try:
-            response = requests.get('http://localhost:4040/api/tunnels', timeout=2)
-            if response.status_code == 200:
-                tunnels = response.json()['tunnels']
-                if tunnels:
-                    # 檢查是否有對應當前端口的tunnel
-                    for tunnel in tunnels:
-                        config_addr = tunnel.get('config', {}).get('addr', '')
-                        if str(CURRENT_PORT) in config_addr:
-                            print(f"找到對應{CURRENT_PORT}端口的tunnel: {tunnel.get('public_url', 'N/A')}")
-                            ngrok_status = "running"
-                            return True
-                    
-                    # 如果沒有當前端口的tunnel，但有其他tunnel在運行，認為ngrok已經啟動
-                    ngrok_status = "running"
-                    print(f"ngrok已啟動，但沒有{CURRENT_PORT}端口的tunnel，共有{len(tunnels)}個tunnel")
-                    return True
-        except Exception as e:
-            print(f"檢查現有ngrok狀態失敗: {e}")
-            pass
-        
-        # 如果沒有ngrok在運行，啟動新的ngrok進程
-        print("啟動新的 ngrok 進程...")
-        
-        # 在背景運行 ngrok，不使用 CREATE_NEW_CONSOLE
-        ngrok_process = subprocess.Popen(
-            [ngrok_exe_path, 'http', str(CURRENT_PORT)],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True
-        )
-        
-        print(f"ngrok 進程已啟動，PID: {ngrok_process.pid}")
-        
-        # 等待 ngrok 啟動
-        time.sleep(3)
-        
-        # 檢查是否啟動成功
-        try:
-            response = requests.get('http://localhost:4040/api/tunnels', timeout=5)
-            if response.status_code == 200:
-                tunnels = response.json()['tunnels']
-                for tunnel in tunnels:
-                    config_addr = tunnel.get('config', {}).get('addr', '')
-                    # 找到對應當前端口的tunnel
-                    if str(CURRENT_PORT) in config_addr:
-                        print(f"ngrok 啟動成功！找到對應{CURRENT_PORT}端口的tunnel: {tunnel.get('public_url', 'N/A')}")
-                        ngrok_status = "running"
-                        return True
-                print("ngrok 啟動成功，但沒有找到當前端口的tunnel")
-                ngrok_status = "running"
-                return True
-            print("ngrok 啟動失敗")
-            ngrok_status = "error"
-            return False
-        except Exception as e:
-            print(f"檢查ngrok啟動狀態失敗: {e}")
-            ngrok_status = "error"
-            return False
+        return success
         
     except Exception as e:
-        print(f"啟動 ngrok 時發生錯誤: {e}")
+        print(f"啟動 Cloudflare Tunnel 失敗: {e}")
+        tunnel_status = "error"
         ngrok_status = "error"
         return False
 
+
+def stop_tunnel():
+    """停止隧道服務（直接使用 Cloudflare Tunnel）"""
+    return stop_cloudflare_tunnel()
+
 def stop_ngrok():
-    """停止ngrok"""
-    global ngrok_process, ngrok_status
+    """停止 ngrok（現在直接使用 Cloudflare Tunnel）"""
+    return stop_cloudflare_tunnel()
+
+def stop_cloudflare_tunnel():
+    """停止 Cloudflare Tunnel"""
+    global tunnel_service, tunnel_status, ngrok_status
     
-    if ngrok_process:
-        ngrok_process.terminate()
-        ngrok_process = None
-    
-    ngrok_status = "stopped"
+    try:
+        if tunnel_service:
+            success = tunnel_service.stop_tunnel()
+            if success:
+                tunnel_status = "stopped"
+                ngrok_status = "stopped"
+            return success
+        
+        # 即使沒有服務實例，也更新狀態
+        tunnel_status = "stopped"
+        ngrok_status = "stopped"
+        return True
+    except Exception as e:
+        print(f"停止 Cloudflare Tunnel 失敗: {e}")
+        return False
+
+def get_tunnel_status():
+    """獲取隧道狀態（直接使用 Cloudflare Tunnel）"""
+    return get_cloudflare_tunnel_status()
 
 def get_ngrok_status():
-    """獲取ngrok狀態"""
-    global ngrok_status, ngrok_auto_restart_timer
+    """獲取 ngrok 狀態（現在直接使用 Cloudflare Tunnel）"""
+    return get_cloudflare_tunnel_status_as_ngrok()
+
+def get_cloudflare_tunnel_status():
+    """獲取 Cloudflare Tunnel 狀態"""
+    global tunnel_service, tunnel_status
     
     try:
-        # 獲取ngrok session狀態
-        session_response = requests.get('http://localhost:4040/api/tunnels', timeout=2)
-        if session_response.status_code == 200:
-            tunnels_data = session_response.json()
-            
-            tunnels = tunnels_data.get('tunnels', [])
-            if tunnels:
-                # 檢查是否有任何tunnel在線
-                online_tunnels = []
-                tunnel_urls = []
-                
-                for tunnel in tunnels:
-                    public_url = tunnel.get('public_url', '')
-                    config_addr = tunnel.get('config', {}).get('addr', '')
-                    tunnel_name = tunnel.get('name', 'unnamed')
-                    
-                    if public_url:
-                        online_tunnels.append(tunnel)
-                        tunnel_urls.append({
-                            'name': tunnel_name,
-                            'url': public_url,
-                            'local_addr': config_addr
-                        })
-                
-                if online_tunnels:
-                    # 如果有tunnel在線，顯示所有tunnel的URL
-                    # 對URL進行排序：按照本地端口號從小到大排序
-                    def extract_local_port(tunnel_info):
-                        """從本地地址中提取端口號"""
-                        try:
-                            local_addr = tunnel_info.get('local_addr', '')
-                            # 從 http://localhost:5000 中提取端口號
-                            if ':' in local_addr:
-                                port_str = local_addr.split(':')[-1]
-                                return int(port_str)
-                            return 9999  # 如果沒有端口號，放到最後
-                        except:
-                            return 9999  # 如果解析失敗，放到最後
-                    
-                    tunnel_urls.sort(key=lambda x: extract_local_port(x))
-                    
-                    ngrok_status = "running"
-                    # 取消自動重啟定時器
-                    if ngrok_auto_restart_timer:
-                        ngrok_auto_restart_timer.cancel()
-                        ngrok_auto_restart_timer = None
-                    
-                    return {
-                        'status': 'running',
-                        'urls': tunnel_urls,
-                        'message': 'online'
-                    }
-                else:
-                    ngrok_status = "error"
-                    return {
-                        'status': 'error',
-                        'urls': [],
-                        'message': 'offline'
-                    }
-    except Exception:
-        pass
-    
-    # 如果無法連接到ngrok API，檢查進程狀態
-    if ngrok_process and ngrok_process.poll() is None:
-        # 進程還在運行，但API無法連接
-        ngrok_status = "checking"
+        if tunnel_service:
+            status_info = tunnel_service.get_status()
+            tunnel_status = status_info.get('status', 'unknown')
+            return {
+                'status': tunnel_status,
+                'public_url': status_info.get('url', ''),
+                'tunnel_name': status_info.get('tunnel_name', ''),
+                'service_type': 'cloudflare',
+                'port': status_info.get('port', CURRENT_PORT),
+                'message': status_info.get('message', ''),
+                'timestamp': status_info.get('timestamp', '')
+            }
+        else:
+            return {
+                'status': 'error',
+                'message': 'Cloudflare Tunnel 服務未初始化',
+                'service_type': 'cloudflare'
+            }
+    except Exception as e:
         return {
-            'status': 'checking',
-            'urls': [],
-            'message': 'checking ngrok status...'
-        }
-    else:
-        # 進程已停止，啟動自動重連
-        if ngrok_status == "running" and not ngrok_auto_restart_timer:
-            print("ngrok 進程已停止，啟動自動重連...")
-            start_ngrok_auto_restart()
-        
-        # 進程已停止
-        ngrok_status = "stopped"
-        return {
-            'status': 'stopped',
-            'urls': [],
-            'message': 'offline'
+            'status': 'error',
+            'message': f'獲取 Cloudflare Tunnel 狀態失敗: {e}',
+            'service_type': 'cloudflare'
         }
 
-def get_ngrok_latency():
-    """獲取ngrok延遲"""
-    try:
-        # 先檢查ngrok狀態
-        status_response = requests.get('http://localhost:4040/api/tunnels', timeout=2)
-        if status_response.status_code == 200:
-            tunnels_data = status_response.json()
-            tunnels = tunnels_data.get('tunnels', [])
-            
-            # 只有在有tunnel運行時才獲取延遲
-            if tunnels:
-                response = requests.get('http://localhost:4040/api/status', timeout=2)
-                if response.status_code == 200:
-                    data = response.json()
-                    if 'session' in data and 'legs' in data['session'] and len(data['session']['legs']) > 0:
-                        latency = data['session']['legs'][0].get('latency', '0ms')
-                        return {'latency': latency}
-    except Exception:
-        # 靜默處理錯誤，不輸出DEBUG訊息
-        pass
+def get_cloudflare_tunnel_status_as_ngrok():
+    """獲取 Cloudflare Tunnel 狀態並轉換為 ngrok 格式"""
+    global tunnel_service, tunnel_status
     
-    return {'latency': '-'}
+    try:
+        if tunnel_service:
+            status_info = tunnel_service.get_status()
+            tunnel_status = status_info.get('status', 'unknown')
+            
+            # 轉換為 ngrok 格式
+            tunnels = []
+            if status_info.get('url'):
+                tunnels.append({
+                    'public_url': status_info.get('url'),
+                    'config': {
+                        'addr': f"localhost:{CURRENT_PORT}",
+                        'inspect': False
+                    },
+                    'proto': 'https',
+                    'name': status_info.get('tunnel_name', 'cloudflare-tunnel')
+                })
+            
+            return {
+                'status': tunnel_status,
+                'tunnels': tunnels,
+                'message': f"Cloudflare Tunnel - {status_info.get('message', '')}" if status_info.get('message') else "Cloudflare Tunnel 運行中",
+                'version': 'Cloudflare Tunnel',
+                'service_type': 'cloudflare-tunnel'
+            }
+        else:
+            return {
+                'status': 'error',
+                'tunnels': [],
+                'message': 'Cloudflare Tunnel 服務未初始化',
+                'version': 'Cloudflare Tunnel',
+                'service_type': 'cloudflare-tunnel'
+            }
+    except Exception as e:
+        return {
+            'status': 'error',
+            'tunnels': [],
+            'message': f'獲取隧道狀態失敗: {e}',
+            'version': 'Cloudflare Tunnel',
+            'service_type': 'cloudflare-tunnel'
+        }
 
-def get_ngrok_connections():
-    """獲取ngrok連接統計信息"""
-    try:
-        # 先檢查ngrok狀態
-        status_response = requests.get('http://localhost:4040/api/tunnels', timeout=3)
-        if status_response.status_code == 200:
-            tunnels_data = status_response.json()
-            tunnels = tunnels_data.get('tunnels', [])
-            
-            # 只有在有tunnel運行時才獲取連接統計
-            if tunnels:
-                response = requests.get('http://localhost:4040/api/status', timeout=3)
-                if response.status_code == 200:
-                    data = response.json()
-                    if 'session' in data and 'legs' in data['session'] and len(data['session']['legs']) > 0:
-                        leg = data['session']['legs'][0]
-                        connections = leg.get('connections', {})
-                        
-                        # 計算webhook請求數量
-                        webhook_count = 0
-                        with global_lock:
-                            for log in custom_request_logs:
-                                if log.get('uri') == '/webhook':
-                                    webhook_count += 1
-                        
-                        return {
-                            'ttl': webhook_count,  # 使用webhook請求數量
-                            'opn': connections.get('opn', 0),
-                            'rt1': connections.get('rt1', 0.00),
-                            'rt5': connections.get('rt5', 0.00),
-                            'p50': connections.get('p50', 0.00),
-                            'p90': connections.get('p90', 0.00)
-                        }
-    except Exception:
-        # 靜默處理錯誤，不輸出DEBUG訊息
-        pass
-    
-    return {
-        'ttl': 0,
-        'opn': 0,
-        'rt1': 0.00,
-        'rt5': 0.00,
-        'p50': 0.00,
-        'p90': 0.00
-    }
+
+
 
 def add_custom_request_log(method, uri, status, extra_info=None):
     """添加自定義請求記錄"""
@@ -781,82 +574,26 @@ def add_custom_request_log(method, uri, status, extra_info=None):
         if len(custom_request_logs) > MAX_CUSTOM_LOGS:
             custom_request_logs = custom_request_logs[-MAX_CUSTOM_LOGS:]
 
-def get_ngrok_requests():
-    """獲取合併的請求日誌（ngrok + 自定義）"""
-    all_requests = []
+
+def format_timestamp(timestamp_str):
+    """格式化時間戳為顯示用格式"""
+    if not timestamp_str:
+        return ''
     
-    # 獲取 ngrok 請求日誌
     try:
-        response = requests.get('http://localhost:4040/api/requests', timeout=3)
-        if response.status_code == 200:
-            data = response.json()
-            requests_list = data.get('requests', [])
-            
-            # 只取最近的50個 ngrok 請求
-            recent_requests = requests_list[-50:] if len(requests_list) > 50 else requests_list
-            
-            # 格式化 ngrok 請求數據
-            for req in recent_requests:
-                # 格式化時間戳為 ngrok 格式
-                started_at = req.get('started_at', '')
-                time_str = ''
-                display_time_str = ''
-                if started_at:
-                    try:
-                        # 解析時間戳
-                        dt = datetime.fromisoformat(started_at.replace('Z', '+00:00'))
-                        # 轉換為台灣時區 (CST)
-                        taiwan_tz = timezone(timedelta(hours=8))
-                        dt_taiwan = dt.astimezone(taiwan_tz)
-                        # 完整時間戳用於排序
-                        time_str = dt_taiwan.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3] + ' CST'
-                        # 顯示用時間戳（只有時分秒）
-                        display_time_str = dt_taiwan.strftime('%H:%M:%S.%f')[:-3] + ' CST'
-                    except:
-                        time_str = ''
-                        display_time_str = ''
-                
-                # 獲取狀態文字
-                status_code = req.get('status', 200)
-                status_text = get_status_text(status_code)
-                
-                all_requests.append({
-                    'timestamp': time_str,
-                    'display_timestamp': display_time_str,
-                    'method': req.get('method', 'GET'),
-                    'uri': req.get('uri', '/'),
-                    'status': status_code,
-                    'status_text': status_text,
-                    'type': 'ngrok'
-                })
-    except Exception:
-        # 靜默處理錯誤，不輸出DEBUG訊息
-        pass
-    
-    # 添加自定義請求日誌
-    with global_lock:
-        all_requests.extend(custom_request_logs.copy())
-    
-    # 按時間戳排序（最新的在最後）
-    def parse_time(timestamp):
-        try:
-            if ' CST' in timestamp:
-                time_part = timestamp.replace(' CST', '')
-                # 支援新的日期時間格式和舊的時間格式
-                if len(time_part) > 12:  # 包含日期的格式
-                    return datetime.strptime(time_part, '%Y-%m-%d %H:%M:%S.%f')
-                else:  # 只有時間的格式
-                    return datetime.strptime(time_part, '%H:%M:%S.%f').time()
-        except:
-            pass
-        return datetime.min
-    
-    all_requests.sort(key=lambda x: parse_time(x.get('timestamp', '')))
-    
-    # 只保留最近的100筆記錄
-    recent_requests = all_requests[-100:] if len(all_requests) > 100 else all_requests
-    
-    return {'requests': recent_requests}
+        # 嘗試解析 ISO 格式的時間戳
+        if 'T' in timestamp_str:
+            dt = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
+        else:
+            # 如果不是 ISO 格式，嘗試其他常見格式
+            dt = datetime.strptime(timestamp_str, '%Y-%m-%d %H:%M:%S')
+        
+        # 轉換為本地時間並格式化
+        local_dt = dt.replace(tzinfo=timezone.utc).astimezone()
+        return local_dt.strftime('%H:%M:%S')
+    except:
+        # 如果解析失敗，返回原始字符串的最後8個字符（通常是時間部分）
+        return timestamp_str[-8:] if len(timestamp_str) >= 8 else timestamp_str
 
 def get_status_text(status_code):
     """根據狀態碼獲取狀態文字"""
@@ -878,6 +615,65 @@ def get_status_text(status_code):
         504: 'Gateway Timeout'
     }
     return status_texts.get(status_code, 'Unknown')
+
+
+def get_ngrok_requests():
+    """獲取請求記錄（結合自定義記錄和 Cloudflare Tunnel 記錄）"""
+    global custom_request_logs, tunnel_service
+    
+    # 複製自定義記錄列表（避免並發修改）
+    with global_lock:
+        custom_logs = custom_request_logs.copy()
+    
+    # 獲取 Cloudflare Tunnel 記錄
+    tunnel_logs = []
+    if tunnel_service:
+        try:
+            # 獲取 Cloudflare Tunnel 請求記錄
+            tunnel_request_logs = tunnel_service.get_request_logs()
+            if tunnel_request_logs:
+                for log in tunnel_request_logs:
+                    # 轉換 Cloudflare Tunnel 記錄格式為統一格式
+                    tunnel_logs.append({
+                        'timestamp': log.get('timestamp', ''),
+                        'display_timestamp': format_timestamp(log.get('timestamp', '')),
+                        'method': log.get('method', 'GET'),
+                        'uri': log.get('path', log.get('uri', '')),  # 使用path字段
+                        'status': log.get('status_code', log.get('status', 200)),  # 使用status_code字段
+                        'status_text': get_status_text(log.get('status_code', log.get('status', 200))),
+                        'source': 'cloudflare_tunnel',
+                        'type': log.get('type', 'cloudflare'),
+                        'extra_info': {
+                            'response_time': log.get('response_time', ''),
+                            'latency': log.get('latency', ''),
+                            'user_agent': log.get('user_agent', ''),
+                            'ip': log.get('ip', ''),
+                            'response_size': log.get('response_size', '')
+                        }
+                    })
+        except Exception as e:
+            print(f"獲取 Cloudflare Tunnel 記錄失敗: {e}")
+    
+    # 為自定義記錄添加來源標識
+    for log in custom_logs:
+        log['source'] = 'custom'
+    
+    # 合併所有記錄
+    all_logs = custom_logs + tunnel_logs
+    
+    # 按時間戳排序（最新的在前）
+    try:
+        all_logs.sort(key=lambda x: x.get('timestamp', ''), reverse=True)
+    except:
+        # 如果排序失敗，保持原順序
+        pass
+    
+    # 限制總記錄數
+    max_logs = 100
+    if len(all_logs) > max_logs:
+        all_logs = all_logs[:max_logs]
+    
+    return all_logs
 
 @app.route('/')
 def index():
@@ -1069,11 +865,11 @@ def api_login():
     # 將 LOGIN=1 寫入 .env
     update_login_status(1)
     
-    # 在背景線程中啟動ngrok，不阻塞主請求
-    def start_ngrok_background():
-        start_ngrok()
+    # 在背景線程中啟動隧道服務，不阻塞主請求
+    def start_tunnel_background():
+        start_tunnel()
     
-    threading.Thread(target=start_ngrok_background, daemon=True).start()
+    threading.Thread(target=start_tunnel_background, daemon=True).start()
     
     # 同時登入永豐API
     def login_sinopac_background():
@@ -1088,118 +884,98 @@ def api_logout():
     # 重置LOGIN狀態
     update_login_status(0)
     
-    # 停止ngrok
-    stop_ngrok()
+    # 停止隧道服務
+    stop_tunnel()
     
     # 登出永豐API
     logout_sinopac()
     
     return jsonify({'status': 'ok'})
 
+@app.route('/api/health', methods=['GET'])
+def api_health():
+    """API健康檢查"""
+    health_status = check_api_health()
+    return jsonify({
+        'healthy': health_status,
+        'connected': sinopac_connected,
+        'login_status': sinopac_login_status,
+        'timestamp': datetime.now().isoformat()
+    })
+
+@app.route('/api/tunnel/start', methods=['POST'])
+def api_start_tunnel():
+    """啟動隧道服務 API"""
+    success = start_tunnel()
+    return jsonify({
+        'success': success,
+        'status': get_tunnel_status()
+    })
+
 @app.route('/api/ngrok/start', methods=['POST'])
 def api_start_ngrok():
-    """啟動ngrok API"""
+    """啟動ngrok API (保持兼容性)"""
     success = start_ngrok()
     return jsonify({
         'success': success,
         'status': get_ngrok_status()
     })
 
+@app.route('/api/tunnel/stop', methods=['POST'])
+def api_stop_tunnel():
+    """停止隧道服務 API"""
+    success = stop_tunnel()
+    return jsonify({
+        'success': success,
+        'status': get_tunnel_status()
+    })
+
 @app.route('/api/ngrok/stop', methods=['POST'])
 def api_stop_ngrok():
-    """停止ngrok API"""
+    """停止ngrok API (保持兼容性)"""
     stop_ngrok()
     return jsonify({
         'success': True,
         'status': get_ngrok_status()
     })
 
+@app.route('/api/tunnel/status', methods=['GET'])
+def api_tunnel_status():
+    """獲取隧道狀態 API"""
+    return jsonify(get_tunnel_status())
+
 @app.route('/api/ngrok/status', methods=['GET'])
 def api_ngrok_status():
-    """獲取ngrok狀態 API"""
+    """獲取ngrok狀態 API (保持兼容性)"""
     return jsonify(get_ngrok_status())
 
-@app.route('/api/ngrok/latency', methods=['GET'])
-def api_ngrok_latency():
-    return jsonify(get_ngrok_latency())
-
-@app.route('/api/ngrok/connections', methods=['GET'])
-def api_ngrok_connections():
-    return jsonify(get_ngrok_connections())
 
 @app.route('/api/ngrok/requests', methods=['GET'])
 def api_ngrok_requests():
-    """獲取ngrok請求日誌 API"""
-    return jsonify(get_ngrok_requests())
-
-@app.route('/api/ngrok/version', methods=['GET'])
-def api_ngrok_version():
-    """獲取ngrok版本信息"""
-    current_version = get_ngrok_version()
-    return jsonify({
-        'current_version': current_version,
-        'update_available': ngrok_update_available
-    })
-
-@app.route('/api/ngrok/check_update', methods=['POST'])
-def api_ngrok_check_update():
-    """檢查ngrok更新"""
+    """獲取請求記錄 API（結合自定義記錄和 Cloudflare Tunnel 記錄）"""
     try:
-        update_info = check_ngrok_update()
-        if update_info:
-            return jsonify({
-                'status': 'success',
-                'data': update_info
-            })
-        else:
-            return jsonify({
-                'status': 'error',
-                'message': '無法檢查更新'
-            })
-    except Exception as e:
-        return jsonify({
-            'status': 'error',
-            'message': f'檢查更新失敗: {str(e)}'
-        }), 500
-
-@app.route('/api/ngrok/update', methods=['POST'])
-def api_ngrok_update():
-    """更新ngrok"""
-    try:
-        data = request.get_json() or {}
-        download_url = data.get('download_url')
+        requests_data = get_ngrok_requests()
         
-        if not download_url:
-            # 自動獲取最新版本
-            update_info = check_ngrok_update()
-            if update_info and update_info.get('download_url'):
-                download_url = update_info['download_url']
-            else:
-                return jsonify({
-                    'status': 'error',
-                    'message': '無法獲取下載鏈接'
-                }), 400
-        
-        # 在背景執行更新
-        def update_background():
-            success = download_and_update_ngrok(download_url)
-            if success:
-                print("ngrok更新成功！")
-            else:
-                print("ngrok更新失敗！")
-                
-        threading.Thread(target=update_background, daemon=True).start()
+        # 添加額外的統計信息
+        latency_info = {}
+        if tunnel_service:
+            try:
+                latency_info = tunnel_service.get_latency()
+            except Exception as e:
+                print(f"獲取延遲信息失敗: {e}")
         
         return jsonify({
-            'status': 'success',
-            'message': '正在背景更新ngrok，請稍候...'
+            'requests': requests_data,
+            'total_count': len(requests_data),
+            'latency_info': latency_info,
+            'status': 'success'
         })
-        
     except Exception as e:
         return jsonify({
-            'status': 'error',
-            'message': f'更新失敗: {str(e)}'
+            'error': f'獲取請求記錄失敗: {str(e)}',
+            'status': 'error'
         }), 500
+
 
 @app.route('/api/ngrok/setup', methods=['POST'])
 def api_ngrok_setup():
@@ -1208,77 +984,69 @@ def api_ngrok_setup():
         data = request.get_json() or {}
         authtoken = data.get('authtoken', '').strip()
         
-        if not authtoken:
+        mode = data.get('mode', 'temporary')
+        
+        # 根據模式處理
+        if authtoken in ['workers-mode', 'temporary-mode']:
+            print(f"使用 {mode} 模式啟動 Cloudflare Tunnel")
+        elif not authtoken:
             return jsonify({
                 'status': 'error',
-                'message': '請提供有效的ngrok authtoken'
+                'message': '請提供有效的 Cloudflare Tunnel token'
             }), 400
-        
-        # 驗證authtoken格式（基本檢查）
-        if len(authtoken) < 20:
+        elif len(authtoken) < 20:
             return jsonify({
                 'status': 'error',
-                'message': 'authtoken格式不正確'
+                'message': 'Cloudflare Tunnel token 格式不正確'
             }), 400
         
-        # 執行ngrok配置
-        def setup_ngrok_background():
+        # 儲存 Cloudflare token（免費模式除外）
+        if authtoken not in ['workers-mode', 'temporary-mode']:
             try:
-                import subprocess
-                import time
+                config_dir = os.path.join(os.path.dirname(__file__), 'config')
+                if not os.path.exists(config_dir):
+                    os.makedirs(config_dir)
                 
-                ngrok_exe_path = os.path.join(os.path.dirname(__file__), 'ngrok.exe')
+                token_file = os.path.join(config_dir, 'cloudflare_token.txt')
+                with open(token_file, 'w') as f:
+                    f.write(authtoken)
+            except Exception as e:
+                return jsonify({
+                    'status': 'error',
+                    'message': f'儲存 token 失敗: {str(e)}'
+                }), 500
+        
+        # 執行 Cloudflare Tunnel 配置
+        def setup_tunnel_background():
+            try:
+                print(f"開始設置 Cloudflare Tunnel，CLOUDFLARE_TUNNEL_AVAILABLE={CLOUDFLARE_TUNNEL_AVAILABLE}")
                 
-                # 1. 設置authtoken
-                print(f"設置ngrok authtoken...")
-                result = subprocess.run(
-                    [ngrok_exe_path, 'config', 'add-authtoken', authtoken],
-                    capture_output=True,
-                    text=True,
-                    timeout=30
-                )
+                # 初始化並啟動 Cloudflare Tunnel
+                init_tunnel_service(mode)
+                print(f"初始化完成，tunnel_service={tunnel_service}")
                 
-                if result.returncode != 0:
-                    print(f"設置authtoken失敗: {result.stderr}")
+                success = start_cloudflare_tunnel()
+                print(f"啟動結果: {success}")
+                
+                if success:
+                    print("Cloudflare Tunnel 設置並啟動成功！")
+                    return True
+                else:
+                    print("Cloudflare Tunnel 設置失敗！")
                     return False
                     
-                print("authtoken設置成功")
-                
-                # 2. 停止現有ngrok進程
-                global ngrok_process
-                if ngrok_process:
-                    ngrok_process.terminate()
-                    time.sleep(2)
-                
-                # 3. 啟動ngrok
-                print("啟動ngrok tunnel...")
-                start_ngrok()
-                
-                # 4. 驗證啟動成功
-                time.sleep(5)
-                try:
-                    response = requests.get('http://localhost:4040/api/tunnels', timeout=5)
-                    if response.status_code == 200:
-                        tunnels = response.json().get('tunnels', [])
-                        if tunnels:
-                            print("ngrok設置並啟動成功！")
-                            return True
-                except:
-                    pass
-                
-                print("ngrok啟動驗證失敗")
-                return False
-                
             except Exception as e:
-                print(f"設置ngrok失敗: {e}")
+                print(f"設置 Cloudflare Tunnel 失敗: {e}")
+                import traceback
+                traceback.print_exc()
                 return False
         
         # 在背景執行設置
-        threading.Thread(target=setup_ngrok_background, daemon=True).start()
+        threading.Thread(target=setup_tunnel_background, daemon=True).start()
         
         return jsonify({
             'status': 'success',
-            'message': '正在設置ngrok，請稍候...'
+            'message': '正在設置 Cloudflare Tunnel，請稍候...'
         })
         
     except Exception as e:
@@ -1287,36 +1055,6 @@ def api_ngrok_setup():
             'message': f'設置失敗: {str(e)}'
         }), 500
 
-@app.route('/api/ngrok/validate_token', methods=['POST'])
-def api_ngrok_validate_token():
-    """驗證ngrok authtoken有效性"""
-    try:
-        data = request.get_json() or {}
-        authtoken = data.get('authtoken', '').strip()
-        
-        if not authtoken:
-            return jsonify({
-                'status': 'error',
-                'message': '請提供authtoken'
-            }), 400
-        
-        # 基本格式驗證
-        if len(authtoken) < 20 or not authtoken.replace('_', '').replace('-', '').isalnum():
-            return jsonify({
-                'status': 'error',
-                'message': 'authtoken格式不正確'
-            }), 400
-        
-        return jsonify({
-            'status': 'success',
-            'message': 'authtoken格式有效'
-        })
-        
-    except Exception as e:
-        return jsonify({
-            'status': 'error',
-            'message': f'驗證失敗: {str(e)}'
-        }), 500
 
 @app.route('/api/ngrok/token/save', methods=['POST'])
 def api_ngrok_token_save():
@@ -1335,7 +1073,7 @@ def api_ngrok_token_save():
         config_dir = os.path.join(os.path.dirname(__file__), 'config')
         os.makedirs(config_dir, exist_ok=True)
         
-        token_file = os.path.join(config_dir, 'ngrok_token.txt')
+        token_file = os.path.join(config_dir, 'cloudflare_token.txt')
         with open(token_file, 'w', encoding='utf-8') as f:
             f.write(authtoken)
         
@@ -1352,10 +1090,10 @@ def api_ngrok_token_save():
 
 @app.route('/api/ngrok/token/load', methods=['GET'])
 def api_ngrok_token_load():
-    """從服務器端載入ngrok authtoken"""
+    """從服務器端載入 Cloudflare Tunnel token（替換原 ngrok token）"""
     try:
         config_dir = os.path.join(os.path.dirname(__file__), 'config')
-        token_file = os.path.join(config_dir, 'ngrok_token.txt')
+        token_file = os.path.join(config_dir, 'cloudflare_token.txt')
         
         if os.path.exists(token_file):
             with open(token_file, 'r', encoding='utf-8') as f:
@@ -1369,7 +1107,7 @@ def api_ngrok_token_load():
         
         return jsonify({
             'status': 'not_found',
-            'message': '未找到保存的token'
+            'message': '未找到保存的 Cloudflare Tunnel token'
         })
         
     except Exception as e:
@@ -1377,6 +1115,105 @@ def api_ngrok_token_load():
             'status': 'error',
             'message': f'載入失敗: {str(e)}'
         }), 500
+
+@app.route('/api/tunnel/setup', methods=['POST'])
+def api_tunnel_setup():
+    """設置隧道服務 token 並啟動"""
+    global tunnel_type, tunnel_service
+    
+    try:
+        data = request.get_json()
+        token = data.get('token', '').strip()
+        service_type = data.get('service_type', tunnel_type)
+        
+        if not token:
+            return jsonify({
+                'success': False,
+                'message': '請提供有效的 token'
+            })
+        
+        # 創建配置目錄
+        config_dir = os.path.join(os.path.dirname(__file__), 'config')
+        if not os.path.exists(config_dir):
+            os.makedirs(config_dir)
+        
+        # 保存 token
+        if service_type == "cloudflare":
+            token_file = os.path.join(config_dir, 'cloudflare_token.txt')
+        else:
+            token_file = os.path.join(config_dir, 'ngrok_token.txt')
+        
+        with open(token_file, 'w') as f:
+            f.write(token)
+        
+        # 設置隧道類型
+        tunnel_type = service_type
+        
+        # 在背景線程中執行設置
+        def setup_tunnel_background():
+            try:
+                if service_type == "cloudflare":
+                    # 初始化 Cloudflare Tunnel
+                    init_tunnel_service()
+                    success = start_cloudflare_tunnel()
+                else:
+                    # 使用 ngrok 設置
+                    success = start_ngrok()
+                
+                if success:
+                    print(f"{service_type} 設置並啟動成功!")
+                else:
+                    print(f"{service_type} 設置失敗!")
+            except Exception as e:
+                print(f"設置 {service_type} 失敗: {e}")
+        
+        threading.Thread(target=setup_tunnel_background, daemon=True).start()
+        
+        return jsonify({
+            'success': True,
+            'message': f'正在設置 {service_type}，請稍候...'
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'message': f'設置失敗: {str(e)}'
+        })
+
+@app.route('/api/tunnel/token/load', methods=['GET'])
+def api_tunnel_token_load():
+    """載入隧道服務 token"""
+    try:
+        config_dir = os.path.join(os.path.dirname(__file__), 'config')
+        
+        # 檢查 Cloudflare token
+        cf_token_file = os.path.join(config_dir, 'cloudflare_token.txt')
+        ngrok_token_file = os.path.join(config_dir, 'ngrok_token.txt')
+        
+        result = {
+            'cloudflare_token': '',
+            'ngrok_token': '',
+            'current_service': tunnel_type
+        }
+        
+        if os.path.exists(cf_token_file):
+            with open(cf_token_file, 'r') as f:
+                result['cloudflare_token'] = f.read().strip()
+        
+        if os.path.exists(ngrok_token_file):
+            with open(ngrok_token_file, 'r') as f:
+                result['ngrok_token'] = f.read().strip()
+        
+        return jsonify({
+            'success': True,
+            'data': result
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'message': f'載入 token 失敗: {str(e)}'
+        })
 
 @app.route('/api/ngrok/token/clear', methods=['POST'])
 def api_ngrok_token_clear():
@@ -3170,6 +3007,80 @@ def login_sinopac():
         print(f"永豐API 登入失敗！！！ 錯誤：{str(e)}")
         return False
 
+def check_api_health():
+    """檢查API健康狀態"""
+    global sinopac_api, sinopac_connected
+    
+    if not sinopac_api or not sinopac_connected:
+        return False
+    
+    try:
+        # 嘗試獲取帳戶餘額來測試API連接性
+        balance = sinopac_api.account_balance()
+        if balance is not None:
+            print(f"API健康檢查正常 - 餘額: {balance}")
+            return True
+        else:
+            print("API健康檢查失敗 - 無法獲取帳戶餘額")
+            return False
+    except Exception as e:
+        print(f"API健康檢查失敗 - 錯誤: {str(e)}")
+        return False
+
+def save_order_mapping():
+    """保存訂單映射到文件"""
+    global order_octype_map
+    
+    try:
+        order_mapping_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'order_mapping.json')
+        with open(order_mapping_file, 'w', encoding='utf-8') as f:
+            json.dump(order_octype_map, f, ensure_ascii=False, indent=2)
+        print(f"訂單映射已保存到 {order_mapping_file}")
+    except Exception as e:
+        print(f"保存訂單映射失敗: {str(e)}")
+
+def load_order_mapping():
+    """從文件加載訂單映射"""
+    global order_octype_map
+    
+    try:
+        order_mapping_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'order_mapping.json')
+        if os.path.exists(order_mapping_file):
+            with open(order_mapping_file, 'r', encoding='utf-8') as f:
+                order_octype_map = json.load(f)
+            print(f"訂單映射已從 {order_mapping_file} 加載，共 {len(order_octype_map)} 個訂單")
+        else:
+            print("訂單映射文件不存在，使用空映射")
+    except Exception as e:
+        print(f"加載訂單映射失敗: {str(e)}")
+        order_octype_map = {}
+
+def is_duplicate_signal(signal_id, action, contract_code, time_window=30):
+    """檢查是否為重複訊號"""
+    global duplicate_signal_window
+    
+    current_time = datetime.now()
+    signal_key = f"{signal_id}_{action}_{contract_code}"
+    
+    # 清理過期的記錄
+    expired_keys = []
+    for key, timestamp in duplicate_signal_window.items():
+        if (current_time - timestamp).total_seconds() > time_window:
+            expired_keys.append(key)
+    
+    for key in expired_keys:
+        del duplicate_signal_window[key]
+    
+    # 檢查是否為重複訊號
+    if signal_key in duplicate_signal_window:
+        time_diff = (current_time - duplicate_signal_window[signal_key]).total_seconds()
+        print(f"檢測到重複訊號: {signal_key}, 時間差: {time_diff:.2f}秒")
+        return True
+    
+    # 記錄新訊號
+    duplicate_signal_window[signal_key] = current_time
+    return False
+
 def logout_sinopac():
     """登出永豐API"""
     global sinopac_api, sinopac_connected, sinopac_account, sinopac_login_status, sinopac_login_time, auto_logout_timer, order_octype_map
@@ -3326,7 +3237,7 @@ reset_login_flag()
 
 def cleanup_on_exit():
     """程式退出時的清理工作"""
-    global sinopac_api, sinopac_connected, sinopac_account, sinopac_login_status, auto_logout_timer, ngrok_process, ngrok_auto_restart_timer, order_octype_map, connection_monitor_timer
+    global sinopac_api, sinopac_connected, sinopac_account, sinopac_login_status, auto_logout_timer, ngrok_process, order_octype_map, connection_monitor_timer
     
     try:
         # 停止自動登出定時器
@@ -3335,10 +3246,6 @@ def cleanup_on_exit():
         # 停止連線監控器
         stop_connection_monitor()
         
-        # 停止自動重啟定時器
-        if ngrok_auto_restart_timer and ngrok_auto_restart_timer.is_alive():
-            ngrok_auto_restart_timer.cancel()
-            ngrok_auto_restart_timer = None
         
         # 關閉 ngrok 進程
         if ngrok_process:
@@ -3398,103 +3305,8 @@ def signal_handler(signum, frame):
 signal.signal(signal.SIGINT, signal_handler)
 signal.signal(signal.SIGTERM, signal_handler)
 
-# 移除check_ngrok_update_alternative函數，使用check_ngrok_update_simple作為主要更新檢查方法
 
-def check_ngrok_update_simple():
-    """簡單的ngrok更新檢查方法，使用已知的最新版本"""
-    try:
-        print("使用簡單方法檢查ngrok更新...")
-        
-        # 已知的最新版本（可以定期手動更新）
-        known_latest_version = "3.23.3"
-        print(f"已知最新版本: {known_latest_version}")
-        
-        current_version = get_ngrok_version()
-        print(f"當前 ngrok 版本: {current_version}")
-        
-        if current_version:
-            if compare_versions(known_latest_version, current_version) > 0:
-                ngrok_update_available = True
-                print(f"ngrok更新可用: {current_version} -> {known_latest_version}")
-                return {
-                    'update_available': True,
-                    'current_version': current_version,
-                    'latest_version': known_latest_version,
-                    'download_url': f'https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v{known_latest_version}-windows-amd64.zip'
-                }
-            else:
-                ngrok_update_available = False
-                print(f"ngrok已是最新版本: {current_version}")
-                return {
-                    'update_available': False,
-                    'current_version': current_version,
-                    'latest_version': known_latest_version
-                }
-        else:
-            print("無法獲取當前版本")
-            return None
-            
-    except Exception as e:
-        print(f"簡單更新檢查失敗: {e}")
-        return None
 
-def start_ngrok_auto_restart():
-    """啟動 ngrok 自動重啟"""
-    global ngrok_auto_restart_timer, ngrok_process
-    
-    # 如果已有重啟定時器在運行，先取消
-    if ngrok_auto_restart_timer and ngrok_auto_restart_timer.is_alive():
-        ngrok_auto_restart_timer.cancel()
-    
-    def auto_restart_task():
-        """自動重啟 ngrok"""
-        global ngrok_process, ngrok_status, ngrok_auto_restart_timer
-        
-        try:
-            print("執行 ngrok 自動重啟...")
-            
-            # 確保舊進程已關閉
-            if ngrok_process:
-                try:
-                    ngrok_process.terminate()
-                    ngrok_process.wait(timeout=2)
-                except:
-                    pass
-                ngrok_process = None
-            
-            # 重新啟動 ngrok
-            if start_ngrok():
-                print("ngrok 自動重啟成功！")
-                # 發送前端系統日誌
-                try:
-                    requests.post(
-                        f'http://127.0.0.1:{CURRENT_PORT}/api/system_log',
-                        json={'message': 'ngrok 自動重啟成功！', 'type': 'success'},
-                        timeout=5
-                    )
-                except:
-                    pass
-            else:
-                print("ngrok 自動重啟失敗！")
-                # 發送前端系統日誌
-                try:
-                    requests.post(
-                        f'http://127.0.0.1:{CURRENT_PORT}/api/system_log',
-                        json={'message': 'ngrok 自動重啟失敗！', 'type': 'error'},
-                        timeout=5
-                    )
-                except:
-                    pass
-        except Exception as e:
-            print(f"ngrok 自動重啟時發生錯誤: {e}")
-        finally:
-            ngrok_auto_restart_timer = None
-    
-    # 延遲5秒後重啟，避免頻繁重啟
-    ngrok_auto_restart_timer = threading.Timer(5.0, auto_restart_task)
-    ngrok_auto_restart_timer.daemon = True
-    ngrok_auto_restart_timer.start()
-    print("已啟動 ngrok 自動重啟定時器，5秒後重啟")
 
 # 移除重複的signal_handler函數，保留第一個
 
@@ -3918,19 +3730,19 @@ def generate_trading_report(trades, account_data, position_data, cover_trades, t
         filepath = os.path.join(report_dir, filename)
         wb.save(filepath)
         
-        # 發送 Telegram 通知
-        message = f"{filename} 交易日報已生成！！！"
-        send_telegram_message(message)
-        
-        # 添加前端日誌
+        # 添加xlsx生成成功的前端日誌
         try:
             requests.post(
                 f'http://127.0.0.1:{CURRENT_PORT}/api/system_log',
-                json={'message': "Telegram［交易日報］訊息發送成功！！！", 'type': 'info'},
+                json={'message': f"交易日報 {filename} 生成成功！！！", 'type': 'success'},
                 timeout=5
             )
         except:
             pass
+        
+        # 發送 Telegram 通知
+        message = f"{filename} 交易日報已生成！！！"
+        send_telegram_message(message)
             
         return True
         
@@ -4114,7 +3926,7 @@ def generate_monthly_trading_report():
                 '風險指標': 0,
                 '手續費': 0,
                 '期交稅': 0,
-                '本日平倉損益': 0
+                '本月平倉損益': 0
             },
             'cover_trades': [],
             'position_data': None  # 使用最後一天的持倉數據
@@ -4225,7 +4037,7 @@ def generate_monthly_trading_report():
             value = monthly_data['account_data'][title]
             if title == '風險指標':
                 ws[f'B{row}'] = f"{format_number_for_notification(value)}%"
-            elif title == '本日平倉損益':
+            elif title == '本月平倉損益':
                 ws[f'B{row}'] = f"＄{format_number_for_notification(value)} TWD"
             else:
                 ws[f'B{row}'] = format_number_for_notification(value)
@@ -4238,7 +4050,7 @@ def generate_monthly_trading_report():
         
         # 交易明細標題
         detail_titles = ['成交時間', '成交單號', '選用合約', '訂單類型', '成交類型', '成交部位', 
-                        '成交動作', '成交數量', '開倉價格', '平倉價格', '平倉損益']
+                        '成交動作', '成交數量', '開倉價格', '平倉價格', '已實現損益']
         for i, title in enumerate(detail_titles):
             col = get_column_letter(i + 1)
             ws[f'{col}{current_row + 1}'] = title
@@ -4380,19 +4192,19 @@ def generate_monthly_trading_report():
         filepath = os.path.join(monthly_report_dir, filename)
         wb.save(filepath)
         
-        # 發送 Telegram 通知
-        message = f"{filename} 交易月報已生成！！！"
-        send_telegram_message(message)
-        
-        # 添加前端日誌
+        # 添加xlsx生成成功的前端日誌
         try:
             requests.post(
                 f'http://127.0.0.1:{CURRENT_PORT}/api/system_log',
-                json={'message': "Telegram［交易月報］訊息發送成功！！！", 'type': 'info'},
+                json={'message': f"交易月報 {filename} 生成成功！！！", 'type': 'success'},
                 timeout=5
             )
         except:
             pass
+        
+        # 發送 Telegram 通知
+        message = f"{filename} 交易月報已生成！！！"
+        send_telegram_message(message)
         
         return True
         
@@ -4724,6 +4536,19 @@ def tradingview_webhook():
             
         data = json.loads(raw)
         signal_id = data.get('tradeId')
+        action = data.get('action', '')
+        contract_code = data.get('contract', '')
+        
+        # 重複訊號檢查（優化功能）
+        if is_duplicate_signal(signal_id, action, contract_code):
+            print(f"忽略重複訊號: {signal_id}")
+            add_custom_request_log('POST', '/webhook', 200, {
+                'reason': '重複訊號已忽略',
+                'signal_id': signal_id,
+                'action': action,
+                'contract': contract_code
+            })
+            return '重複訊號已忽略', 200
         
         # 轉倉邏輯檢查
         if process_rollover_signal(data):
@@ -4750,14 +4575,14 @@ def tradingview_webhook():
         data['receive_time'] = datetime.now()
         process_signal(data)
         
-        # 記錄成功的 webhook 請求
-        add_custom_request_log('POST', '/webhook', 200, {
-            'signal_id': signal_id,
-            'signal_type': data.get('type'),
-            'direction': data.get('direction'),
-            'client_ip': client_ip,
-            'contracts': f"TXF:{data.get('txf', 0)} MXF:{data.get('mxf', 0)} TMF:{data.get('tmf', 0)}"
-        })
+        # 記錄成功的 webhook 請求（前端顯示已移除）
+        # add_custom_request_log('POST', '/webhook', 200, {
+        #     'signal_id': signal_id,
+        #     'signal_type': data.get('type'),
+        #     'direction': data.get('direction'),
+        #     'client_ip': client_ip,
+        #     'contracts': f"TXF:{data.get('txf', 0)} MXF:{data.get('mxf', 0)} TMF:{data.get('tmf', 0)}"
+        # })
         
         # 添加前端日誌 - 顯示訊號類型
         signal_type = data.get('type', 'entry')
@@ -5272,6 +5097,8 @@ def place_futures_order_tx_style(contract, quantity, direction, price, order_typ
                 'is_manual': is_manual,
                 'timestamp': datetime.now().strftime('%H:%M:%S')
             }
+            # 保存訂單映射
+            save_order_mapping()
         
         # 檢查操作結果
         if hasattr(trade, 'operation') and trade.operation.get('op_msg'):
@@ -5327,7 +5154,7 @@ def place_futures_order_tx_style(contract, quantity, direction, price, order_typ
                 'order_id': order_id
             }
         
-        # 記錄掛單成功日誌
+        # 記錄掛單成功日誌（前端顯示已移除）
         log_message = get_simple_order_log_message(
             contract_name=contract_name,
             direction=direction_str,
@@ -5340,14 +5167,15 @@ def place_futures_order_tx_style(contract, quantity, direction, price, order_typ
             order_type=order_type,
             price_type=price_type
         )
-        try:
-            requests.post(
-                f'http://127.0.0.1:{CURRENT_PORT}/api/system_log',
-                json={'message': log_message, 'type': 'success'},
-                timeout=5
-            )
-        except:
-            pass
+        # 前端系統日誌（已移除顯示）
+        # try:
+        #     requests.post(
+        #         f'http://127.0.0.1:{CURRENT_PORT}/api/system_log',
+        #         json={'message': log_message, 'type': 'success'},
+        #         timeout=5
+        #     )
+        # except:
+        #     pass
         
         # 訂單提交成功 - 不需要立即發送通知，等callback處理
         print(f"訂單提交成功: {order_id} - {contract_name} {quantity}口 {direction}")
@@ -5672,6 +5500,8 @@ def place_futures_order(contract_code, quantity, direction, price=0, is_manual=F
         # 將訂單資訊存入映射（使用線程鎖確保線程安全）
         with global_lock:
             order_octype_map[order_id] = order_info
+            # 保存訂單映射
+            save_order_mapping()
         
         print(f"訂單提交成功，單號: {order_id}")
         print(f"訂單映射已建立: {order_info}")
@@ -6377,6 +6207,81 @@ def calculate_trade_pnl(open_trades, close_trade):
     
     return total_pnl, used_opens
 
+def load_historical_open_trades(close_trades):
+    """從歷史記錄中載入開倉交易"""
+    import os
+    import glob
+    
+    historical_opens = []
+    
+    # 取得所有歷史交易記錄檔案
+    transdata_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'transdata')
+    trade_files = glob.glob(os.path.join(transdata_dir, 'trades_*.json'))
+    
+    # 按日期排序（從最新到最舊）
+    trade_files.sort(reverse=True)
+    
+    print(f"搜尋歷史開倉記錄，共找到 {len(trade_files)} 個交易記錄檔案")
+    
+    for close_trade in close_trades:
+        print(f"搜尋 {close_trade['contract_code']} 的歷史開倉記錄...")
+        
+        # 為每個平倉交易尋找對應的開倉記錄
+        for trade_file in trade_files:
+            try:
+                with open(trade_file, 'r', encoding='utf-8') as f:
+                    historical_trades = json.load(f)
+                
+                # 在歷史記錄中尋找開倉交易
+                for trade in historical_trades:
+                    if trade.get('type') != 'deal':
+                        continue
+                        
+                    raw_data = trade.get('raw_data', {})
+                    order = raw_data.get('order', {})
+                    
+                    # 檢查是否為開倉交易
+                    if order.get('oc_type') != 'New':
+                        continue
+                    
+                    # 獲取合約資訊
+                    contract_code = ''
+                    contract_data = order.get('contract', {})
+                    if isinstance(contract_data, dict):
+                        contract_code = contract_data.get('code', '')
+                    elif isinstance(contract_data, str):
+                        contract_code = contract_data
+                    
+                    if not contract_code:
+                        contract_code = trade.get('raw_data', {}).get('contract', {}).get('code', '')
+                    
+                    # 檢查是否為相同合約且方向相反
+                    if (contract_code == close_trade['contract_code'] and 
+                        order.get('action') != close_trade['action'] and
+                        order.get('quantity') == close_trade['quantity']):  # 方向相反且數量相同
+                        
+                        historical_opens.append({
+                            'contract_code': contract_code,
+                            'contract_name': get_contract_name_from_code(contract_code),
+                            'action': order.get('action', ''),
+                            'quantity': order.get('quantity', 0),
+                            'price': order.get('price', 0),
+                            'timestamp': trade.get('timestamp', '')
+                        })
+                        
+                        print(f"  找到歷史開倉記錄: {contract_code} {order.get('action')} {order.get('quantity')}口 @ {order.get('price')}")
+                        break  # 找到一個就停止搜尋該合約
+                
+                # 如果找到了開倉記錄，停止搜尋其他檔案
+                if any(h['contract_code'] == close_trade['contract_code'] for h in historical_opens):
+                    break
+                
+            except Exception as e:
+                print(f"讀取歷史記錄失敗 {trade_file}: {e}")
+                continue
+    
+    return historical_opens
+
 def analyze_simple_trading_stats(trades):
     """簡單分析交易統計（簡單配對開平倉，計算單筆損益）"""
     cover_trades = []
@@ -6444,19 +6349,26 @@ def analyze_simple_trading_stats(trades):
                 'timestamp': timestamp
             })
     
+    # 如果當天沒有開倉記錄，嘗試從歷史記錄中查找
+    if close_trades and not open_trades:
+        print("當天沒有開倉記錄，嘗試從歷史記錄中查找...")
+        open_trades = load_historical_open_trades(close_trades)
+    
     # 簡單配對平倉交易，找對應的開倉價格
     for close_trade in close_trades:
         total_cover_quantity += close_trade['quantity']
         
-        # 找對應的開倉交易（簡單配對：同合約、反向動作）
+        # 找對應的開倉交易（簡單配對：同合約、反向動作、相同數量）
         required_open_action = 'Buy' if close_trade['action'] == 'Sell' else 'Sell'
         open_price = None
         
         # 從開倉交易中找最接近的價格（時間上最早的）
         for open_trade in open_trades:
             if (open_trade['contract_code'] == close_trade['contract_code'] and
-                open_trade['action'] == required_open_action):
+                open_trade['action'] == required_open_action and
+                open_trade['quantity'] == close_trade['quantity']):  # 加上數量匹配
                 open_price = open_trade['price']
+                print(f"找到配對開倉記錄：{open_trade['contract_code']} {open_trade['action']} {open_trade['quantity']}口 @ {open_price}")
                 break  # 使用第一個找到的開倉價格
         
         # 計算單筆損益（如果找到開倉價格）
@@ -6563,12 +6475,19 @@ if __name__ == '__main__':
     
     # 顯示啟動設定
     print(f"=== Auto91 交易系統啟動 ===")
+    print(f"版本資訊: v1.3.11 (2025-07-12)")
     print(f"端口設定: {CURRENT_PORT}")
     print(f"日誌模式: {'背景執行' if LOG_CONSOLE == 0 else '正常顯示'}")
     print(f"================================")
     
     # 啟動時清理舊的交易記錄檔案
     cleanup_old_trade_files()
+    
+    # 加載訂單映射
+    load_order_mapping()
+    
+    # 初始化隧道服務
+    init_tunnel_service()
     
     # 初始化保證金記錄
     if update_margin_requirements_from_api():
@@ -6589,11 +6508,6 @@ if __name__ == '__main__':
     # 初始化永豐API
     init_sinopac_api()
     
-    # 初始化ngrok版本信息（不輸出print）
-    try:
-        get_ngrok_version()
-    except Exception:
-        pass
     
     # 啟動通知檢查器
     start_notification_checker()

@@ -1,6 +1,15 @@
 # 文檔導航索引
 
-**最新版本：v1.3.10** - 日誌顯示邏輯修正與格式優化 (2025-07-10)
+**最新版本：v1.3.11** - 隧道服務重構與界面優化 (2025-07-12)
+
+### 2025-07-12 更新內容
+- **隧道服務重構**：`cloudflare_tunnel.py` → `tunnel.py`，簡化模組命名
+- **域名選項修正**：移除已停用的 workers.dev 免費域名，突出臨時域名推薦
+- **界面優化**：修正狀態文字對齊問題，統一請求數量顯示格式
+- **系統日誌改進**：增加 xlsx 生成日誌，移除重複 TG 發送日誌
+- **錯誤修復**：解決 `format_timestamp` 未定義和版本日誌重複問題
+
+**版本歷史：v1.3.10** - 日誌顯示邏輯修正與格式優化 (2025-07-10)
 
 ### 2025-07-10 更新內容
 - **重大修正**：修正平倉時方向顯示錯誤的嚴重問題
@@ -28,16 +37,30 @@
 
 - 2025-07-06：轉倉/保證金前端日誌、日誌格式優化、顏色說明、細節修正。
 
-- [README.md](README.md) 系統概況與功能 **[v1.3.8 已更新]**
-- [QUICK_START.md](QUICK_START.md) 5 分鐘快速上手 **[v1.3.8 已更新]**
-- [API_REFERENCE.md](API_REFERENCE.md) API 技術參考 **[v1.3.8 已更新]**
-- [CHANGELOG.md](CHANGELOG.md) 版本變更紀錄 **[v1.3.8 已更新]**
-- [TROUBLESHOOTING.md](TROUBLESHOOTING.md) 故障排除 **[v1.3.8 已更新]**
-- [DEPLOYMENT.md](DEPLOYMENT.md) 生產部署指南 **[v1.3.8 已更新]**
-- [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md) 開發者指南 **[v1.3.8 已更新]**
-- [MAINTENANCE.md](MAINTENANCE.md) 維護運營指南 **[v1.3.8 已更新]**
+- [README.md](README.md) 系統概況與功能 **[v1.3.11 已更新]**
+- [QUICK_START.md](QUICK_START.md) 5 分鐘快速上手 **[v1.3.11 已更新]**
+- [API_REFERENCE.md](API_REFERENCE.md) API 技術參考 **[v1.3.11 已更新]**
+- [CHANGELOG.md](CHANGELOG.md) 版本變更紀錄 **[v1.3.11 已更新]**
+- [TROUBLESHOOTING.md](TROUBLESHOOTING.md) 故障排除 **[v1.3.11 已更新]**
+- [DEPLOYMENT.md](DEPLOYMENT.md) 生產部署指南 **[v1.3.11 已更新]**
+- [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md) 開發者指南 **[v1.3.11 已更新]**
+- [MAINTENANCE.md](MAINTENANCE.md) 維護運營指南 **[v1.3.11 已更新]**
 
 ## 重點功能文檔
+
+### 隧道服務重構與界面優化（v1.3.11新增）
+- **隧道模組重命名**：`cloudflare_tunnel.py` → `tunnel.py`，簡化模組導入路徑
+- **域名模式更新**：移除已停用的 workers.dev 模式，保留 temporary 和 custom 模式
+- **時間戳處理修復**：新增 `format_timestamp` 函數，處理 Cloudflare Tunnel 日誌時間格式
+- **狀態對齊修正**：確保所有狀態文字（online/offline/checking）垂直靠下對齊
+- **請求計數優化**：移除「筆」字，統一顯示純數字格式
+- **版本日誌控制**：移除初啟動時的重複版本日誌記錄
+- **報表生成日誌**：新增 xlsx 文件生成成功的前端日誌記錄
+- **TG 通知簡化**：移除重複的 TG 發送成功日誌，避免日誌冗餘
+- **週六夜盤統計**：確保週六夜盤交易統計正確執行
+- **界面一致性**：所有狀態指標保持相同的視覺風格
+- **模組導入更新**：`from tunnel import CloudflareTunnel`
+- **CSS 樣式統一**：所有狀態顯示使用相同的對齊和格式
 
 ### 交易統計格式優化與損益計算改善（v1.3.8新增）
 - **交易統計格式優化**：新增完整的交易明細顯示，包含開倉價格、平倉價格和單筆損益

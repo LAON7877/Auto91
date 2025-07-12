@@ -1,6 +1,151 @@
 # 故障排除指南
 
-## 最新更新 (v1.3.10 - 2025-07-10)
+## 最新更新 (v1.3.11 - 2025-07-12)
+
+### 隧道服務重構與界面優化問題
+**隧道服務重構相關問題**：修復隧道模組重命名和域名選項更新
+
+#### 問題：隧道模組導入失敗
+**症狀**：
+- 系統啟動時出現 `ModuleNotFoundError: No module named 'cloudflare_tunnel'`
+- 隧道服務無法啟動
+
+**解決方案**：
+1. **已修復**：v1.3.11版本已將模組重命名為 `tunnel.py`
+2. **檢查導入**：確認代碼使用 `from tunnel import CloudflareTunnel`
+3. **清除快取**：刪除 `__pycache__` 資料夾重新啟動
+
+#### 問題：Cloudflare Tunnel 記錄失敗
+**症狀**：
+- 錯誤訊息：`name 'format_timestamp' is not defined`
+- Cloudflare Tunnel 日誌無法正常記錄
+
+**解決方案**：
+1. **已修復**：v1.3.11版本已新增 `format_timestamp` 函數
+2. **檢查函數**：確認函數在 `main.py` 中正確定義
+3. **重新啟動**：重啟程式確保新函數載入
+
+**檢查代碼**：
+```python
+def format_timestamp(timestamp_str):
+    if not timestamp_str:
+        return ''
+    try:
+        if 'T' in timestamp_str:
+            dt = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
+        else:
+            dt = datetime.strptime(timestamp_str, '%Y-%m-%d %H:%M:%S')
+        local_dt = dt.replace(tzinfo=timezone.utc).astimezone()
+        return local_dt.strftime('%H:%M:%S')
+    except:
+        return timestamp_str[-8:] if len(timestamp_str) >= 8 else timestamp_str
+```
+
+#### 問題：域名選項顯示錯誤
+**症狀**：
+- 前端仍顯示 workers.dev 域名選項
+- 用戶選擇 workers 模式但無法使用
+
+**解決方案**：
+1. **已修復**：v1.3.11版本已移除 workers.dev 選項
+2. **清除快取**：清除瀏覽器快取確保界面更新
+3. **檢查前端**：確認 HTML 選項已更新
+
+#### 問題：狀態文字對齊混亂
+**症狀**：
+- online/offline/checking 狀態文字不在同一水平線
+- 界面顯示不美觀
+
+**解決方案**：
+1. **已修復**：v1.3.11版本已修正 CSS 對齊
+2. **檢查樣式**：確認以下 CSS 生效
+```css
+#ngrok-status, #sinopac-api-status, #tunnel-status {
+    display: flex !important;
+    align-items: flex-end !important;
+    line-height: 1 !important;
+    min-height: 24px;
+}
+```
+3. **強制刷新**：使用 Ctrl+F5 強制刷新頁面
+
+#### 問題：請求計數顯示格式不一致
+**症狀**：
+- 某些地方顯示 "5 筆"，某些地方顯示 "5"
+- 格式不統一影響美觀
+
+**解決方案**：
+1. **已修復**：v1.3.11版本已統一移除「筆」字
+2. **檢查樣式**：確認 `.requests-count` CSS 類正確應用
+3. **驗證顯示**：確認所有請求計數都顯示純數字
+
+#### 問題：版本日誌重複顯示
+**症狀**：
+- 啟動時重複顯示永豐版本日誌
+- 日誌記錄冗餘
+
+**解決方案**：
+1. **已修復**：v1.3.11版本已移除初啟動版本日誌
+2. **檢查邏輯**：確認 `getSinopacVersion()` 函數不記錄初始日誌
+3. **只保留更新**：只有版本更新時才記錄日誌
+
+#### 問題：xlsx 生成無前端日誌
+**症狀**：
+- xlsx 文件成功生成但前端無日誌記錄
+- 用戶無法確認文件是否生成成功
+
+**解決方案**：
+1. **已修復**：v1.3.11版本已新增生成成功日誌
+2. **檢查流程**：確認生成流程包含前端日誌記錄
+3. **驗證通知**：確認成功後有對應的前端通知
+
+#### 問題：TG 通知日誌重複
+**症狀**：
+- 收到多條相同的 TG 發送成功日誌
+- 日誌記錄冗餘混亂
+
+**解決方案**：
+1. **已修復**：v1.3.11版本已移除重複的 TG 通知日誌
+2. **保留必要**：只保留文件生成成功日誌
+3. **簡化流程**：避免不必要的重複通知
+
+#### 問題：週六夜盤統計異常
+**症狀**：
+- 週六夜盤時段交易統計未正確執行
+- 報表生成時間不正確
+
+**解決方案**：
+1. **檢查邏輯**：確認週六視為交易日的邏輯正確
+2. **時間判斷**：週六凌晨05:00前視為交易時間
+3. **統計排程**：確認排程正確執行
+
+**調試步驟**：
+```python
+# 檢查交易日判斷
+from datetime import datetime
+def debug_trading_day():
+    now = datetime.now()
+    is_trading = is_trading_day_advanced(now)
+    print(f"當前時間：{now}")
+    print(f"是否為交易日：{is_trading}")
+    if now.weekday() == 5:  # 週六
+        print(f"週六夜盤判斷：{now.hour < 5}")
+```
+
+### 界面顯示優化驗證清單
+- [ ] 隧道模組導入正常，無 ModuleNotFoundError
+- [ ] 時間戳處理函數正常，無 NameError
+- [ ] 域名選項正確，無 workers.dev 選項
+- [ ] 狀態文字對齊美觀，垂直靠下對齊
+- [ ] 請求計數格式統一，純數字顯示
+- [ ] 版本日誌不重複，只有更新時記錄
+- [ ] xlsx 生成有日誌，前端可見成功訊息
+- [ ] TG 通知簡化，無重複日誌記錄
+- [ ] 週六夜盤統計正常，報表按時生成
+
+---
+
+## 版本歷史：v1.3.10 (2025-07-10)
 
 ### 日誌顯示邏輯修正與格式優化問題
 **重大修復**：修正平倉交易的方向顯示錯誤問題和價格格式統一

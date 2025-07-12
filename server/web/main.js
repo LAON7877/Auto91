@@ -493,9 +493,7 @@ window.onload = function() {
     
     // 頁面關閉時清理定時器
     window.addEventListener('beforeunload', function() {
-        if (window.latencyInterval) {
-            clearInterval(window.latencyInterval);
-        }
+        // 已移除延遲監控定時器清理 - Cloudflare Tunnel 不需要這些功能
     });
     
     // 初始化token管理
@@ -570,32 +568,19 @@ function closeHolidayModal() {
     }
 }
 
-// Token顯示/隱藏切換函數
-function toggleTokenVisibility() {
-    const tokenInput = document.getElementById('ngrok-authtoken');
-    const eyeOpen = document.querySelector('.password-toggle-btn .eye-open');
-    const eyeClosed = document.querySelector('.password-toggle-btn .eye-closed');
-    
-    if (tokenInput.type === 'password') {
-        // 顯示token
-        tokenInput.type = 'text';
-        eyeOpen.style.display = 'none';
-        eyeClosed.style.display = 'block';
-    } else {
-        // 隱藏token
-        tokenInput.type = 'password';
-        eyeOpen.style.display = 'block';
-        eyeClosed.style.display = 'none';
-    }
+
+// 新的隧道設置函數
+function showTunnelSetupModal() {
+    // 直接調用管理隧道設置
+    showTunnelSetup();
 }
 
-// 新的ngrok設置函數
-function showNgrokSetupModal() {
+function showNgrokSetupModalOld() {
     document.getElementById('ngrok-setup-modal').style.display = 'block';
     
     // 短暫延遲確保DOM元素完全可用
     setTimeout(() => {
-        const tokenInput = document.getElementById('ngrok-authtoken');
+        const tokenInput = document.getElementById('ngrok-authtoken-old');
         
                  // 從服務器載入已儲存的token
         fetch('/api/ngrok/token/load')
@@ -632,90 +617,47 @@ function showNgrokSetupModal() {
     }, 100); // 100ms延遲
 }
 
-function closeNgrokSetupModal() {
-    document.getElementById('ngrok-setup-modal').style.display = 'none';
-    // 關閉modal時更新token狀態顯示
+function closeTunnelSetupModal() {
+    document.getElementById('tunnel-setup-modal').style.display = 'none';
+    // 關閉modal時更新token狀態顯示  
     updateTokenStatus();
 }
 
 function setupNgrok() {
-    const authtoken = document.getElementById('ngrok-authtoken').value.trim();
-    const statusDiv = document.getElementById('setup-status');
+    const authtoken = document.getElementById('ngrok-authtoken-old').value.trim();
+    const statusDiv = document.getElementById('setup-status-old');
     const setupBtn = document.getElementById('setup-ngrok-btn');
     
     if (!authtoken) {
-        statusDiv.innerHTML = '<div style="color: red;">請輸入有效的authtoken</div>';
+        statusDiv.innerHTML = '<div style="color: red;">請輸入有效的 Cloudflare Tunnel token</div>';
         return;
     }
     
-    // 先驗證token格式
-    fetch('/api/ngrok/validate_token', {
+    setupBtn.disabled = true;
+    setupBtn.textContent = '設置中...';
+    statusDiv.innerHTML = '<div style="color: blue;">正在設置 Cloudflare Tunnel，請稍候...</div>';
+    
+    // 直接設置 Cloudflare Tunnel
+    fetch('/api/ngrok/setup', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ authtoken: authtoken })
     })
     .then(res => res.json())
     .then(data => {
-        if (data.status === 'error') {
-            statusDiv.innerHTML = `<div style="color: red;">${data.message}</div>`;
-            return;
-        }
-        
-        // 驗證通過，先儲存token到服務器
-        return fetch('/api/ngrok/token/save', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ authtoken: authtoken })
-        });
-    })
-    .then(res => {
-        if (!res) return; // 如果驗證失敗，不繼續
-        return res.json();
-    })
-    .then(data => {
-        if (!data) return; // 如果沒有數據，不繼續
-        
-        if (data.status !== 'success') {
-            statusDiv.innerHTML = `<div style="color: red;">Token保存失敗: ${data.message}</div>`;
-            return;
-        }
-        
-        // Token保存成功，立即更新主面板的狀態顯示
-        updateTokenStatus();
-        
-        // 開始設置
-        setupBtn.disabled = true;
-        setupBtn.textContent = '儲存中...';
-        statusDiv.innerHTML = '<div style="color: blue;">正在儲存並設置ngrok，請稍候...</div>';
-        
-        return fetch('/api/ngrok/setup', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ authtoken: authtoken })
-        });
-    })
-    .then(res => {
-        if (!res) return; // 如果驗證失敗，不繼續
-        return res.json();
-    })
-    .then(data => {
-        if (!data) return; // 如果沒有數據，不繼續
-        
         if (data.status === 'success') {
-            statusDiv.innerHTML = '<div style="color: green;">儲存並設置成功！ngrok正在啟動中...</div>';
+            statusDiv.innerHTML = '<div style="color: green;">設置成功！Cloudflare Tunnel 正在啟動中...</div>';
             
-            // 5秒後檢查狀態並關閉modal
+            // 延遲關閉模態窗口
             setTimeout(() => {
-                refreshNgrokStatus();
                 closeNgrokSetupModal();
-            }, 5000);
-            
+            }, 2000);
         } else {
-            statusDiv.innerHTML = `<div style="color: red;">儲存失敗: ${data.message}</div>`;
+            statusDiv.innerHTML = `<div style="color: red;">設置失敗：${data.message}</div>`;
         }
     })
     .catch(error => {
-        statusDiv.innerHTML = '<div style="color: red;">設置失敗：網路錯誤</div>';
+        statusDiv.innerHTML = `<div style="color: red;">設置失敗：${error.message}</div>`;
     })
     .finally(() => {
         setupBtn.disabled = false;
@@ -727,38 +669,21 @@ function setupNgrok() {
 
 // Token管理函數
 function clearNgrokToken() {
-    if (confirm('確定要清除已儲存的 ngrok token 嗎？')) {
-        fetch('/api/ngrok/token/clear', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' }
-        })
-        .then(res => res.json())
-        .then(data => {
-            if (data.status === 'success') {
-                // 立即清空輸入框
-                const tokenInput = document.getElementById('ngrok-authtoken');
-                if (tokenInput) {
-                    tokenInput.value = '';
-                }
-                
-                // 更新設置狀態顯示
-                const setupStatus = document.getElementById('setup-status');
-                if (setupStatus) {
-                    setupStatus.innerHTML = '<div style="color: green;">✓ Token 已成功清除</div>';
-                    setTimeout(() => {
-                        setupStatus.innerHTML = '';
-                    }, 3000);
-                }
-                
-                updateTokenStatus();
-                alert('Token 已清除');
-            } else {
-                alert('清除失敗: ' + data.message);
-            }
-        })
-        .catch(error => {
-            alert('清除失敗：網路錯誤');
-        });
+    if (confirm('確定要清除已儲存的 Cloudflare Tunnel token 嗎？')) {
+        // 直接清空輸入框
+        const tokenInput = document.getElementById('ngrok-authtoken-old');
+        if (tokenInput) {
+            tokenInput.value = '';
+        }
+        
+        // 更新設置狀態顯示
+        const setupStatus = document.getElementById('setup-status-old');
+        if (setupStatus) {
+            setupStatus.innerHTML = '<div style="color: green;">✓ Token 已清除</div>';
+            setTimeout(() => {
+                setupStatus.innerHTML = '';
+            }, 3000);
+        }
     }
 }
 
@@ -803,30 +728,28 @@ function login() {
                 startAccountAutoUpdate();
             }, 2000); // 延遲2秒
             
-            // 立即顯示檢查中狀態，並隱藏延遲時間
-            updateNgrokStatus({
+            // 立即顯示檢查中狀態
+            updateTunnelStatus({
                 status: 'checking',
                 url: '-',
-                message: '檢查ngrok狀態...'
+                message: '檢查隧道狀態...'
             });
             
-            // 隱藏延遲時間，直到ngrok真正運行
-            document.getElementById('ngrok-latency').textContent = '-';
+            // 已移除延遲時間顯示 - Cloudflare Tunnel 不需要延遲監控
             
-            // 每5000毫秒檢查一次ngrok狀態，直到運行成功
+            // 每5000毫秒檢查一次隧道狀態，直到運行成功
             const statusCheckInterval = setInterval(() => {
                 fetch('/api/ngrok/status')
                 .then(res => res.json())
                 .then(data => {
-                    updateNgrokStatus(data);
+                    updateTunnelStatus(data);
                     if (data.status === 'running') {
                         clearInterval(statusCheckInterval);
-                        // ngrok運行後才開始更新延遲時間
-                        updateLatency();
+                        // 已移除延遲時間更新 - Cloudflare Tunnel 不需要延遲監控
                     }
                 })
                 .catch(error => {
-                    console.error('檢查ngrok狀態失敗：', error);
+                    console.error('檢查隧道狀態失敗：', error);
                 });
             }, 5000);
         } else {
@@ -854,14 +777,7 @@ function logout() {
             showPanel('settings');
             
             // 清除所有定時器
-            if (window.latencyInterval) {
-                clearInterval(window.latencyInterval);
-                window.latencyInterval = null;
-            }
-            if (window.ttlInterval) {
-                clearInterval(window.ttlInterval);
-                window.ttlInterval = null;
-            }
+            // 已移除延遲和TTL監控定時器清理 - Cloudflare Tunnel 不需要這些功能
             if (window.requestsInterval) {
                 clearInterval(window.requestsInterval);
                 window.requestsInterval = null;
@@ -884,7 +800,7 @@ function logout() {
     });
 }
 
-// ngrok狀態檢查函數
+// Cloudflare Tunnel 狀態檢查函數（保持原 ngrok 函數名以維持兼容性）
 function refreshNgrokStatus() {
     fetch('/api/ngrok/status')
     .then(res => res.json())
@@ -892,50 +808,16 @@ function refreshNgrokStatus() {
         updateNgrokStatus(data);
     })
     .catch(error => {
-        console.error('獲取ngrok狀態失敗：', error);
+        console.error('獲取隧道狀態失敗：', error);
         updateNgrokStatus({
             status: 'error',
             url: '-',
-            message: '無法連接到ngrok服務'
+            message: '無法連接到隧道服務'
         });
     });
     
-    // 同時獲取版本信息
-    getNgrokVersion();
 }
 
-// 獲取ngrok版本信息
-function getNgrokVersion() {
-    fetch('/api/ngrok/version')
-    .then(res => res.json())
-    .then(data => {
-        const versionElement = document.getElementById('ngrok-version');
-        const updateCheckBtn = document.getElementById('update-check-btn');
-        const updateAvailableBtn = document.getElementById('update-available-btn');
-        
-        if (data.current_version) {
-            versionElement.textContent = `v${data.current_version}`;
-            updateCheckBtn.style.display = 'flex';
-            
-            if (data.update_available) {
-                updateCheckBtn.style.display = 'none';
-                updateAvailableBtn.style.display = 'flex';
-            } else {
-                updateCheckBtn.style.display = 'flex';
-                updateAvailableBtn.style.display = 'none';
-            }
-        } else {
-            versionElement.textContent = 'v-';
-            updateCheckBtn.style.display = 'none';
-            updateAvailableBtn.style.display = 'none';
-        }
-    })
-    .catch(error => {
-        console.error('獲取ngrok版本失敗：', error);
-        const versionElement = document.getElementById('ngrok-version');
-        versionElement.textContent = '-';
-    });
-}
 
 // 獲取shioaji版本信息
 function getSinopacVersion() {
@@ -946,10 +828,13 @@ function getSinopacVersion() {
         
         if (data.available && data.version && data.version !== 'unknown') {
             versionElement.textContent = `sj${data.version}`;
+            // 移除初啟動時的版本日誌記錄，只有更新檢查時才記錄
         } else if (!data.available) {
             versionElement.textContent = 'sj-N/A';
+            // 移除初啟動時的警告日誌，只有更新檢查時才記錄
         } else {
             versionElement.textContent = 'sj-';
+            // 移除初啟動時的警告日誌，只有更新檢查時才記錄
         }
         
         // 獲取版本後檢查更新
@@ -961,182 +846,15 @@ function getSinopacVersion() {
     });
 }
 
-// 檢查ngrok更新
-function checkNgrokUpdate() {
-    const updateCheckBtn = document.getElementById('update-check-btn');
-    const originalText = updateCheckBtn.innerHTML;
-    
-    // 顯示載入狀態
-    updateCheckBtn.innerHTML = `
-        <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" style="animation: spin 1s linear infinite;">
-            <path d="M11.251.068a.5.5 0 0 1 .227.58L9.677 6.5H13a.5.5 0 0 1 .364.843l-8 8.5a.5.5 0 0 1-.842-.49L6.323 9.5H3a.5.5 0 0 1-.364-.843l8-8.5a.5.5 0 0 1 .615-.09z"/>
-        </svg>
-    `;
-    updateCheckBtn.disabled = true;
-    
-    fetch('/api/ngrok/check_update', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json'
-        }
-    })
-    .then(res => res.json())
-    .then(data => {
-        if (data.status === 'success') {
-            const updateInfo = data.data;
-            if (updateInfo.update_available) {
-                addSystemLog(`發現ngrok更新: ${updateInfo.current_version} -> ${updateInfo.latest_version}`, 'info');
-                
-                // 顯示更新可用按鈕
-                updateCheckBtn.style.display = 'none';
-                document.getElementById('update-available-btn').style.display = 'flex';
-                
-                // 儲存下載URL供稍後使用
-                window.ngrokUpdateInfo = updateInfo;
-            } else {
-                addSystemLog(`ngrok已是最新版本: ${updateInfo.current_version}`, 'success');
-            }
-        } else {
-            addSystemLog(`檢查ngrok更新失敗: ${data.message}`, 'error');
-        }
-    })
-    .catch(error => {
-        console.error('檢查ngrok更新失敗：', error);
-        addSystemLog('檢查ngrok更新失敗', 'error');
-    })
-    .finally(() => {
-        // 恢復按鈕狀態
-        updateCheckBtn.innerHTML = originalText;
-        updateCheckBtn.disabled = false;
-    });
-}
 
-// 更新ngrok
-function updateNgrok() {
-    // 顯示更新提醒模態框，讓用戶決定是否更新
-    showNgrokUpdateModal();
-}
 
-function showNgrokUpdateModal() {
-    const modal = document.getElementById('ngrok-update-modal');
-    const updateInfo = document.getElementById('ngrok-update-info');
-    const updateActions = document.getElementById('ngrok-update-actions');
-    
-    // 顯示模態框
-    modal.style.display = 'block';
-    updateInfo.style.display = 'block';
-    updateActions.style.display = 'none';
-    updateInfo.innerHTML = '<p>檢查更新中...</p>';
-    
-    // 檢查更新
-    fetch('/api/ngrok/check_update', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' }
-    })
-    .then(res => res.json())
-    .then(data => {
-        if (data.status === 'success') {
-            const updateData = data.data;
-            
-            if (updateData.update_available) {
-                // 顯示更新資訊
-                document.getElementById('ngrok-current-version').textContent = updateData.current_version;
-                document.getElementById('ngrok-latest-version').textContent = updateData.latest_version;
-                
-                updateInfo.style.display = 'none';
-                updateActions.style.display = 'block';
-            } else {
-                // 已是最新版本
-                updateInfo.innerHTML = '<p>已是最新版本，無需更新。</p>';
-            }
-        } else {
-            updateInfo.innerHTML = `<p>檢查更新失敗: ${data.message}</p>`;
-        }
-    })
-    .catch(error => {
-        console.error('檢查ngrok更新失敗:', error);
-        updateInfo.innerHTML = '<p>檢查更新失敗，請稍後再試。</p>';
-    });
-}
 
-function closeNgrokUpdateModal() {
-    document.getElementById('ngrok-update-modal').style.display = 'none';
-}
 
-function startNgrokUpdate() {
-    const updateModal = document.getElementById('ngrok-update-modal');
-    const progressModal = document.getElementById('ngrok-update-progress-modal');
-    
-    // 切換到進度模態框
-    updateModal.style.display = 'none';
-    progressModal.style.display = 'block';
-    
-    // 開始進度動畫
-    const progressFill = document.getElementById('ngrok-progress-fill');
-    const updateStatus = document.getElementById('ngrok-update-status');
-    const updateOutput = document.getElementById('ngrok-update-output');
-    const updateLog = document.getElementById('ngrok-update-log');
-    
-    let progress = 0;
-    const progressInterval = setInterval(() => {
-        progress += Math.random() * 15;
-        if (progress > 90) progress = 90;
-        progressFill.style.width = progress + '%';
-    }, 500);
-    
-    // 執行更新
-    fetch('/api/ngrok/update', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(updateData)
-    })
-    .then(res => res.json())
-    .then(data => {
-        clearInterval(progressInterval);
-        progressFill.style.width = '100%';
-        
-        if (data.status === 'success') {
-            updateStatus.textContent = '更新成功！';
-            
-            // 顯示更新日誌
-            updateOutput.style.display = 'block';
-            updateLog.textContent = data.message || '更新完成';
-            
-            // 延遲關閉模態框並重新檢查版本
-            setTimeout(() => {
-                progressModal.style.display = 'none';
-                addSystemLog('ngrok更新完成', 'success');
-                
-                // 重新檢查版本
-                getNgrokVersion();
-                
-                // 重新啟動ngrok
-                setTimeout(() => {
-                    refreshNgrokStatus();
-                }, 2000);
-            }, 2000);
-        } else {
-            updateStatus.textContent = '更新失敗';
-            updateOutput.style.display = 'block';
-            updateLog.textContent = data.message || '更新過程中發生錯誤';
-        }
-    })
-    .catch(error => {
-        clearInterval(progressInterval);
-        progressFill.style.width = '100%';
-        updateStatus.textContent = '更新失敗';
-        updateOutput.style.display = 'block';
-        updateLog.textContent = '網絡錯誤: ' + error.message;
-    });
-}
 
-function updateNgrokStatus(statusData) {
-    const statusElement = document.getElementById('ngrok-status');
-    const latencyElement = document.getElementById('ngrok-latency');
-    const ttlElement = document.getElementById('ngrok-ttl');
-    const urlsContainer = document.getElementById('ngrok-urls-container');
+function updateTunnelStatus(statusData) {
+    const statusElement = document.getElementById('tunnel-status');
+    // 已移除延遲和TTL元素引用 - Cloudflare Tunnel 不需要這些監控
+    const urlsContainer = document.getElementById('tunnel-urls-container');
     
     // 檢查狀態是否改變，避免不必要的更新
     const currentStatus = statusElement.getAttribute('data-status');
@@ -1149,32 +867,14 @@ function updateNgrokStatus(statusData) {
         statusElement.setAttribute('data-status', statusData.status);
     }
     
-    // 根據狀態處理延遲時間和TTL顯示
+    // 處理隧道狀態變化
     if (statusData.status === 'checking') {
-        latencyElement.textContent = '-';
-        ttlElement.textContent = '-';
-        // 清除延遲更新定時器
-        if (window.latencyInterval) {
-            clearInterval(window.latencyInterval);
-            window.latencyInterval = null;
-        }
-        if (window.ttlInterval) {
-            clearInterval(window.ttlInterval);
-            window.ttlInterval = null;
+        // 清除所有定時器
+        if (window.requestsInterval) {
+            clearInterval(window.requestsInterval);
+            window.requestsInterval = null;
         }
     } else if (statusData.status === 'running') {
-        // 只有在運行狀態才更新延遲時間和TTL
-        if (!window.latencyInterval) {
-            updateLatency(); // 立即更新一次
-            // 每30秒更新一次Latency（與頁面初始化保持一致）
-            window.latencyInterval = setInterval(updateLatency, 30000);
-        }
-        if (!window.ttlInterval) {
-            updateTTL(); // 立即更新一次
-            // 每30秒更新一次TTL（與頁面初始化保持一致）
-            window.ttlInterval = setInterval(updateTTL, 30000);
-        }
-        
         // 更新請求日誌
         updateRequestsLog();
         // 每10秒更新一次請求日誌（與頁面初始化保持一致）
@@ -1182,11 +882,7 @@ function updateNgrokStatus(statusData) {
             window.requestsInterval = setInterval(updateRequestsLog, 10000);
         }
     } else {
-        // offline 或其他狀態，立即獲取一次延遲時間和TTL
-        updateLatency();
-        updateTTL();
-        
-        // 清除請求日誌更新定時器
+        // offline 或其他狀態，清除請求日誌更新定時器
         if (window.requestsInterval) {
             clearInterval(window.requestsInterval);
             window.requestsInterval = null;
@@ -1196,20 +892,20 @@ function updateNgrokStatus(statusData) {
     // 更新URL列表
     urlsContainer.innerHTML = '';
     
-    if (statusData.urls && statusData.urls.length > 0) {
-        statusData.urls.forEach((urlInfo, index) => {
+    if (statusData.tunnels && statusData.tunnels.length > 0) {
+        statusData.tunnels.forEach((tunnelInfo, index) => {
             const urlItem = document.createElement('div');
             urlItem.className = 'url-item';
             
             const urlValue = document.createElement('span');
             urlValue.className = 'url-value';
-            urlValue.textContent = urlInfo.url;
+            urlValue.textContent = tunnelInfo.public_url;
             
             const copyBtn = document.createElement('button');
             copyBtn.className = 'url-copy-btn';
             copyBtn.textContent = '複製';
             copyBtn.onclick = function() {
-                copyToClipboard(urlInfo.url, this);
+                copyToClipboard(tunnelInfo.public_url, this);
             };
             
             urlItem.appendChild(urlValue);
@@ -1229,29 +925,11 @@ function updateNgrokStatus(statusData) {
     updateRequestsLog();
 }
 
-// 更新Latency的獨立函數
-function updateLatency() {
-    fetch('/api/ngrok/latency')
-    .then(res => res.json())
-    .then(data => {
-        document.getElementById('ngrok-latency').textContent = data.latency;
-    })
-    .catch(error => {
-        console.error('獲取ngrok延遲信息失敗：', error);
-    });
-}
+// 已移除延遲監控功能 - Cloudflare Tunnel 不需要延遲監控
+// function updateLatency() - 已移除
 
-// 更新TTL的獨立函數
-function updateTTL() {
-    fetch('/api/ngrok/connections')
-    .then(res => res.json())
-    .then(data => {
-        document.getElementById('ngrok-ttl').textContent = data.ttl;
-    })
-    .catch(error => {
-        console.error('獲取ngrok TTL信息失敗：', error);
-    });
-}
+// 已移除TTL監控功能 - Cloudflare Tunnel 不需要TTL監控
+// function updateTTL() - 已移除
 
 // 複製到剪貼板的函數
 function copyToClipboard(text, button) {
@@ -1288,6 +966,7 @@ function updateRequestsLog() {
     .then(res => res.json())
     .then(data => {
         const requestsContainer = document.getElementById('requests-container');
+        const requestsCount = document.getElementById('requests-count');
         
         if (data.requests && data.requests.length > 0) {
             // 只顯示 webhook 請求（type=webhook 或 uri=/webhook）
@@ -1296,6 +975,11 @@ function updateRequestsLog() {
             );
             
             if (webhookRequests.length > 0) {
+                // 更新請求數量顯示
+                if (requestsCount) {
+                    requestsCount.textContent = `${webhookRequests.length}`;
+                }
+                
                 // 限制最多顯示50條記錄，並反轉順序（新的在上面）
                 const limitedRequests = webhookRequests.slice(-50).reverse();
                 
@@ -1327,6 +1011,10 @@ function updateRequestsLog() {
                 // 保持在頂部位置顯示最新的記錄
                 requestsContainer.scrollTop = 0;
             } else {
+                // 沒有webhook請求但有其他請求
+                if (requestsCount) {
+                    requestsCount.textContent = '0';
+                }
                 requestsContainer.innerHTML = '';
                 const noRequestsMsg = document.createElement('div');
                 noRequestsMsg.className = 'request-item';
@@ -1336,6 +1024,10 @@ function updateRequestsLog() {
                 requestsContainer.appendChild(noRequestsMsg);
             }
         } else {
+            // 完全沒有請求
+            if (requestsCount) {
+                requestsCount.textContent = '0';
+            }
             requestsContainer.innerHTML = '';
             const noRequestsMsg = document.createElement('div');
             noRequestsMsg.className = 'request-item';
@@ -2017,10 +1709,7 @@ document.addEventListener('DOMContentLoaded', () => {
     setInterval(refreshNgrokStatus, 30000); // 改為每30秒更新一次
     updateRequestsLog();
     setInterval(updateRequestsLog, 10000); // 改為每10秒更新一次
-    updateLatency();
-    setInterval(updateLatency, 30000); // 改為每30秒更新一次
-    updateTTL();
-    setInterval(updateTTL, 30000); // 改為每30秒更新一次
+    // 已移除延遲和TTL監控的初始化 - Cloudflare Tunnel 不需要這些功能
     
     // 初始化系統資訊
     updateSystemInfo();
@@ -2030,21 +1719,12 @@ document.addEventListener('DOMContentLoaded', () => {
     updateSinopacApiStatus();
     updateFuturesContracts(); // 頁面載入時更新期貨合約資訊
     getSinopacVersion(); // 頁面載入時獲取shioaji版本
-    getNgrokVersion(); // 頁面載入時獲取ngrok版本
     updateCurrentTime(); // 頁面載入時立即顯示本地時間
     updateTradingStatus(); // 頁面載入時更新交易狀態
     setInterval(updateSinopacApiStatus, 5000); // 每5秒更新一次永豐API狀態
     setInterval(updateCurrentTime, 1000); // 每秒更新一次本地時間
     setInterval(updateTradingStatus, 30000); // 每30秒更新一次交易狀態
     
-    // 延遲檢查更新，避免影響頁面載入
-    setTimeout(() => {
-        // 檢查ngrok更新
-        if (!window.ngrokUpdateChecked) {
-            checkNgrokUpdate();
-            window.ngrokUpdateChecked = true;
-        }
-    }, 2000);
     
     // 設置定時更新（每分鐘檢查一次是否需要定時更新）
     setInterval(() => {
@@ -2062,8 +1742,7 @@ document.addEventListener('DOMContentLoaded', () => {
     updateSystemLogsFromBackend();
     setInterval(updateSystemLogsFromBackend, 5000); // 每5秒同步一次後端系統日誌
     
-    // 添加初始系統日誌
-    addSystemLog('Auto91 交易系統已啟動', 'success');
+    // 移除了不必要的系統啟動日誌
     
     // 初始化連線時長顯示
     const durationElement = document.getElementById('connection-duration');
@@ -2911,16 +2590,14 @@ function restartApplication() {
     // 此函數已移除，不再需要自動重啟功能
 }
 
-// 頁面載入時檢查shioaji更新
+// 頁面載入時的初始化
 document.addEventListener('DOMContentLoaded', function() {
-    // 延遲檢查更新，避免影響頁面載入
-    setTimeout(() => {
-        // 只在頁面載入時檢查一次，避免重複檢查
-        if (!window.sinopacUpdateChecked) {
-            checkSinopacUpdate();
-            window.sinopacUpdateChecked = true;
-        }
-    }, 3000);
+    // 預設選擇免費臨時域名模式（最可靠）
+    if (typeof setDomainMode === 'function') {
+        setDomainMode('temporary');
+    }
+    // 移除自動檢查更新，避免不必要的錯誤訊息
+    console.log('頁面載入完成');
 });
 
 // 重新整理合約資訊
@@ -2973,3 +2650,185 @@ async function refreshContractInfo() {
 }
 
 // 測試功能相關函數已移除
+
+// 新的隧道設置函數
+function showTunnelSetup() {
+    document.getElementById('tunnel-setup-modal').style.display = 'block';
+    
+    // 載入已儲存的token
+    loadTunnelTokens();
+}
+
+function loadTunnelTokens() {
+    fetch('/api/ngrok/token/load')
+        .then(res => res.json())
+        .then(data => {
+            if (data.status === 'success') {
+                const cfToken = document.getElementById('cloudflare-token');
+                
+                if (cfToken && data.authtoken) {
+                    cfToken.value = data.authtoken;
+                }
+                
+                // Cloudflare 配置已經預設顯示
+            }
+        })
+        .catch(error => {
+            console.error('載入 token 失敗:', error);
+        });
+}
+
+// 已移除 onTunnelServiceTypeChange 函數，因為不再需要選擇隧道服務類型
+
+let selectedDomainMode = 'temporary'; // 預設為免費臨時域名（最可靠）
+
+function setDomainMode(mode) {
+    selectedDomainMode = mode;
+    const instructionsDiv = document.getElementById('setup-instructions');
+    const tokenInput = document.getElementById('cloudflare-token');
+    
+    // 更新選中狀態
+    document.querySelectorAll('.domain-option').forEach(option => {
+        option.style.borderColor = '#e0e0e0';
+    });
+    event.target.parentElement.style.borderColor = '#2196F3';
+    
+    switch(mode) {
+        case 'workers':
+            instructionsDiv.innerHTML = `
+                <h6>固定域名設置：</h6>
+                <p style="margin-bottom: 15px; background: #e8f5e8; padding: 10px; border-radius: 5px;">
+                    注意：此功能需要 Cloudflare 帳戶設置，建議有經驗的使用者選擇。
+                </p>
+                <ol>
+                    <li>前往 <a href="https://dash.cloudflare.com/sign-up" target="_blank">Cloudflare 註冊免費帳戶</a></li>
+                    <li>登入後，左側選單找到「Zero Trust」</li>
+                    <li>點選「網路」→「Tunnels」</li>
+                    <li>點選「建立通道」，選擇「Cloudflared」</li>
+                    <li>輸入通道名稱（如：my-trading-app）</li>
+                    <li>在「安裝連接器」頁面，複製 Token（以 eyJ 開頭的長字串）</li>
+                    <li>回到此頁面，選擇「自訂域名」模式並貼上 Token</li>
+                    <li>在 Cloudflare 中設置「Public hostname」指向 localhost:5000</li>
+                </ol>
+                <p style="color: #2196F3;">如不熟悉上述流程，建議選擇「臨時域名（立即可用）」</p>
+            `;
+            tokenInput.value = 'workers-mode';
+            break;
+            
+        case 'custom':
+            instructionsDiv.innerHTML = `
+                <h6>自訂域名設置：</h6>
+                <ol>
+                    <li>前往 <a href="https://dash.cloudflare.com/sign-up" target="_blank">Cloudflare 註冊</a></li>
+                    <li>在 Zero Trust → 網路 → Tunnels → 新增通道 → 選取Cloudflared → 命名通道名稱後儲存通道</li>
+                    <li>複製 Token（以 eyJ 開頭）</li>
+                    <li>在 Public hostname 設置您的域名</li>
+                </ol>
+                <div style="margin: 10px 0;">
+                    <label>請輸入您的 Cloudflare Token：</label>
+                    <input type="text" id="custom-token" placeholder="eyJ..." style="width: 100%; padding: 8px; margin: 5px 0;">
+                </div>
+            `;
+            break;
+            
+        case 'temporary':
+            instructionsDiv.innerHTML = `
+                <h6>免費域名設置：</h6>
+                <ol>
+                    <li>無需任何準備工作</li>
+                    <li>無需註冊帳戶</li>
+                    <li>直接點選「儲存並啟動」</li>
+                    <li>立即獲得可用域名</li>
+                </ol>
+                <p style="color: #2196F3;">完全免費，立即可用</p>
+            `;
+            tokenInput.value = 'temporary-mode';
+            break;
+    }
+    
+    instructionsDiv.style.display = 'block';
+}
+
+function setupTunnel() {
+    const setupBtn = document.getElementById('setup-tunnel-btn');
+    const statusDiv = document.getElementById('setup-status');
+    
+    let token = 'temporary-mode'; // 預設值
+    
+    if (selectedDomainMode === 'custom') {
+        const customToken = document.getElementById('custom-token');
+        if (!customToken || !customToken.value.trim()) {
+            statusDiv.innerHTML = '<div style="color: red;">請輸入 Cloudflare Token</div>';
+            return;
+        }
+        token = customToken.value.trim();
+        
+        // 驗證token格式
+        if (!token.startsWith('eyJ') || token.length < 50) {
+            statusDiv.innerHTML = '<div style="color: red;">Token 格式不正確！請確認您複製的是正確的 Cloudflare Tunnel Token</div>';
+            return;
+        }
+    } else if (selectedDomainMode === 'temporary') {
+        token = 'temporary-mode';
+    }
+    
+    setupBtn.disabled = true;
+    setupBtn.textContent = '設置中...';
+    statusDiv.innerHTML = '<div style="color: blue;">正在設置隧道服務，請稍候...</div>';
+    
+    fetch('/api/ngrok/setup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            authtoken: token,
+            mode: selectedDomainMode
+        })
+    })
+    .then(res => res.json())
+    .then(data => {
+        if (data.status === 'success') {
+            statusDiv.innerHTML = '<div style="color: green;">設置成功！隧道正在啟動中...</div>';
+            
+            // 延遲關閉模態窗口
+            setTimeout(() => {
+                closeTunnelSetupModal();
+            }, 2000);
+        } else {
+            statusDiv.innerHTML = `<div style="color: red;">設置失敗：${data.message}</div>`;
+        }
+    })
+    .catch(error => {
+        statusDiv.innerHTML = `<div style="color: red;">設置失敗：${error.message}</div>`;
+    })
+    .finally(() => {
+        setupBtn.disabled = false;
+        setupBtn.textContent = '儲存並啟動';
+    });
+}
+
+function clearTunnelToken() {
+    // 現在只支援 Cloudflare Tunnel
+    document.getElementById('cloudflare-token').value = '';
+    document.getElementById('setup-status').innerHTML = '';
+}
+
+function closeTunnelSetupModal() {
+    document.getElementById('tunnel-setup-modal').style.display = 'none';
+}
+
+function toggleTokenVisibility(inputId) {
+    const input = document.getElementById(inputId);
+    const button = input.nextElementSibling;
+    const eyeOpen = button.querySelector('.eye-open');
+    const eyeClosed = button.querySelector('.eye-closed');
+    
+    if (input.type === 'password') {
+        input.type = 'text';
+        eyeOpen.style.display = 'none';
+        eyeClosed.style.display = 'block';
+    } else {
+        input.type = 'password';
+        eyeOpen.style.display = 'block';
+        eyeClosed.style.display = 'none';
+    }
+}

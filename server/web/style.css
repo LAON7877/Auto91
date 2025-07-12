@@ -492,6 +492,66 @@ button[type="submit"]:hover {
     line-height: 1;
 }
 
+/* tunnel狀態區域樣式 - 新增支援 */
+.tunnel-status-section {
+    background: #f8f9fa;
+    border-radius: 8px;
+    padding: 20px;
+    margin-bottom: 20px;
+    border: 1px solid #e9ecef;
+}
+
+.tunnel-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 20px;
+    padding-bottom: 15px;
+    border-bottom: 2px solid #e9ecef;
+    min-height: 44px; /* 確保與右側header一致的最小高度 */
+}
+
+.tunnel-header h3 {
+    margin: 0;
+    color: #2c3e50;
+    font-size: 1.4rem;
+    font-weight: 600;
+}
+
+.tunnel-header .status-value {
+    /* margin-left移除，使用gap統一間距 */
+    display: flex;
+    align-items: flex-end;
+    line-height: 1;
+}
+
+.tunnel-header .tunnel-latency {
+    margin-left: auto;
+}
+
+.tunnel-version-info {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-left: auto;
+}
+
+.tunnel-version {
+    color: #495057;
+    font-size: 0.85rem;
+    font-weight: 500;
+    font-family: 'Courier New', monospace;
+    background: #e9ecef;
+    padding: 2px 6px;
+    border-radius: 3px;
+    min-width: 45px; /* 容納sj版本號 */
+    text-align: center;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 1;
+}
+
 .update-check-btn,
 .update-available-btn {
     border: none;
@@ -529,6 +589,10 @@ button[type="submit"]:hover {
 }
 
 .ngrok-info {
+    margin-bottom: 16px;
+}
+
+.tunnel-info {
     margin-bottom: 16px;
 }
 
@@ -573,6 +637,23 @@ button[type="submit"]:hover {
     line-height: 1;
 }
 
+.tunnel-latency {
+    color: #495057;
+    font-size: 0.9rem;
+    font-weight: 500;
+    margin-left: 12px;
+    font-family: 'Courier New', monospace;
+    background: #e9ecef;
+    padding: 2px 6px;
+    border-radius: 3px;
+    min-width: 40px;
+    text-align: center;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 1;
+}
+
 .status-value.running {
     color: var(--main-green);
     font-weight: 600;
@@ -599,7 +680,8 @@ button[type="submit"]:hover {
 
 /* 直接針對具體ID的樣式，確保狀態文字靠下對齊 */
 #ngrok-status,
-#sinopac-api-status {
+#sinopac-api-status,
+#tunnel-status {
     display: flex !important;
     align-items: flex-end !important;
     line-height: 1 !important;
@@ -652,6 +734,52 @@ button[type="submit"]:hover {
     box-shadow: 0 2px 8px rgba(220, 53, 69, 0.3);
 }
 
+.tunnel-controls {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.tunnel-btn {
+    background: var(--main-green);
+    color: white;
+    border: none;
+    padding: 8px 16px;
+    border-radius: 4px;
+    font-size: 0.9rem;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    font-weight: 500;
+}
+
+.tunnel-btn:hover {
+    background: #1e8449;
+    transform: translateY(-1px);
+    box-shadow: 0 2px 8px rgba(39, 174, 96, 0.3);
+}
+
+.tunnel-btn:active {
+    transform: translateY(0);
+}
+
+.tunnel-btn.secondary {
+    background: #6c757d;
+}
+
+.tunnel-btn.secondary:hover {
+    background: #5a6268;
+    box-shadow: 0 2px 8px rgba(108, 117, 125, 0.3);
+}
+
+.tunnel-btn.danger {
+    background: #dc3545;
+}
+
+.tunnel-btn.danger:hover {
+    background: #c82333;
+    box-shadow: 0 2px 8px rgba(220, 53, 69, 0.3);
+}
+
 /* URL列表樣式 */
 .urls-container {
     margin-top: 8px;
@@ -663,7 +791,7 @@ button[type="submit"]:hover {
     gap: 8px;
     margin-bottom: 8px;
     font-family: 'Courier New', monospace;
-    font-size: 0.9rem;
+    font-size: 0.85rem;
 }
 
 .url-item:last-child {
@@ -729,6 +857,22 @@ button[type="submit"]:hover {
     color: #2c3e50;
     font-size: 1.1rem;
     font-weight: 600;
+}
+
+.requests-count {
+    color: #495057;
+    font-size: 0.9rem;
+    font-weight: 500;
+    font-family: 'Courier New', monospace;
+    background: #e9ecef;
+    padding: 2px 6px;
+    border-radius: 3px;
+    min-width: 40px;
+    text-align: center;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 1;
 }
 
 .requests-container {
@@ -862,6 +1006,15 @@ button[type="submit"]:hover {
     background-color: #FFA726;
 }
 
+#register-tunnel-btn {
+    background-color: #FFB74D;
+    color: white;
+}
+
+#register-tunnel-btn:hover {
+    background-color: #FFA726;
+}
+
 /* 交易面板兩欄佈局 */
 .trade-content {
     display: flex;
@@ -880,6 +1033,14 @@ button[type="submit"]:hover {
 }
 
 .ngrok-status-section {
+    background: #f8f9fa;
+    border-radius: 8px;
+    padding: 20px;
+    border: 1px solid #e9ecef;
+    box-sizing: border-box; /* 確保padding計算一致 */
+}
+
+.tunnel-status-section {
     background: #f8f9fa;
     border-radius: 8px;
     padding: 20px;
@@ -1031,6 +1192,10 @@ button[type="submit"]:hover {
 }
 
 .right-header .ngrok-latency {
+    margin-left: auto;
+}
+
+.right-header .tunnel-latency {
     margin-left: auto;
 }
 
@@ -1722,11 +1887,13 @@ button[type="submit"]:hover {
 
 .modal-content {
     background-color: #fff;
-    margin: 5% auto;
+    margin: 2% auto;
     padding: 0;
     border-radius: 12px;
     width: 90%;
     max-width: 500px;
+    max-height: 95vh;
+    overflow-y: auto;
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
     animation: modalSlideIn 0.3s ease-out;
 }
@@ -1782,6 +1949,9 @@ button[type="submit"]:hover {
     align-items: center;
     gap: 12px;
     padding: 20px;
+    flex-shrink: 0; /* 防止footer被壓縮 */
+    background: #fff; /* 確保背景色 */
+    border-top: 1px solid #e0e0e0;
 }
 
 .update-version-info {
@@ -1950,7 +2120,9 @@ button[type="submit"]:hover {
 @media (max-width: 600px) {
     .modal-content {
         width: 95%;
-        margin: 10% auto;
+        margin: 5px auto;
+        max-height: 98vh;
+        overflow-y: auto;
     }
     
     .modal-header {
@@ -1965,9 +2137,19 @@ button[type="submit"]:hover {
         flex-direction: column;
     }
     
+    .modal-footer {
+        flex-direction: column;
+        gap: 8px;
+        padding: 16px;
+    }
+    
     .btn-primary,
-    .btn-secondary {
+    .btn-secondary,
+    .btn-warning {
         width: 100%;
+        padding: 12px 16px;
+        font-size: 14px;
+        margin-bottom: 0;
     }
 }
 
@@ -2048,6 +2230,22 @@ button[type="submit"]:hover {
     font-weight: 500;
 }
 
+/* tunnel設置模態窗口額外樣式 - 新增支援 */
+#tunnel-setup-modal .modal-content {
+    max-width: 500px;
+}
+
+#tunnel-setup-modal .form-group {
+    margin-bottom: 16px;
+}
+
+#tunnel-setup-modal .form-group label {
+    display: block;
+    margin-bottom: 8px;
+    color: #ffffff;
+    font-weight: 500;
+}
+
 /* 密碼輸入容器 */
 .password-input-container {
     position: relative;
@@ -2080,6 +2278,35 @@ button[type="submit"]:hover {
 
 #ngrok-setup-modal input[type="text"]:focus,
 #ngrok-setup-modal input[type="password"]:focus {
+    outline: none;
+    border-color: #007bff;
+    box-shadow: 0 0 0 2px rgba(0, 123, 255, 0.25);
+}
+
+#tunnel-setup-modal input[type="text"],
+#tunnel-setup-modal input[type="password"] {
+    width: 100%;
+    height: 44px; /* 固定高度避免變化 */
+    padding: 0 50px 0 12px; /* 右邊增加空間給更大的按鈕 */
+    border: 1px solid #404040;
+    border-radius: 4px;
+    background-color: #2a2a2a;
+    color: #ffffff;
+    font-size: 14px;
+    font-family: inherit;
+    letter-spacing: normal;
+    line-height: 44px; /* 與高度相同，確保垂直置中 */
+    box-sizing: border-box;
+}
+
+/* 統一text和password的字體大小，避免忽大忽小 */
+#tunnel-setup-modal input[type="password"] {
+    font-size: 14px !important; /* 與text模式相同 */
+    line-height: 44px; /* 保持相同行高 */
+}
+
+#tunnel-setup-modal input[type="text"]:focus,
+#tunnel-setup-modal input[type="password"]:focus {
     outline: none;
     border-color: #007bff;
     box-shadow: 0 0 0 2px rgba(0, 123, 255, 0.25);
@@ -2136,6 +2363,22 @@ button[type="submit"]:hover {
     text-decoration: underline;
 }
 
+#tunnel-setup-modal small {
+    font-size: 14px;
+    color: #999;
+    margin-top: 8px;
+    display: block;
+}
+
+#tunnel-setup-modal small a {
+    color: #007bff;
+    text-decoration: none;
+}
+
+#tunnel-setup-modal small a:hover {
+    text-decoration: underline;
+}
+
 #setup-status {
     margin: 12px 0;
     padding: 8px 12px;
@@ -2164,6 +2407,15 @@ button[type="submit"]:hover {
 
 /* ngrok Token 管理區域樣式 */
 .ngrok-token-management {
+    background-color: #2a2a2a;
+    border: 1px solid #404040;
+    border-radius: 6px;
+    padding: 16px;
+    margin-top: 8px;
+}
+
+/* tunnel Token 管理區域樣式 - 新增支援 */
+.tunnel-token-management {
     background-color: #2a2a2a;
     border: 1px solid #404040;
     border-radius: 6px;
@@ -2258,6 +2510,92 @@ button[type="submit"]:hover {
         align-items: flex-start;
         gap: 8px;
     }
+}
+
+/* 隧道設置樣式 */
+.service-config {
+    margin-top: 20px;
+}
+
+.service-info {
+    margin-top: 15px;
+    padding: 15px;
+    background: #f8f9fa;
+    border-radius: 8px;
+    border-left: 4px solid #3498db;
+}
+
+.service-features {
+    margin-bottom: 20px;
+}
+
+.service-features h5 {
+    margin: 0 0 10px 0;
+    color: #2c3e50;
+    font-size: 14px;
+}
+
+.service-features ul {
+    margin: 0;
+    padding-left: 20px;
+}
+
+.service-features li {
+    margin-bottom: 5px;
+    color: #34495e;
+    font-size: 13px;
+}
+
+.service-setup {
+    border-top: 1px solid #e9ecef;
+    padding-top: 15px;
+}
+
+.service-setup h5 {
+    margin: 0 0 10px 0;
+    color: #2c3e50;
+    font-size: 14px;
+}
+
+.service-setup ol {
+    margin: 0;
+    padding-left: 20px;
+}
+
+.service-setup li {
+    margin-bottom: 5px;
+    color: #34495e;
+    font-size: 13px;
+    line-height: 1.4;
+}
+
+.service-setup a {
+    color: #3498db;
+    text-decoration: none;
+}
+
+.service-setup a:hover {
+    text-decoration: underline;
+}
+
+.service-setup strong {
+    color: #2c3e50;
+}
+
+#tunnel-service-type {
+    width: 100%;
+    padding: 10px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    background: white;
+    font-size: 14px;
+    margin-bottom: 15px;
+}
+
+#tunnel-service-type:focus {
+    outline: none;
+    border-color: #3498db;
+    box-shadow: 0 0 0 2px rgba(52, 152, 219, 0.2);
 }
 
  
