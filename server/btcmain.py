@@ -1,0 +1,2374 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+BTC交易系統主程式
+處理BTC加密貨幣交易相關功能
+"""
+
+from flask import request, jsonify
+import os
+import json
+import time
+import hmac
+import hashlib
+import requests
+import threading
+import glob
+from datetime import datetime, timedelta
+from urllib.parse import urlencode
+
+# 配置目錄
+CONFIG_DIR = os.path.join(os.path.dirname(__file__), 'config')
+BTC_ENV_PATH = os.path.join(CONFIG_DIR, 'btc.env')
+
+# 幣安API配置
+BINANCE_BASE_URL = "https://api.binance.com"
+BINANCE_FAPI_URL = "https://fapi.binance.com"  # 期貨API
+
+# 全局變量
+binance_client = None
+account_info = None
+btc_active_trades = {}  # 活躍交易記錄
+
+class BinanceClient:
+    """幣安API客戶端"""
+    
+    def __init__(self, api_key, secret_key, testnet=False):
+        self.api_key = api_key
+        self.secret_key = secret_key
+        self.base_url = BINANCE_FAPI_URL if not testnet else "https://testnet.binancefuture.com"
+        self.session = requests.Session()
+        self.session.headers.update({
+            'X-MBX-APIKEY': api_key,
+            'Content-Type': 'application/json'
+        })
+    
+    def _generate_signature(self, query_string):
+        """生成API簽名"""
+        return hmac.new(
+            self.secret_key.encode('utf-8'),
+            query_string.encode('utf-8'),
+            hashlib.sha256
+        ).hexdigest()
+    
+    def _get_server_time(self):
+        """獲取幣安服務器時間"""
+        try:
+            url = f"{self.base_url}/fapi/v1/time"
+            response = self.session.get(url)
+            if response.status_code == 200:
+                return response.json().get('serverTime')
+        except:
+            pass
+        return None
+    
+    def _make_request(self, method, endpoint, params=None, signed=True):
+        """發送API請求"""
+        url = f"{self.base_url}{endpoint}"
+        
+        if params is None:
+            params = {}
+        
+        if signed:
+            # 使用幣安服務器時間來避免時間同步問題
+            server_time = self._get_server_time()
+            if server_time:
+                params['timestamp'] = server_time
+            else:
+                # 如果無法獲取服務器時間，使用本地時間並減去1秒作為安全邊際
+                params['timestamp'] = int(time.time() * 1000) - 1000
+            
+            query_string = urlencode(params)
+            params['signature'] = self._generate_signature(query_string)
+        
+        try:
+            if method == 'GET':
+                response = self.session.get(url, params=params)
+            elif method == 'POST':
+                response = self.session.post(url, params=params)
+            else:
+                response = self.session.request(method, url, params=params)
+            
+            response.raise_for_status()
+            return response.json()
+        
+        except requests.exceptions.RequestException as e:
+            print(f"幣安API請求失敗: {e}")
+            if hasattr(e, 'response') and e.response is not None:
+                print(f"HTTP狀態碼: {e.response.status_code}")
+                print(f"錯誤詳情: {e.response.text}")
+                # 嘗試解析JSON錯誤
+                try:
+                    error_json = e.response.json()
+                    print(f"API錯誤: {error_json}")
+                except:
+                    pass
+            return None
+    
+    def test_connection(self):
+        """測試API連接"""
+        try:
+            print(f"正在進行幣安API連接測試...")
+            result = self._make_request('GET', '/fapi/v1/ping', signed=False)
+            if result is not None and isinstance(result, dict):
+                print(f"幣安API ping測試成功: {result}")
+                return True
+            else:
+                print(f"幣安API ping測試失敗: 無回應或格式錯誤 - {result}")
+                return False
+        except Exception as e:
+            print(f"幣安連接測試異常: {e}")
+            return False
+    
+    def get_account_info(self):
+        """獲取帳戶信息"""
+        return self._make_request('GET', '/fapi/v2/account')
+    
+    def get_balance(self):
+        """獲取餘額信息"""
+        return self._make_request('GET', '/fapi/v2/balance')
+    
+    def get_position_info(self):
+        """獲取持倉信息"""
+        return self._make_request('GET', '/fapi/v2/positionRisk')
+    
+    def get_server_time(self):
+        """獲取服務器時間"""
+        return self._make_request('GET', '/fapi/v1/time', signed=False)
+    
+    def get_exchange_info(self):
+        """獲取交易所信息"""
+        return self._make_request('GET', '/fapi/v1/exchangeInfo', signed=False)
+    
+    def place_order(self, symbol, side, order_type, quantity, price=None, time_in_force='GTC', 
+                   reduce_only=False, close_position=False, position_side='BOTH'):
+        """下單 - 期貨訂單"""
+        params = {
+            'symbol': symbol,
+            'side': side,  # BUY 或 SELL
+            'type': order_type,  # MARKET, LIMIT, STOP, TAKE_PROFIT等
+            'quantity': str(quantity),
+            'positionSide': position_side,  # BOTH, LONG, SHORT
+            'timeInForce': time_in_force,
+            'reduceOnly': reduce_only,
+            'closePosition': close_position
+        }
+        
+        if order_type == 'LIMIT' and price:
+            params['price'] = str(price)
+        
+        return self._make_request('POST', '/fapi/v1/order', params)
+    
+    def cancel_order(self, symbol, order_id=None, client_order_id=None):
+        """取消訂單"""
+        params = {'symbol': symbol}
+        
+        if order_id:
+            params['orderId'] = order_id
+        elif client_order_id:
+            params['origClientOrderId'] = client_order_id
+        else:
+            raise ValueError("必須提供 order_id 或 client_order_id")
+        
+        return self._make_request('DELETE', '/fapi/v1/order', params)
+    
+    def get_order_status(self, symbol, order_id=None, client_order_id=None):
+        """查詢訂單狀態"""
+        params = {'symbol': symbol}
+        
+        if order_id:
+            params['orderId'] = order_id
+        elif client_order_id:
+            params['origClientOrderId'] = client_order_id
+        else:
+            raise ValueError("必須提供 order_id 或 client_order_id")
+        
+        return self._make_request('GET', '/fapi/v1/order', params)
+    
+    def get_all_orders(self, symbol, limit=500):
+        """獲取所有訂單"""
+        params = {'symbol': symbol, 'limit': limit}
+        return self._make_request('GET', '/fapi/v1/allOrders', params)
+    
+    def get_trades(self, symbol, limit=500):
+        """獲取交易歷史"""
+        params = {'symbol': symbol, 'limit': limit}
+        return self._make_request('GET', '/fapi/v1/userTrades', params)
+    
+    def get_income_history(self, symbol=None, income_type=None, limit=100):
+        """獲取收益歷史"""
+        params = {'limit': limit}
+        
+        if symbol:
+            params['symbol'] = symbol
+        if income_type:
+            params['incomeType'] = income_type  # TRANSFER, WELCOME_BONUS, REALIZED_PNL, etc.
+        
+        return self._make_request('GET', '/fapi/v1/income', params)
+    
+    def change_leverage(self, symbol, leverage):
+        """調整槓桿倍數"""
+        params = {
+            'symbol': symbol,
+            'leverage': leverage
+        }
+        return self._make_request('POST', '/fapi/v1/leverage', params)
+    
+    def change_margin_type(self, symbol, margin_type):
+        """調整保證金模式"""
+        params = {
+            'symbol': symbol,
+            'marginType': margin_type  # ISOLATED 或 CROSSED
+        }
+        return self._make_request('POST', '/fapi/v1/marginType', params)
+    
+    def get_open_orders(self, symbol=None):
+        """獲取當前掛單"""
+        params = {}
+        if symbol:
+            params['symbol'] = symbol
+        return self._make_request('GET', '/fapi/v1/openOrders', params)
+    
+    def cancel_all_orders(self, symbol):
+        """取消所有掛單"""
+        params = {'symbol': symbol}
+        return self._make_request('DELETE', '/fapi/v1/allOpenOrders', params)
+    
+    def get_position_risk(self, symbol=None):
+        """獲取持倉風險"""
+        params = {}
+        if symbol:
+            params['symbol'] = symbol
+        return self._make_request('GET', '/fapi/v2/positionRisk', params)
+    
+    def get_ticker_price(self, symbol=None):
+        """獲取最新價格"""
+        params = {}
+        if symbol:
+            params['symbol'] = symbol
+        return self._make_request('GET', '/fapi/v1/ticker/price', params, signed=False)
+    
+    def get_24hr_ticker(self, symbol=None):
+        """獲取24小時價格變動"""
+        params = {}
+        if symbol:
+            params['symbol'] = symbol
+        return self._make_request('GET', '/fapi/v1/ticker/24hr', params, signed=False)
+
+def save_btc_env():
+    """保存BTC環境變量"""
+    try:
+        data = request.get_json()
+        
+        # 檢查是否有空值欄位
+        required_fields = ['CHAT_ID_BTC', 'BINANCE_API_KEY', 'BINANCE_SECRET_KEY', 'BINANCE_USER_ID', 'TRADING_PAIR', 'LEVERAGE', 'CONTRACT_TYPE']
+        has_empty_fields = False
+        
+        for field in required_fields:
+            if not data.get(field, '').strip():
+                has_empty_fields = True
+                break
+        
+        # 創建BTC環境文件內容（允許空值）
+        btc_env_content = f"""# Telegram Bot
+BOT_TOKEN_BTC=7912873826:AAFPPDwuwspKVdyDGwh1oVqxH6u1gQ_N-jU
+
+# Telegram ID
+CHAT_ID_BTC={data.get('CHAT_ID_BTC', '')}
+
+# 幣安 API Key
+BINANCE_API_KEY={data.get('BINANCE_API_KEY', '')}
+
+# 幣安 Secret Key
+BINANCE_SECRET_KEY={data.get('BINANCE_SECRET_KEY', '')}
+
+# 幣安用戶ID
+BINANCE_USER_ID={data.get('BINANCE_USER_ID', '')}
+
+# 交易對
+TRADING_PAIR={data.get('TRADING_PAIR', 'BTCUSDT')}
+
+# 槓桿倍數
+LEVERAGE={data.get('LEVERAGE', '5')}
+
+# 合約類型
+CONTRACT_TYPE={data.get('CONTRACT_TYPE', 'PERPETUAL')}
+
+# 登入狀態
+LOGIN_BTC=0
+"""
+        
+        # 儲存到btc.env文件
+        with open(BTC_ENV_PATH, 'w', encoding='utf-8') as f:
+            f.write(btc_env_content)
+        
+        return jsonify({
+            'success': True, 
+            'message': 'BTC配置儲存成功',
+            'has_empty_fields': has_empty_fields
+        })
+        
+    except Exception as e:
+        print(f"儲存BTC配置失敗: {e}")
+        return jsonify({'success': False, 'message': f'儲存失敗: {str(e)}'})
+
+def btc_login():
+    """BTC帳戶登入/連接"""
+    global binance_client, account_info
+    
+    try:
+        # 載入BTC配置
+        if not os.path.exists(BTC_ENV_PATH):
+            return jsonify({'success': False, 'message': 'BTC配置不存在，請先儲存配置'})
+        
+        btc_env = {}
+        with open(BTC_ENV_PATH, 'r', encoding='utf-8') as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith('#') and '=' in line:
+                    key, value = line.split('=', 1)
+                    btc_env[key] = value
+        
+        # 獲取API配置
+        api_key = btc_env.get('BINANCE_API_KEY', '').strip()
+        secret_key = btc_env.get('BINANCE_SECRET_KEY', '').strip()
+        trading_pair = btc_env.get('TRADING_PAIR', 'BTCUSDT')
+        
+        if not api_key or not secret_key:
+            return jsonify({'success': False, 'message': 'API Key 或 Secret Key 不存在'})
+        
+        # 創建幣安客戶端
+        binance_client = BinanceClient(api_key, secret_key)
+        
+        # 測試連接
+        print(f"正在測試幣安API連接...")
+        connection_test = binance_client.test_connection()
+        print(f"幣安API連接測試結果: {connection_test}")
+        
+        if not connection_test:
+            print(f"幣安API連接測試失敗")
+            return jsonify({'success': False, 'message': '無法連接到幣安服務器'})
+        
+        print(f"幣安API連接測試成功，正在獲取帳戶信息...")
+        # 獲取帳戶信息
+        fresh_account_info = binance_client.get_account_info()
+        print(f"帳戶信息獲取結果: {type(fresh_account_info)} - {fresh_account_info}")
+        
+        if not fresh_account_info:
+            print(f"獲取帳戶信息失敗 - 返回值為空")
+            return jsonify({'success': False, 'message': 'API認證失敗，請檢查API Key和Secret Key'})
+        
+        # 更新全局帳戶信息
+        account_info = fresh_account_info
+        print(f"成功獲取帳戶信息，總錢包餘額: {account_info.get('totalWalletBalance', 'N/A')}")
+        
+        # 獲取餘額信息
+        balance_info = binance_client.get_balance()
+        
+        # 將登入狀態寫入btc.env
+        updated_content = []
+        login_found = False
+        
+        with open(BTC_ENV_PATH, 'r', encoding='utf-8') as f:
+            for line in f:
+                if line.startswith('LOGIN_BTC='):
+                    updated_content.append('LOGIN_BTC=1\n')
+                    login_found = True
+                else:
+                    updated_content.append(line)
+        
+        if not login_found:
+            updated_content.append('LOGIN_BTC=1\n')
+        
+        with open(BTC_ENV_PATH, 'w', encoding='utf-8') as f:
+            f.writelines(updated_content)
+        
+        # 準備返回信息
+        total_wallet_balance = account_info.get('totalWalletBalance', '0')
+        available_balance = account_info.get('availableBalance', '0')
+        
+        print(f"BTC帳戶連接成功 - 交易對: {trading_pair}, 餘額: {total_wallet_balance} USDT")
+        
+        # 啟動WebSocket實時數據連接
+        try:
+            start_btc_websocket()
+            print("BTC WebSocket連接已啟動")
+        except Exception as e:
+            print(f"啟動BTC WebSocket失敗: {e}")
+        
+        # 啟動風險監控
+        try:
+            risk_thread = threading.Thread(target=start_btc_risk_monitoring, daemon=True)
+            risk_thread.start()
+            print("BTC風險監控已啟動")
+        except Exception as e:
+            print(f"啟動BTC風險監控失敗: {e}")
+        
+        return jsonify({
+            'success': True, 
+            'message': f'BTC帳戶連接成功 ({trading_pair})',
+            'trading_pair': trading_pair,
+            'total_balance': total_wallet_balance,
+            'available_balance': available_balance,
+            'account_alias': account_info.get('alias', '主帳戶')
+        })
+        
+    except Exception as e:
+        print(f"BTC登入失敗: {e}")
+        binance_client = None
+        account_info = None
+        return jsonify({'success': False, 'message': f'連接失敗: {str(e)}'})
+
+def btc_logout():
+    """BTC帳戶登出"""
+    try:
+        if not os.path.exists(BTC_ENV_PATH):
+            return jsonify({'success': False, 'message': 'BTC配置不存在'})
+        
+        # 將登入狀態改為0
+        updated_content = []
+        with open(BTC_ENV_PATH, 'r', encoding='utf-8') as f:
+            for line in f:
+                if line.startswith('LOGIN_BTC='):
+                    updated_content.append('LOGIN_BTC=0\n')
+                else:
+                    updated_content.append(line)
+        
+        with open(BTC_ENV_PATH, 'w', encoding='utf-8') as f:
+            f.writelines(updated_content)
+        
+        print("BTC帳戶登出成功")
+        return jsonify({'success': True, 'message': 'BTC帳戶登出成功'})
+        
+    except Exception as e:
+        print(f"BTC登出失敗: {e}")
+        return jsonify({'success': False, 'message': f'登出失敗: {str(e)}'})
+
+def get_btc_bot_username():
+    """獲取BTC Bot用戶名"""
+    try:
+        # 從BTC環境文件中讀取Bot Token
+        bot_token = "7912873826:AAFPPDwuwspKVdyDGwh1oVqxH6u1gQ_N-jU"
+        
+        # 使用Telegram Bot API獲取Bot信息
+        bot_api_url = f"https://api.telegram.org/bot{bot_token}/getMe"
+        
+        try:
+            response = requests.get(bot_api_url, timeout=5)
+            if response.status_code == 200:
+                bot_info = response.json()
+                if bot_info.get('ok'):
+                    username = bot_info['result'].get('username', 'Auto91_BtcBot')
+                    return jsonify({'username': f'@{username}'})
+        except:
+            pass
+        
+        # 如果API調用失敗，返回默認值
+        return jsonify({'username': '@Auto91_BtcBot'})
+        
+    except Exception as e:
+        print(f"獲取BTC Bot用戶名失敗: {e}")
+        return jsonify({'username': '@Auto91_BtcBot'})
+
+def load_btc_env():
+    """載入BTC環境變量"""
+    try:
+        if os.path.exists(BTC_ENV_PATH):
+            btc_env = {}
+            with open(BTC_ENV_PATH, 'r', encoding='utf-8') as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith('#') and '=' in line:
+                        key, value = line.split('=', 1)
+                        btc_env[key] = value
+            return jsonify(btc_env)
+        else:
+            return jsonify({})
+            
+    except Exception as e:
+        print(f"載入BTC配置失敗: {e}")
+        return jsonify({})
+
+def load_btc_env_data():
+    """載入BTC環境變量數據（內部使用）"""
+    try:
+        env_data = {}
+        if os.path.exists(BTC_ENV_PATH):
+            with open(BTC_ENV_PATH, 'r', encoding='utf-8') as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith('#') and '=' in line:
+                        key, value = line.split('=', 1)
+                        env_data[key] = value
+        return env_data
+    except Exception as e:
+        print(f"載入BTC環境數據失敗: {e}")
+        return {}
+
+def calculate_btc_quantity(signal_data, account_balance):
+    """計算BTC交易數量"""
+    try:
+        # 獲取配置的槓桿倍數
+        env_data = load_btc_env_data()
+        leverage = float(env_data.get('LEVERAGE', 5))
+        
+        # 獲取倉位大小百分比(預設使用2%風險)
+        position_size_pct = float(signal_data.get('position_size', 2.0)) / 100
+        
+        # 計算可用餘額
+        available_balance = float(account_balance.get('availableBalance', 0))
+        
+        # 計算下單金額 = 可用餘額 * 倉位比例 * 槓桿
+        order_value = available_balance * position_size_pct * leverage
+        
+        # 獲取當前價格
+        current_price = float(signal_data.get('price', 0))
+        if current_price <= 0:
+            # 如果信號沒有價格，獲取市場價格
+            if binance_client:
+                ticker = binance_client.get_ticker_price('BTCUSDT')
+                current_price = float(ticker.get('price', 0)) if ticker else 0
+        
+        if current_price <= 0:
+            raise ValueError("無法獲取有效價格")
+        
+        # 計算數量 = 下單金額 / 價格
+        quantity = order_value / current_price
+        
+        # 幣安最小下單單位調整(通常是0.001)
+        min_qty = 0.001
+        quantity = max(min_qty, round(quantity, 3))
+        
+        print(f"BTC倉位計算: 可用餘額={available_balance}, 槓桿={leverage}, 風險={position_size_pct*100}%, 價格={current_price}, 數量={quantity}")
+        
+        return quantity
+        
+    except Exception as e:
+        print(f"計算BTC數量失敗: {e}")
+        return 0.001  # 返回最小單位
+
+def place_btc_futures_order(symbol, side, quantity, price=None, order_type="MARKET"):
+    """BTC期貨下單"""
+    global binance_client, btc_active_trades
+    
+    try:
+        if not binance_client:
+            raise ValueError("BTC客戶端未初始化")
+        
+        print(f"準備下BTC單: symbol={symbol}, side={side}, quantity={quantity}, type={order_type}")
+        # 記錄到系統日誌
+        log_btc_system_message(f"準備下BTC單: {symbol} {side} {quantity} {order_type}", "info")
+        
+        # 執行下單
+        result = binance_client.place_order(
+            symbol=symbol,
+            side=side,
+            order_type=order_type,
+            quantity=quantity,
+            price=price if order_type == 'LIMIT' else None
+        )
+        
+        if result:
+            order_id = result.get('orderId')
+            client_order_id = result.get('clientOrderId')
+            
+            print(f"BTC訂單提交成功: OrderID={order_id}, ClientOrderID={client_order_id}")
+            # 記錄到系統日誌
+            log_btc_system_message(f"BTC訂單提交成功: OrderID={order_id}", "info")
+            
+            # 記錄到活躍交易
+            trade_record = {
+                'order_id': order_id,
+                'client_order_id': client_order_id,
+                'symbol': symbol,
+                'side': side,
+                'quantity': quantity,
+                'order_type': order_type,
+                'status': result.get('status', 'NEW'),
+                'timestamp': datetime.now().isoformat()
+            }
+            
+            btc_active_trades[order_id] = trade_record
+            
+            # 發送提交成功通知
+            send_btc_order_submit_notification(trade_record, True)
+            
+            # 延遲檢查成交狀態
+            def check_fill_status():
+                time.sleep(3)  # 延遲3秒檢查
+                check_btc_order_fill(order_id, symbol)
+            
+            threading.Thread(target=check_fill_status, daemon=True).start()
+            
+            return result
+        else:
+            raise Exception("下單返回空結果")
+            
+    except Exception as e:
+        print(f"BTC下單失敗: {e}")
+        # 記錄到系統日誌
+        log_btc_system_message(f"BTC下單失敗: {e}", "error")
+        # 發送提交失敗通知
+        error_record = {
+            'symbol': symbol,
+            'side': side,
+            'quantity': quantity,
+            'error': str(e)
+        }
+        send_btc_order_submit_notification(error_record, False)
+        return None
+
+def check_btc_order_fill(order_id, symbol):
+    """檢查BTC訂單成交狀態"""
+    global binance_client, btc_active_trades
+    
+    try:
+        if not binance_client:
+            return
+        
+        # 查詢訂單狀態
+        order_status = binance_client.get_order_status(symbol, order_id=order_id)
+        
+        if order_status:
+            status = order_status.get('status')
+            
+            if status == 'FILLED':
+                # 訂單已成交
+                trade_record = btc_active_trades.get(order_id, {})
+                trade_record.update({
+                    'fill_price': order_status.get('avgPrice'),
+                    'fill_quantity': order_status.get('executedQty'),
+                    'fill_time': order_status.get('updateTime'),
+                    'status': 'FILLED'
+                })
+                
+                print(f"BTC訂單成交: OrderID={order_id}, 成交價={trade_record.get('fill_price')}")
+                
+                # 發送成交通知
+                send_btc_trade_notification(trade_record)
+                
+                # 保存交易記錄
+                save_btc_trade_record(trade_record)
+                
+            elif status in ['CANCELED', 'REJECTED', 'EXPIRED']:
+                # 訂單失效
+                trade_record = btc_active_trades.get(order_id, {})
+                trade_record.update({'status': status})
+                print(f"BTC訂單失效: OrderID={order_id}, 狀態={status}")
+                
+        # 從活躍交易中移除已完成的訂單
+        if order_id in btc_active_trades:
+            final_status = btc_active_trades[order_id].get('status')
+            if final_status in ['FILLED', 'CANCELED', 'REJECTED', 'EXPIRED']:
+                del btc_active_trades[order_id]
+                
+    except Exception as e:
+        print(f"檢查BTC訂單狀態失敗: {e}")
+
+def process_btc_entry_signal(signal_data):
+    """處理BTC進場信號"""
+    try:
+        action = signal_data.get('action', '').upper()
+        symbol = signal_data.get('symbol', 'BTCUSDT')
+        
+        if action not in ['LONG', 'SHORT', 'BUY', 'SELL']:
+            raise ValueError(f"無效的進場動作: {action}")
+        
+        # 標準化方向
+        side = 'BUY' if action in ['LONG', 'BUY'] else 'SELL'
+        
+        # 獲取帳戶餘額計算數量
+        if not binance_client:
+            raise ValueError("BTC客戶端未初始化")
+        
+        balance_info = binance_client.get_balance()
+        if not balance_info:
+            raise ValueError("無法獲取帳戶餘額")
+        
+        # 找到USDT餘額
+        usdt_balance = None
+        for balance in balance_info:
+            if balance.get('asset') == 'USDT':
+                usdt_balance = balance
+                break
+        
+        if not usdt_balance:
+            raise ValueError("找不到USDT餘額")
+        
+        # 計算交易數量
+        quantity = calculate_btc_quantity(signal_data, usdt_balance)
+        
+        # 執行下單
+        order_result = place_btc_futures_order(
+            symbol=symbol,
+            side=side,
+            quantity=quantity,
+            order_type='MARKET'
+        )
+        
+        return order_result
+        
+    except Exception as e:
+        print(f"處理BTC進場信號失敗: {e}")
+        return None
+
+def process_btc_exit_signal(signal_data):
+    """處理BTC出場信號"""
+    try:
+        action = signal_data.get('action', '').upper()
+        symbol = signal_data.get('symbol', 'BTCUSDT')
+        
+        if action not in ['CLOSE', 'EXIT', 'CLOSE_LONG', 'CLOSE_SHORT']:
+            raise ValueError(f"無效的出場動作: {action}")
+        
+        # 獲取當前持倉
+        if not binance_client:
+            raise ValueError("BTC客戶端未初始化")
+        
+        positions = binance_client.get_position_info()
+        if not positions:
+            print("沒有找到持倉信息")
+            return None
+        
+        # 找到對應的持倉
+        target_position = None
+        for pos in positions:
+            if pos.get('symbol') == symbol and float(pos.get('positionAmt', 0)) != 0:
+                target_position = pos
+                break
+        
+        if not target_position:
+            print(f"沒有找到{symbol}的活躍持倉")
+            return None
+        
+        # 計算平倉方向和數量
+        position_amt = float(target_position.get('positionAmt', 0))
+        
+        if position_amt > 0:
+            # 多頭持倉，需要賣出平倉
+            side = 'SELL'
+            quantity = abs(position_amt)
+        else:
+            # 空頭持倉，需要買入平倉
+            side = 'BUY' 
+            quantity = abs(position_amt)
+        
+        # 執行平倉單
+        order_result = place_btc_futures_order(
+            symbol=symbol,
+            side=side,
+            quantity=quantity,
+            order_type='MARKET'
+        )
+        
+        return order_result
+        
+    except Exception as e:
+        print(f"處理BTC出場信號失敗: {e}")
+        return None
+
+
+def save_btc_trade_record(trade_record):
+    """保存BTC交易記錄 - 使用日期格式文件名"""
+    try:
+        today = datetime.now().strftime("%Y%m%d")
+        trades_file = os.path.join(os.path.dirname(__file__), 'BTCtransdata', f'BTCtrades_{today}.json')
+        
+        # 確保目錄存在
+        os.makedirs(os.path.dirname(trades_file), exist_ok=True)
+        
+        # 讀取現有交易記錄
+        existing_trades = []
+        if os.path.exists(trades_file):
+            try:
+                with open(trades_file, 'r', encoding='utf-8') as f:
+                    existing_trades = json.load(f)
+            except:
+                existing_trades = []
+        
+        # 添加時間戳
+        trade_record['timestamp'] = datetime.now().isoformat()
+        
+        # 添加新交易記錄
+        existing_trades.append(trade_record)
+        
+        # 保存回文件
+        with open(trades_file, 'w', encoding='utf-8') as f:
+            json.dump(existing_trades, f, ensure_ascii=False, indent=2)
+        
+        # 清理舊的BTC交易記錄檔案（保留30個交易日）
+        cleanup_old_btc_trade_files()
+            
+    except Exception as e:
+        print(f"保存BTC交易記錄失敗: {e}")
+
+def cleanup_old_btc_trade_files():
+    """清理舊的BTC交易記錄檔案，保留30個交易日"""
+    try:
+        btc_log_dir = os.path.join(os.path.dirname(__file__), 'BTCtransdata')
+        if not os.path.exists(btc_log_dir):
+            return
+        
+        # 獲取所有BTC交易記錄檔案
+        trade_files = []
+        for filename in os.listdir(btc_log_dir):
+            if filename.startswith('BTCtrades_') and filename.endswith('.json'):
+                try:
+                    # 從檔案名提取日期
+                    date_str = filename.replace('BTCtrades_', '').replace('.json', '')
+                    file_date = datetime.strptime(date_str, '%Y%m%d')
+                    trade_files.append((filename, file_date))
+                except ValueError:
+                    # 如果檔案名格式不正確，跳過
+                    continue
+        
+        # 按日期排序（最新的在前）
+        trade_files.sort(key=lambda x: x[1], reverse=True)
+        
+        # 保留最新的30個檔案，刪除其餘的
+        if len(trade_files) > 30:
+            files_to_delete = trade_files[30:]
+            for filename, _ in files_to_delete:
+                try:
+                    file_path = os.path.join(btc_log_dir, filename)
+                    os.remove(file_path)
+                    print(f"已刪除舊BTC交易記錄檔案：{filename}")
+                except Exception as e:
+                    print(f"刪除BTC檔案失敗 {filename}：{e}")
+            
+        print(f"BTC交易記錄檔案清理完成，保留 {min(len(trade_files), 30)} 個檔案")
+    
+    except Exception as e:
+        print(f"清理舊BTC交易記錄檔案失敗：{e}")
+
+def send_btc_telegram_message(message, chat_id=None, bot_token=None):
+    """發送BTC Telegram訊息"""
+    try:
+        # 載入BTC配置
+        env_data = load_btc_env_data()
+        
+        if not chat_id:
+            chat_id = env_data.get('CHAT_ID_BTC')
+        if not bot_token:
+            bot_token = env_data.get('BOT_TOKEN_BTC')
+        
+        if not chat_id or not bot_token:
+            print("BTC Telegram配置不完整，跳過通知")
+            return False
+        
+        url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+        payload = {
+            'chat_id': chat_id,
+            'text': message,
+            'parse_mode': 'Markdown'
+        }
+        
+        response = requests.post(url, json=payload, timeout=10)
+        
+        if response.status_code == 200:
+            print(f"BTC Telegram訊息發送成功")
+            # 記錄到系統日誌
+            log_btc_system_message(f"BTC Telegram訊息發送成功: {message[:50]}...", "info")
+            return True
+        else:
+            print(f"BTC Telegram訊息發送失敗: {response.status_code} - {response.text}")
+            # 記錄到系統日誌
+            log_btc_system_message(f"BTC Telegram訊息發送失敗: {response.status_code}", "error")
+            return False
+            
+    except Exception as e:
+        print(f"發送BTC Telegram訊息失敗: {e}")
+        # 記錄到系統日誌
+        log_btc_system_message(f"發送BTC Telegram訊息異常: {e}", "error")
+        return False
+
+def log_btc_system_message(message, log_type="info"):
+    """記錄BTC系統日誌到前端"""
+    try:
+        requests.post(
+            'http://127.0.0.1:5000/api/system_log',
+            json={'message': f"[BTC] {message}", 'type': log_type},
+            timeout=5
+        )
+    except:
+        pass
+
+def send_btc_order_submit_notification(trade_record, success=True):
+    """發送BTC訂單提交通知 - 參考TX格式"""
+    try:
+        current_time = datetime.now().strftime('%Y/%m/%d %H:%M:%S')
+        
+        if success:
+            symbol = trade_record.get('symbol', 'BTCUSDT')
+            side = trade_record.get('side', '')
+            quantity = trade_record.get('quantity', 0)
+            order_id = trade_record.get('order_id', '')
+            price = trade_record.get('price', 0)
+            order_type = trade_record.get('order_type', 'MARKET')
+            
+            direction_text = "做多" if side == 'BUY' else "做空"
+            contract_display = f"BTC永續合約 ({symbol})"
+            order_type_display = "市價單" if order_type == 'MARKET' else "限價單"
+            price_display = f"{price:.2f} USDT" if price > 0 else "市價"
+            
+            msg = (f"⭕ 提交成功（{current_time}）\n"
+                   f"選用合約：{contract_display}\n"
+                   f"訂單類型：{order_type_display}\n"
+                   f"提交單號：{order_id}\n"
+                   f"提交類型：BTC期貨\n"
+                   f"提交動作：{direction_text}\n"
+                   f"提交部位：{symbol}\n"
+                   f"提交數量：{quantity} BTC\n"
+                   f"提交價格：{price_display}")
+        else:
+            symbol = trade_record.get('symbol', 'BTCUSDT')
+            side = trade_record.get('side', '')
+            quantity = trade_record.get('quantity', 0)
+            order_id = trade_record.get('order_id', '未知')
+            error = trade_record.get('error', '未知錯誤')
+            price = trade_record.get('price', 0)
+            order_type = trade_record.get('order_type', 'MARKET')
+            
+            direction_text = "做多" if side == 'BUY' else "做空"
+            contract_display = f"BTC永續合約 ({symbol})"
+            order_type_display = "市價單" if order_type == 'MARKET' else "限價單"
+            price_display = f"{price:.2f} USDT" if price > 0 else "市價"
+            
+            msg = (f"❌ 提交失敗（{current_time}）\n"
+                   f"選用合約：{contract_display}\n"
+                   f"訂單類型：{order_type_display}\n"
+                   f"提交單號：{order_id}\n"
+                   f"提交類型：BTC期貨\n"
+                   f"提交動作：{direction_text}\n"
+                   f"提交部位：{symbol}\n"
+                   f"提交數量：{quantity} BTC\n"
+                   f"提交價格：{price_display}\n"
+                   f"原因：{error}")
+        
+        send_btc_telegram_message(msg)
+        
+        # 添加到系統日誌
+        print(f"BTC訂單通知: {msg}")
+        
+    except Exception as e:
+        print(f"發送BTC訂單提交通知失敗: {e}")
+
+def send_btc_trade_notification(trade_record):
+    """發送BTC成交通知 - 參考TX格式"""
+    try:
+        current_time = datetime.now().strftime('%Y/%m/%d %H:%M:%S')
+        
+        symbol = trade_record.get('symbol', 'BTCUSDT')
+        side = trade_record.get('side', '')
+        quantity = trade_record.get('fill_quantity', trade_record.get('quantity', 0))
+        fill_price = trade_record.get('fill_price', 0)
+        order_id = trade_record.get('order_id', '')
+        order_type = trade_record.get('order_type', 'MARKET')
+        
+        direction_text = "做多" if side == 'BUY' else "做空"
+        contract_display = f"BTC永續合約 ({symbol})"
+        order_type_display = "市價單" if order_type == 'MARKET' else "限價單"
+        
+        msg = (f"✅ 成交通知（{current_time}）\n"
+               f"選用合約：{contract_display}\n"
+               f"訂單類型：{order_type_display}\n"
+               f"成交單號：{order_id}\n"
+               f"成交類型：BTC期貨\n"
+               f"成交動作：{direction_text}\n"
+               f"成交部位：{symbol}\n"
+               f"成交數量：{quantity} BTC\n"
+               f"成交價格：{fill_price:.2f} USDT")
+        
+        send_btc_telegram_message(msg)
+        
+        # 添加到系統日誌
+        print(f"BTC成交通知: {msg}")
+        
+    except Exception as e:
+        print(f"發送BTC成交通知失敗: {e}")
+
+def send_btc_trading_statistics():
+    """發送BTC每日交易統計"""
+    try:
+        current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        current_date = datetime.now().strftime('%Y-%m-%d')
+        
+        # 讀取今日交易記錄
+        today = datetime.now().strftime('%Y%m%d')
+        trades_file = os.path.join(os.path.dirname(__file__), 'BTCtransdata', f'BTCtrades_{today}.json')
+        today_trades = []
+        
+        if os.path.exists(trades_file):
+            try:
+                with open(trades_file, 'r', encoding='utf-8') as f:
+                    all_trades = json.load(f)
+                
+                # 篩選今日交易
+                for trade in all_trades:
+                    trade_time = trade.get('timestamp', '')
+                    if current_date in trade_time:
+                        today_trades.append(trade)
+            except:
+                pass
+        
+        # 計算統計
+        total_trades = len(today_trades)
+        buy_trades = len([t for t in today_trades if t.get('side') == 'BUY'])
+        sell_trades = len([t for t in today_trades if t.get('side') == 'SELL'])
+        
+        # 獲取當前帳戶狀態
+        account_status = "帳戶信息獲取中..."
+        if binance_client:
+            try:
+                balance_info = binance_client.get_balance()
+                position_info = binance_client.get_position_info()
+                
+                if balance_info:
+                    for balance in balance_info:
+                        if balance.get('asset') == 'USDT':
+                            available = float(balance.get('availableBalance', 0))
+                            account_status = f"可用餘額：{available:.2f} USDT"
+                            break
+                
+                # 檢查持倉
+                active_positions = []
+                if position_info:
+                    for pos in position_info:
+                        if float(pos.get('positionAmt', 0)) != 0:
+                            symbol = pos.get('symbol')
+                            amount = float(pos.get('positionAmt', 0))
+                            pnl = float(pos.get('unRealizedProfit', 0))
+                            direction = "多頭" if amount > 0 else "空頭"
+                            active_positions.append(f"{symbol} {direction} {abs(amount):.3f} (未實現損益: {pnl:.2f})")
+                
+                if active_positions:
+                    position_text = "\n".join(active_positions)
+                    account_status += f"\n\n當前持倉：\n{position_text}"
+                
+            except Exception as e:
+                print(f"獲取BTC帳戶統計失敗: {e}")
+        
+        msg = (f"📊 BTC每日交易統計（{current_date}）\n"
+               f"統計時間：{current_time}\n\n"
+               f"交易次數：{total_trades} 筆\n"
+               f"買入次數：{buy_trades} 筆\n"
+               f"賣出次數：{sell_trades} 筆\n\n"
+               f"{account_status}")
+        
+        send_btc_telegram_message(msg)
+        print(f"BTC每日交易統計已發送")
+        
+    except Exception as e:
+        print(f"發送BTC每日交易統計失敗: {e}")
+
+def check_btc_daily_trading_statistics():
+    """檢查是否需要發送BTC每日交易統計 - BTC 24/7無交易日限制"""
+    try:
+        print("開始檢查BTC每日交易統計...")
+        # BTC 24/7交易，直接發送統計
+        send_btc_trading_statistics()
+        print("BTC每日交易統計發送完成")
+        
+        # 延遲生成報表 - 與TX邏輯一致
+        def delayed_generate_btc_reports():
+            # 先等待30秒後生成日報
+            time.sleep(30)
+            print("開始生成BTC交易日報...")
+            daily_report_result = generate_btc_trading_report()
+            
+            # 如果是月末且日報生成成功，再等待30秒後生成月報
+            if daily_report_result and is_last_day_of_month():
+                time.sleep(30)
+                print("月末檢測，開始生成BTC交易月報...")
+                generate_btc_monthly_report()
+        
+        # 在新線程中執行延遲生成報表
+        threading.Thread(target=delayed_generate_btc_reports, daemon=True).start()
+        
+    except Exception as e:
+        print(f"檢查BTC每日交易統計失敗: {e}")
+
+
+def is_last_day_of_month():
+    """檢查是否為月末最後一天"""
+    try:
+        today = datetime.now()
+        tomorrow = today + timedelta(days=1)
+        return today.month != tomorrow.month
+    except Exception as e:
+        print(f"檢查月末日期失敗: {e}")
+        return False
+
+def btc_webhook():
+    """BTC交易策略接收端點"""
+    try:
+        data = request.get_json()
+        
+        # 驗證請求格式
+        if not data:
+            return jsonify({'success': False, 'message': '無效的請求格式'})
+        
+        # 記錄接收到的策略信號
+        timestamp = datetime.now().isoformat()
+        
+        # 載入BTC配置
+        if not os.path.exists(BTC_ENV_PATH):
+            return jsonify({'success': False, 'message': 'BTC配置不存在'})
+        
+        btc_env = {}
+        with open(BTC_ENV_PATH, 'r', encoding='utf-8') as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith('#') and '=' in line:
+                    key, value = line.split('=', 1)
+                    btc_env[key] = value
+        
+        print(f"BTC Webhook收到數據: {data}")
+        
+        # 處理策略信號並執行交易
+        action = data.get('action', '').upper()
+        order_result = None
+        
+        if action in ['LONG', 'SHORT', 'BUY', 'SELL']:
+            # 進場信號
+            order_result = process_btc_entry_signal(data)
+        elif action in ['CLOSE', 'EXIT', 'CLOSE_LONG', 'CLOSE_SHORT']:
+            # 出場信號
+            order_result = process_btc_exit_signal(data)
+        else:
+            print(f"BTC未知的動作類型: {action}")
+        
+        # 處理交易策略信號記錄
+        strategy_data = {
+            'timestamp': timestamp,
+            'signal': data,
+            'action': action,
+            'processed': True,
+            'order_result': order_result,
+            'order_id': order_result.get('orderId') if order_result else None
+        }
+        
+        
+        # 發送Telegram通知（如果配置了）
+        chat_id = btc_env.get('CHAT_ID_BTC')
+        if chat_id:
+            try:
+                message = f"🔔 BTC交易信號\n"
+                message += f"時間: {timestamp}\n"
+                message += f"信號: {json.dumps(data, ensure_ascii=False, indent=2)}"
+                
+                # 這裡可以添加發送Telegram消息的邏輯
+                print(f"BTC策略信號: {message}")
+                
+            except Exception as e:
+                print(f"發送Telegram通知失敗: {e}")
+        
+        return jsonify({
+            'success': True, 
+            'message': 'BTC策略信號接收成功',
+            'timestamp': timestamp
+        })
+        
+    except Exception as e:
+        print(f"處理BTC策略信號失敗: {e}")
+        return jsonify({'success': False, 'message': f'處理失敗: {str(e)}'})
+
+
+def get_btc_strategy_status():
+    """獲取BTC策略狀態"""
+    try:
+        if not os.path.exists(BTC_ENV_PATH):
+            return jsonify({
+                'status': 'inactive',
+                'message': 'BTC配置不存在'
+            })
+        
+        # 載入BTC配置
+        btc_env = {}
+        with open(BTC_ENV_PATH, 'r', encoding='utf-8') as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith('#') and '=' in line:
+                    key, value = line.split('=', 1)
+                    btc_env[key] = value
+        
+        # 檢查登入狀態
+        login_status = btc_env.get('LOGIN_BTC', '0')
+        
+        if login_status == '1':
+            return jsonify({
+                'status': 'active',
+                'trading_pair': btc_env.get('TRADING_PAIR', ''),
+                'leverage': btc_env.get('LEVERAGE', ''),
+                'message': 'BTC策略運行中'
+            })
+        else:
+            return jsonify({
+                'status': 'inactive',
+                'message': 'BTC帳戶未登入'
+            })
+            
+    except Exception as e:
+        print(f"獲取BTC策略狀態失敗: {e}")
+        return jsonify({
+            'status': 'error',
+            'message': f'狀態獲取失敗: {str(e)}'
+        })
+
+# ========================== 新增的帳戶相關API ==========================
+
+def get_btc_account_balance():
+    """獲取BTC帳戶餘額"""
+    global binance_client
+    
+    try:
+        if not binance_client:
+            return jsonify({'success': False, 'message': '請先登入BTC帳戶'})
+        
+        # 獲取帳戶信息
+        account_info = binance_client.get_account_info()
+        if not account_info:
+            return jsonify({'success': False, 'message': '無法獲取帳戶信息'})
+        
+        # 獲取餘額信息
+        balance_info = binance_client.get_balance()
+        
+        # 整理餘額數據
+        balances = []
+        if balance_info:
+            for balance in balance_info:
+                if float(balance.get('balance', 0)) > 0:
+                    balances.append({
+                        'asset': balance.get('asset'),
+                        'balance': balance.get('balance'),
+                        'available': balance.get('withdrawAvailable', balance.get('balance'))
+                    })
+        
+        return jsonify({
+            'success': True,
+            'total_wallet_balance': account_info.get('totalWalletBalance', '0'),
+            'total_unrealized_pnl': account_info.get('totalUnrealizedProfit', '0'),
+            'total_margin_balance': account_info.get('totalMarginBalance', '0'),
+            'available_balance': account_info.get('availableBalance', '0'),
+            'balances': balances
+        })
+        
+    except Exception as e:
+        print(f"獲取BTC帳戶餘額失敗: {e}")
+        return jsonify({'success': False, 'message': f'獲取失敗: {str(e)}'})
+
+def get_btc_position():
+    """獲取BTC持倉信息"""
+    global binance_client
+    
+    try:
+        if not binance_client:
+            return jsonify({'success': False, 'message': '請先登入BTC帳戶'})
+        
+        # 獲取持倉信息
+        position_info = binance_client.get_position_info()
+        if not position_info:
+            return jsonify({'success': False, 'message': '無法獲取持倉信息'})
+        
+        # 過濾出有持倉的合約
+        active_positions = []
+        for position in position_info:
+            position_amt = float(position.get('positionAmt', 0))
+            if position_amt != 0:
+                active_positions.append({
+                    'symbol': position.get('symbol'),
+                    'position_amt': position.get('positionAmt'),
+                    'entry_price': position.get('entryPrice'),
+                    'unrealized_pnl': position.get('unRealizedProfit'),
+                    'percentage': position.get('percentage'),
+                    'side': 'LONG' if position_amt > 0 else 'SHORT',
+                    'leverage': position.get('leverage')
+                })
+        
+        return jsonify({
+            'success': True,
+            'positions': active_positions,
+            'total_positions': len(active_positions)
+        })
+        
+    except Exception as e:
+        print(f"獲取BTC持倉信息失敗: {e}")
+        return jsonify({'success': False, 'message': f'獲取失敗: {str(e)}'})
+
+def get_btc_version():
+    """獲取幣安版本信息"""
+    global binance_client
+    
+    try:
+        if not binance_client:
+            return jsonify({'success': False, 'message': '請先登入BTC帳戶'})
+        
+        # 獲取交易所信息
+        exchange_info = binance_client.get_exchange_info()
+        if not exchange_info:
+            return jsonify({'success': False, 'message': '無法獲取交易所信息'})
+        
+        # 獲取服務器時間
+        server_time = binance_client.get_server_time()
+        
+        return jsonify({
+            'success': True,
+            'version': 'Binance Futures API v1',
+            'server_time': server_time.get('serverTime') if server_time else None,
+            'timezone': exchange_info.get('timezone', 'UTC'),
+            'rate_limits': len(exchange_info.get('rateLimits', [])),
+            'symbols_count': len(exchange_info.get('symbols', [])),
+            'api_status': 'NORMAL'
+        })
+        
+    except Exception as e:
+        print(f"獲取幣安版本信息失敗: {e}")
+        return jsonify({'success': False, 'message': f'獲取失敗: {str(e)}'})
+
+def get_btc_trading_status():
+    """獲取BTC交易狀態"""
+    global binance_client, account_info
+    
+    try:
+        if not binance_client:
+            return jsonify({
+                'success': False,
+                'status': 'disconnected',
+                'message': '未連接到幣安API'
+            })
+        
+        # 檢查API連接狀態
+        connection_test = binance_client.test_connection()
+        if not connection_test:
+            return jsonify({
+                'success': False,
+                'status': 'disconnected',
+                'message': 'API連接失敗'
+            })
+        
+        # 檢查帳戶狀態
+        if account_info:
+            can_trade = account_info.get('canTrade', False)
+            can_withdraw = account_info.get('canWithdraw', False)
+            can_deposit = account_info.get('canDeposit', False)
+            
+            return jsonify({
+                'success': True,
+                'status': 'connected',
+                'can_trade': can_trade,
+                'can_withdraw': can_withdraw,
+                'can_deposit': can_deposit,
+                'account_type': account_info.get('accountType', 'FUTURES'),
+                'message': '幣安API連接正常'
+            })
+        else:
+            # 嘗試重新獲取帳戶信息
+            try:
+                fresh_account_info = binance_client.get_account_info()
+                if fresh_account_info:
+                    return jsonify({
+                        'success': True,
+                        'status': 'connected',
+                        'can_trade': fresh_account_info.get('canTrade', False),
+                        'can_withdraw': fresh_account_info.get('canWithdraw', False),
+                        'can_deposit': fresh_account_info.get('canDeposit', False),
+                        'account_type': fresh_account_info.get('accountType', 'FUTURES'),
+                        'message': '幣安API連接正常'
+                    })
+                else:
+                    return jsonify({
+                        'success': False,
+                        'status': 'no_account_info',
+                        'message': '無法獲取帳戶信息'
+                    })
+            except:
+                return jsonify({
+                    'success': False,
+                    'status': 'disconnected',
+                    'message': '帳戶信息獲取失敗'
+                })
+        
+    except Exception as e:
+        print(f"獲取BTC交易狀態失敗: {e}")
+        return jsonify({
+            'success': False,
+            'status': 'error',
+            'message': f'狀態檢查失敗: {str(e)}'
+        })
+
+def send_btc_daily_startup_notification():
+    """發送BTC每日啟動通知 - 8:45發送，參考TX格式"""
+    try:
+        current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        current_date = datetime.now().strftime('%Y-%m-%d')
+        
+        # BTC啟動通知 (24/7無交易日限制)
+        
+        # 獲取幣安連線狀態和交易所信息
+        api_status = "已連線" if binance_client else "未連線"
+        exchange_name = "未知"  # 預設值
+        
+        # 嘗試從API獲取交易所名稱
+        if binance_client:
+            try:
+                exchange_info = binance_client.get_exchange_info()
+                if exchange_info and 'exchangeInfo' in str(exchange_info):
+                    exchange_name = "Binance Futures"  # 如果API可用，使用正式的名稱
+            except Exception as e:
+                print(f"獲取交易所信息失敗: {e}")
+                exchange_name = "未知"
+        
+        # 獲取環境配置
+        env_data = load_btc_env_data()
+        trading_pair = env_data.get('TRADING_PAIR', 'BTCUSDT')
+        leverage = env_data.get('LEVERAGE', '5')
+        contract_type = env_data.get('CONTRACT_TYPE', 'PERPETUAL')
+        user_id = env_data.get('BINANCE_USER_ID', '-')
+        
+        # 獲取帳戶資訊 - 對應前端7個欄位
+        wallet_balance = 0
+        margin_balance = 0
+        available_balance = 0
+        unrealized_pnl = 0
+        total_margin = 0
+        maintenance_margin = 0
+        margin_ratio = 0
+        
+        if binance_client:
+            try:
+                # 獲取帳戶資訊
+                account_info = binance_client.get_account_info()
+                if account_info:
+                    wallet_balance = float(account_info.get('totalWalletBalance', 0))
+                    margin_balance = float(account_info.get('totalMarginBalance', 0))
+                    available_balance = float(account_info.get('availableBalance', 0))
+                    unrealized_pnl = float(account_info.get('totalUnrealizedProfit', 0))
+                    total_margin = float(account_info.get('totalInitialMargin', 0))
+                    maintenance_margin = float(account_info.get('totalMaintMargin', 0))
+                    
+                    # 計算保證金率
+                    if maintenance_margin > 0:
+                        margin_ratio = (margin_balance / maintenance_margin) * 100
+            except Exception as e:
+                print(f"獲取BTC帳戶信息失敗: {e}")
+        
+        # 獲取持倉資訊
+        position_info = ""
+        if binance_client:
+            try:
+                positions = binance_client.get_position_info()
+                active_positions = [pos for pos in positions if float(pos.get('positionAmt', 0)) != 0]
+                
+                if not active_positions:
+                    position_info = "❌ 無持倉部位"
+                else:
+                    position_info = ""
+                    for pos in active_positions:
+                        symbol = pos.get('symbol', '')
+                        side = "多單" if float(pos.get('positionAmt', 0)) > 0 else "空單"
+                        size = abs(float(pos.get('positionAmt', 0)))
+                        entry_price = float(pos.get('entryPrice', 0))
+                        pnl = float(pos.get('unRealizedProfit', 0))
+                        position_info += f"{symbol}｜{side}｜{size}｜{entry_price:.2f}｜＄{pnl:,.2f} USDT\n"
+            except Exception as e:
+                print(f"獲取BTC持倉信息失敗: {e}")
+                position_info = "❌ 持倉資訊獲取失敗"
+        else:
+            position_info = "❌ 無持倉部位"
+        
+        # 構建訊息 - 參考TX格式
+        message = "✅ 自動交易BTC期正在啟動中.....\n"
+        message += "═════ 系統資訊 ═════\n"
+        message += f"交易平台：{exchange_name}\n"
+        message += f"綁定帳戶：{user_id}\n"
+        message += f"API 狀態：{api_status}\n"
+        
+        message += "═════ 選用合約 ═════\n"
+        # 格式化合約信息，類似TX格式
+        contract_display = f"{trading_pair} 永續合約"
+        if contract_type == 'PERPETUAL':
+            contract_display += " (無到期)"
+        else:
+            contract_display += f" ({contract_type})"
+        contract_display += f" {leverage}x槓桿"
+        message += f"{contract_display}\n"
+        
+        message += "═════ 帳戶狀態 ═════\n"
+        message += f"錢包餘額：{wallet_balance:,.2f} USDT\n"
+        message += f"保證金餘額：{margin_balance:,.2f} USDT\n"
+        message += f"可用餘額：{available_balance:,.2f} USDT\n"
+        message += f"未實現損益：＄{unrealized_pnl:,.2f} USDT\n"
+        message += f"總保證金：{total_margin:,.2f} USDT\n"
+        message += f"維持保證金：{maintenance_margin:,.2f} USDT\n"
+        message += f"保證金率：{margin_ratio:,.1f}%\n"
+        
+        message += "═════ 持倉狀態 ═════\n"
+        message += position_info.rstrip('\n')  # 移除最後的換行符
+        
+        if send_btc_telegram_message(message):
+            print(f"BTC每日啟動通知已發送: {current_date}")
+        
+    except Exception as e:
+        print(f"發送BTC每日啟動通知失敗: {e}")
+
+def generate_btc_trading_report():
+    """生成BTC交易日報 - 保存到根目錄"""
+    try:
+        import openpyxl
+        from openpyxl.styles import Alignment, PatternFill, Font
+        from openpyxl.utils import get_column_letter
+        
+        current_date = datetime.now().strftime('%Y-%m-%d')
+        report_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        
+        # 創建工作簿
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = f"BTC交易日報_{current_date}"
+        
+        # 設置標題樣式
+        header_font = Font(bold=True, size=14)
+        header_fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
+        center_alignment = Alignment(horizontal="center", vertical="center")
+        
+        # 報告標題
+        ws.merge_cells('A1:H1')
+        ws['A1'] = f"BTC期貨交易日報 - {current_date}"
+        ws['A1'].font = Font(bold=True, size=16)
+        ws['A1'].alignment = center_alignment
+        ws['A1'].fill = PatternFill(start_color="E7E6E6", end_color="E7E6E6", fill_type="solid")
+        
+        # 帳戶資訊區塊
+        row = 3
+        ws[f'A{row}'] = "帳戶資訊"
+        ws[f'A{row}'].font = header_font
+        ws[f'A{row}'].fill = header_fill
+        ws.merge_cells(f'A{row}:H{row}')
+        
+        row += 1
+        if binance_client:
+            try:
+                # 獲取帳戶資訊
+                account_data = binance_client.get_account_info()
+                balance_data = binance_client.get_balance()
+                position_data = binance_client.get_position_info()
+                
+                if account_data:
+                    total_wallet = float(account_data.get('totalWalletBalance', 0))
+                    total_margin = float(account_data.get('totalMarginBalance', 0))
+                    available_balance = float(account_data.get('availableBalance', 0))
+                    total_unrealized_pnl = float(account_data.get('totalUnrealizedProfit', 0))
+                    
+                    ws[f'A{row}'] = "錢包總額："
+                    ws[f'B{row}'] = f"{total_wallet:.2f} USDT"
+                    ws[f'C{row}'] = "保證金餘額："
+                    ws[f'D{row}'] = f"{total_margin:.2f} USDT"
+                    row += 1
+                    
+                    ws[f'A{row}'] = "可用餘額："
+                    ws[f'B{row}'] = f"{available_balance:.2f} USDT"
+                    ws[f'C{row}'] = "未實現損益："
+                    ws[f'D{row}'] = f"{total_unrealized_pnl:.2f} USDT"
+                    row += 1
+                
+                # 持倉資訊
+                if position_data:
+                    active_positions = []
+                    for pos in position_data:
+                        position_amt = float(pos.get('positionAmt', 0))
+                        if position_amt != 0:
+                            symbol = pos.get('symbol')
+                            entry_price = float(pos.get('entryPrice', 0))
+                            unrealized_pnl = float(pos.get('unRealizedProfit', 0))
+                            direction = "多頭" if position_amt > 0 else "空頭"
+                            
+                            active_positions.append({
+                                'symbol': symbol,
+                                'direction': direction,
+                                'size': abs(position_amt),
+                                'entry_price': entry_price,
+                                'unrealized_pnl': unrealized_pnl
+                            })
+                    
+                    if active_positions:
+                        row += 1
+                        ws[f'A{row}'] = "當前持倉"
+                        ws[f'A{row}'].font = header_font
+                        ws.merge_cells(f'A{row}:H{row}')
+                        row += 1
+                        
+                        for pos in active_positions:
+                            ws[f'A{row}'] = f"合約：{pos['symbol']}"
+                            ws[f'B{row}'] = f"方向：{pos['direction']}"
+                            ws[f'C{row}'] = f"數量：{pos['size']:.3f}"
+                            ws[f'D{row}'] = f"均價：{pos['entry_price']:.2f}"
+                            ws[f'E{row}'] = f"未實現損益：{pos['unrealized_pnl']:.2f}"
+                            row += 1
+                
+            except Exception as e:
+                print(f"獲取BTC帳戶資訊失敗: {e}")
+        
+        # 今日交易記錄 (00:00-23:59)
+        row += 2
+        ws[f'A{row}'] = f"今日交易記錄 ({current_date} 00:00-23:59)"
+        ws[f'A{row}'].font = header_font
+        ws[f'A{row}'].fill = header_fill
+        ws.merge_cells(f'A{row}:H{row}')
+        
+        # 讀取今日交易記錄
+        today = datetime.now().strftime('%Y%m%d')
+        trades_file = os.path.join(os.path.dirname(__file__), 'BTCtransdata', f'BTCtrades_{today}.json')
+        today_trades = []
+        
+        if os.path.exists(trades_file):
+            try:
+                with open(trades_file, 'r', encoding='utf-8') as f:
+                    all_trades = json.load(f)
+                
+                # 篩選今日交易 (00:00-23:59)
+                for trade in all_trades:
+                    trade_time = trade.get('timestamp', '')
+                    if current_date in trade_time:
+                        today_trades.append(trade)
+            except:
+                pass
+        
+        row += 1
+        # 表頭
+        headers = ['時間', '合約', '方向', '數量', '成交價', '訂單號', '狀態']
+        for col, header in enumerate(headers, 1):
+            cell = ws.cell(row=row, column=col, value=header)
+            cell.font = header_font
+            cell.fill = PatternFill(start_color="D9E1F2", end_color="D9E1F2", fill_type="solid")
+            cell.alignment = center_alignment
+        
+        # 交易數據
+        for trade in today_trades:
+            row += 1
+            trade_time = trade.get('timestamp', '')[:19]  # 只取日期時間部分
+            symbol = trade.get('symbol', '')
+            side = "做多" if trade.get('side') == 'BUY' else "做空"
+            quantity = trade.get('fill_quantity', trade.get('quantity', 0))
+            price = trade.get('fill_price', 0)
+            order_id = str(trade.get('order_id', ''))
+            status = trade.get('status', 'NEW')
+            
+            ws[f'A{row}'] = trade_time
+            ws[f'B{row}'] = symbol
+            ws[f'C{row}'] = side
+            ws[f'D{row}'] = f"{quantity:.3f}"
+            ws[f'E{row}'] = f"{price:.2f}" if price else "-"
+            ws[f'F{row}'] = order_id
+            ws[f'G{row}'] = status
+        
+        if not today_trades:
+            row += 1
+            ws[f'A{row}'] = "今日無交易記錄"
+            ws.merge_cells(f'A{row}:G{row}')
+            ws[f'A{row}'].alignment = center_alignment
+        
+        # 交易統計
+        row += 3
+        ws[f'A{row}'] = "交易統計"
+        ws[f'A{row}'].font = header_font
+        ws[f'A{row}'].fill = header_fill
+        ws.merge_cells(f'A{row}:H{row}')
+        
+        row += 1
+        total_trades = len(today_trades)
+        buy_trades = len([t for t in today_trades if t.get('side') == 'BUY'])
+        sell_trades = len([t for t in today_trades if t.get('side') == 'SELL'])
+        
+        ws[f'A{row}'] = "總交易次數："
+        ws[f'B{row}'] = f"{total_trades} 筆"
+        ws[f'C{row}'] = "買入次數："
+        ws[f'D{row}'] = f"{buy_trades} 筆"
+        row += 1
+        
+        ws[f'A{row}'] = "賣出次數："
+        ws[f'B{row}'] = f"{sell_trades} 筆"
+        row += 1
+        
+        # 報告生成時間
+        row += 2
+        ws[f'A{row}'] = f"報告生成時間：{report_time}"
+        ws[f'A{row}'].font = Font(size=10, italic=True)
+        
+        # 調整列寬
+        for col in range(1, 9):
+            ws.column_dimensions[get_column_letter(col)].width = 15
+        
+        # 保存到根目錄
+        # 創建BTC交易日報目錄
+        report_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'BTC交易日報')
+        os.makedirs(report_dir, exist_ok=True)
+        
+        filename = f"BTC_{current_date}.xlsx"
+        filepath = os.path.join(report_dir, filename)
+        
+        wb.save(filepath)
+        print(f"BTC交易日報已生成: {filepath}")
+        
+        # 添加BTC系統日誌記錄
+        log_btc_system_message(f"BTC交易日報 {filename} 生成成功！！！", "success")
+        
+        # 發送 Telegram 通知
+        message = f"{filename} BTC交易日報已生成！！！"
+        send_btc_telegram_message(message)
+        
+        return filepath
+        
+    except Exception as e:
+        print(f"生成BTC交易日報失敗: {e}")
+        return None
+
+def generate_btc_monthly_report():
+    """生成BTC交易月報 - 保存到根目錄"""
+    try:
+        import openpyxl
+        from openpyxl.styles import Alignment, PatternFill, Font
+        from openpyxl.utils import get_column_letter
+        import calendar
+        
+        current_date = datetime.now()
+        current_month = current_date.strftime('%Y-%m')
+        report_time = current_date.strftime('%Y-%m-%d %H:%M:%S')
+        
+        # 創建工作簿
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = f"BTC交易月報_{current_month}"
+        
+        # 設置樣式
+        header_font = Font(bold=True, size=14)
+        header_fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
+        center_alignment = Alignment(horizontal="center", vertical="center")
+        
+        # 報告標題
+        ws.merge_cells('A1:J1')
+        ws['A1'] = f"BTC期貨交易月報 - {current_month}"
+        ws['A1'].font = Font(bold=True, size=16)
+        ws['A1'].alignment = center_alignment
+        ws['A1'].fill = PatternFill(start_color="E7E6E6", end_color="E7E6E6", fill_type="solid")
+        
+        # 讀取本月所有交易記錄
+        btc_transdata_dir = os.path.join(os.path.dirname(__file__), 'BTCtransdata')
+        month_trades = []
+        
+        if os.path.exists(btc_transdata_dir):
+            try:
+                # 獲取本月所有交易文件
+                trade_files = glob.glob(os.path.join(btc_transdata_dir, 'BTCtrades_*.json'))
+                
+                for trade_file in trade_files:
+                    try:
+                        with open(trade_file, 'r', encoding='utf-8') as f:
+                            daily_trades = json.load(f)
+                            # 篩選本月的交易
+                            for trade in daily_trades:
+                                trade_time = trade.get('timestamp', '')
+                                if current_month in trade_time:
+                                    month_trades.append(trade)
+                    except Exception as e:
+                        print(f"讀取交易文件失敗 {trade_file}: {e}")
+            except:
+                pass
+        
+        # 月度統計
+        row = 3
+        ws[f'A{row}'] = "月度統計摘要"
+        ws[f'A{row}'].font = header_font
+        ws[f'A{row}'].fill = header_fill
+        ws.merge_cells(f'A{row}:J{row}')
+        
+        row += 1
+        total_trades = len(month_trades)
+        buy_trades = len([t for t in month_trades if t.get('side') == 'BUY'])
+        sell_trades = len([t for t in month_trades if t.get('side') == 'SELL'])
+        
+        # 計算總交易量
+        total_volume = sum(float(t.get('fill_quantity', t.get('quantity', 0))) for t in month_trades)
+        
+        ws[f'A{row}'] = "交易統計："
+        ws[f'B{row}'] = f"總次數: {total_trades}"
+        ws[f'C{row}'] = f"買入: {buy_trades}"
+        ws[f'D{row}'] = f"賣出: {sell_trades}"
+        ws[f'E{row}'] = f"總量: {total_volume:.3f} BTC"
+        row += 1
+        
+        # 當前帳戶狀態
+        if binance_client:
+            try:
+                account_data = binance_client.get_account_info()
+                if account_data:
+                    total_wallet = float(account_data.get('totalWalletBalance', 0))
+                    total_unrealized_pnl = float(account_data.get('totalUnrealizedProfit', 0))
+                    
+                    ws[f'A{row}'] = "帳戶狀態："
+                    ws[f'B{row}'] = f"錢包總額: {total_wallet:.2f} USDT"
+                    ws[f'C{row}'] = f"未實現損益: {total_unrealized_pnl:.2f} USDT"
+                    row += 1
+            except Exception as e:
+                print(f"獲取BTC月報帳戶資訊失敗: {e}")
+        
+        # 每日交易明細
+        row += 2
+        ws[f'A{row}'] = "每日交易明細"
+        ws[f'A{row}'].font = header_font
+        ws[f'A{row}'].fill = header_fill
+        ws.merge_cells(f'A{row}:J{row}')
+        
+        row += 1
+        # 表頭
+        headers = ['日期', '時間', '合約', '方向', '數量', '成交價', '金額(USDT)', '訂單號', '狀態']
+        for col, header in enumerate(headers, 1):
+            cell = ws.cell(row=row, column=col, value=header)
+            cell.font = header_font
+            cell.fill = PatternFill(start_color="D9E1F2", end_color="D9E1F2", fill_type="solid")
+            cell.alignment = center_alignment
+        
+        # 按日期排序交易記錄
+        month_trades.sort(key=lambda x: x.get('timestamp', ''))
+        
+        for trade in month_trades:
+            row += 1
+            timestamp = trade.get('timestamp', '')
+            trade_date = timestamp[:10] if len(timestamp) >= 10 else ''
+            trade_time = timestamp[11:19] if len(timestamp) >= 19 else ''
+            symbol = trade.get('symbol', '')
+            side = "做多" if trade.get('side') == 'BUY' else "做空"
+            quantity = float(trade.get('fill_quantity', trade.get('quantity', 0)))
+            price = float(trade.get('fill_price', 0))
+            amount = quantity * price if price > 0 else 0
+            order_id = str(trade.get('order_id', ''))
+            status = trade.get('status', 'NEW')
+            
+            ws[f'A{row}'] = trade_date
+            ws[f'B{row}'] = trade_time
+            ws[f'C{row}'] = symbol
+            ws[f'D{row}'] = side
+            ws[f'E{row}'] = f"{quantity:.3f}"
+            ws[f'F{row}'] = f"{price:.2f}" if price else "-"
+            ws[f'G{row}'] = f"{amount:.2f}" if amount else "-"
+            ws[f'H{row}'] = order_id
+            ws[f'I{row}'] = status
+        
+        if not month_trades:
+            row += 1
+            ws[f'A{row}'] = "本月無交易記錄"
+            ws.merge_cells(f'A{row}:I{row}')
+            ws[f'A{row}'].alignment = center_alignment
+        
+        # 報告生成時間
+        row += 3
+        ws[f'A{row}'] = f"報告生成時間：{report_time}"
+        ws[f'A{row}'].font = Font(size=10, italic=True)
+        
+        # 調整列寬
+        for col in range(1, 11):
+            ws.column_dimensions[get_column_letter(col)].width = 12
+        
+        # 保存到根目錄
+        # 創建BTC交易月報目錄
+        monthly_report_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'BTC交易月報')
+        os.makedirs(monthly_report_dir, exist_ok=True)
+        
+        # 提取年月
+        year = datetime.now().year
+        month = datetime.now().month
+        filename = f"BTC_{year}-{month:02d}.xlsx"
+        filepath = os.path.join(monthly_report_dir, filename)
+        
+        wb.save(filepath)
+        print(f"BTC交易月報已生成: {filepath}")
+        
+        # 添加BTC系統日誌記錄
+        log_btc_system_message(f"BTC交易月報 {filename} 生成成功！！！", "success")
+        
+        # 發送 Telegram 通知
+        message = f"{filename} BTC交易月報已生成！！！"
+        send_btc_telegram_message(message)
+        
+        return filepath
+        
+    except Exception as e:
+        print(f"生成BTC交易月報失敗: {e}")
+        return None
+
+# ========================== API 路由函數 ==========================
+
+def get_btc_config():
+    """獲取BTC配置"""
+    try:
+        env_data = load_btc_env_data()
+        return jsonify({
+            'success': True,
+            'config': env_data
+        })
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        })
+
+def get_btc_account_info():
+    """獲取BTC帳戶資訊"""
+    try:
+        if not binance_client:
+            return jsonify({
+                'success': False,
+                'error': 'BTC客戶端未初始化'
+            })
+        
+        # 獲取帳戶資訊
+        account_data = binance_client.get_account_info()
+        if not account_data:
+            return jsonify({
+                'success': False,
+                'error': '無法獲取帳戶資訊'
+            })
+        
+        return jsonify({
+            'success': True,
+            'account': account_data
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        })
+
+def get_btc_positions():
+    """獲取BTC持倉資訊"""
+    try:
+        if not binance_client:
+            return jsonify({
+                'success': False,
+                'error': 'BTC客戶端未初始化'
+            })
+        
+        # 獲取持倉資訊
+        positions = binance_client.get_position_info()
+        if positions is None:
+            return jsonify({
+                'success': False,
+                'error': '無法獲取持倉資訊'
+            })
+        
+        # 篩選有效持倉（數量不為0的）
+        valid_positions = []
+        for pos in positions:
+            if float(pos.get('positionAmt', 0)) != 0:
+                valid_positions.append(pos)
+        
+        return jsonify({
+            'success': True,
+            'positions': valid_positions
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        })
+
+# ========================== BTC風險管理功能 ==========================
+
+def calculate_btc_risk_metrics():
+    """計算BTC風險指標"""
+    global binance_client, account_info
+    
+    try:
+        if not binance_client or not account_info:
+            return None
+        
+        # 獲取最新帳戶和持倉信息
+        fresh_account_info = binance_client.get_account_info()
+        positions = binance_client.get_position_info()
+        
+        if not fresh_account_info or not positions:
+            return None
+        
+        # 基本帳戶數據
+        total_wallet_balance = float(fresh_account_info.get('totalWalletBalance', 0))
+        total_margin_balance = float(fresh_account_info.get('totalMarginBalance', 0))
+        total_unrealized_pnl = float(fresh_account_info.get('totalUnrealizedProfit', 0))
+        total_initial_margin = float(fresh_account_info.get('totalInitialMargin', 0))
+        total_maint_margin = float(fresh_account_info.get('totalMaintMargin', 0))
+        available_balance = float(fresh_account_info.get('availableBalance', 0))
+        
+        # 計算風險指標
+        risk_metrics = {
+            'total_wallet_balance': total_wallet_balance,
+            'total_margin_balance': total_margin_balance,
+            'available_balance': available_balance,
+            'total_unrealized_pnl': total_unrealized_pnl,
+            'total_initial_margin': total_initial_margin,
+            'total_maint_margin': total_maint_margin,
+            'margin_ratio': 0,
+            'risk_level': 'SAFE',
+            'leverage_usage': 0,
+            'position_value': 0,
+            'max_drawable': available_balance,
+            'positions': []
+        }
+        
+        # 保證金比率計算
+        if total_maint_margin > 0:
+            risk_metrics['margin_ratio'] = (total_margin_balance / total_maint_margin) * 100
+        
+        # 槓桿使用率計算
+        if total_wallet_balance > 0:
+            risk_metrics['leverage_usage'] = (total_initial_margin / total_wallet_balance) * 100
+        
+        # 處理持倉信息
+        total_position_value = 0
+        active_positions = []
+        
+        for pos in positions:
+            position_amt = float(pos.get('positionAmt', 0))
+            if position_amt != 0:
+                entry_price = float(pos.get('entryPrice', 0))
+                mark_price = float(pos.get('markPrice', 0))
+                unrealized_pnl = float(pos.get('unRealizedProfit', 0))
+                percentage = float(pos.get('percentage', 0))
+                leverage = float(pos.get('leverage', 1))
+                
+                position_value = abs(position_amt) * mark_price
+                total_position_value += position_value
+                
+                position_info = {
+                    'symbol': pos.get('symbol'),
+                    'side': 'LONG' if position_amt > 0 else 'SHORT',
+                    'size': abs(position_amt),
+                    'entry_price': entry_price,
+                    'mark_price': mark_price,
+                    'unrealized_pnl': unrealized_pnl,
+                    'percentage': percentage,
+                    'leverage': leverage,
+                    'position_value': position_value,
+                    'margin_required': position_value / leverage if leverage > 0 else 0
+                }
+                active_positions.append(position_info)
+        
+        risk_metrics['position_value'] = total_position_value
+        risk_metrics['positions'] = active_positions
+        
+        # 風險等級評估
+        margin_ratio = risk_metrics['margin_ratio']
+        leverage_usage = risk_metrics['leverage_usage']
+        
+        if margin_ratio > 0:
+            if margin_ratio < 120:  # 強制平倉風險高
+                risk_metrics['risk_level'] = 'HIGH'
+            elif margin_ratio < 200:  # 中等風險
+                risk_metrics['risk_level'] = 'MEDIUM'
+            else:  # 安全
+                risk_metrics['risk_level'] = 'SAFE'
+        
+        # 槓桿使用率風險
+        if leverage_usage > 80:
+            if risk_metrics['risk_level'] in ['SAFE', 'MEDIUM']:
+                risk_metrics['risk_level'] = 'MEDIUM'
+        elif leverage_usage > 90:
+            risk_metrics['risk_level'] = 'HIGH'
+        
+        return risk_metrics
+        
+    except Exception as e:
+        print(f"計算BTC風險指標失敗: {e}")
+        return None
+
+def check_btc_risk_alerts():
+    """檢查BTC風險警報"""
+    try:
+        risk_metrics = calculate_btc_risk_metrics()
+        if not risk_metrics:
+            return
+        
+        risk_level = risk_metrics['risk_level']
+        margin_ratio = risk_metrics['margin_ratio']
+        leverage_usage = risk_metrics['leverage_usage']
+        total_unrealized_pnl = risk_metrics['total_unrealized_pnl']
+        
+        # 檢查是否需要發送風險警報
+        alerts = []
+        
+        # 強制平倉風險警報
+        if margin_ratio > 0 and margin_ratio < 120:
+            alerts.append({
+                'type': 'LIQUIDATION_RISK',
+                'level': 'CRITICAL',
+                'message': f'⚠️ 強制平倉風險警報\n保證金比率: {margin_ratio:.1f}%\n請及時補充保證金或減少持倉！'
+            })
+        elif margin_ratio > 0 and margin_ratio < 200:
+            alerts.append({
+                'type': 'MARGIN_WARNING',
+                'level': 'WARNING',
+                'message': f'⚠️ 保證金警告\n保證金比率: {margin_ratio:.1f}%\n建議關注風險控制'
+            })
+        
+        # 槓桿使用率警報
+        if leverage_usage > 90:
+            alerts.append({
+                'type': 'LEVERAGE_RISK',
+                'level': 'WARNING',
+                'message': f'⚠️ 槓桿使用率過高\n使用率: {leverage_usage:.1f}%\n建議降低槓桿或增加保證金'
+            })
+        
+        # 大額未實現虧損警報
+        if total_unrealized_pnl < -1000:  # 虧損超過1000 USDT
+            alerts.append({
+                'type': 'LARGE_LOSS',
+                'level': 'WARNING',
+                'message': f'⚠️ 大額未實現虧損\n虧損金額: {total_unrealized_pnl:.2f} USDT\n請考慮風險控制措施'
+            })
+        
+        # 發送警報通知
+        for alert in alerts:
+            send_btc_risk_alert(alert)
+            
+        # 記錄風險檢查日誌
+        print(f"BTC風險檢查完成 - 風險等級: {risk_level}, 保證金比率: {margin_ratio:.1f}%, 槓桿使用率: {leverage_usage:.1f}%")
+        
+    except Exception as e:
+        print(f"BTC風險檢查失敗: {e}")
+
+def send_btc_risk_alert(alert):
+    """發送BTC風險警報通知"""
+    try:
+        current_time = datetime.now().strftime('%Y/%m/%d %H:%M:%S')
+        
+        # 構建警報訊息
+        level_emoji = {
+            'CRITICAL': '🚨',
+            'WARNING': '⚠️',
+            'INFO': 'ℹ️'
+        }
+        
+        emoji = level_emoji.get(alert['level'], '⚠️')
+        
+        message = f"{emoji} BTC風險管理警報 ({current_time})\n\n{alert['message']}\n\n請及時處理以避免損失！"
+        
+        # 發送Telegram通知
+        send_btc_telegram_message(message)
+        
+        # 記錄到風險日誌
+        risk_log = {
+            'timestamp': current_time,
+            'alert_type': alert['type'],
+            'level': alert['level'],
+            'message': alert['message']
+        }
+        
+        print(f"BTC風險警報已發送: {alert['type']} - {alert['level']}")
+        
+    except Exception as e:
+        print(f"發送BTC風險警報失敗: {e}")
+
+
+def get_btc_risk_status():
+    """獲取BTC風險狀態API"""
+    try:
+        risk_metrics = calculate_btc_risk_metrics()
+        if not risk_metrics:
+            return jsonify({
+                'success': False,
+                'message': '無法獲取風險數據'
+            })
+        
+        return jsonify({
+            'success': True,
+            'risk_metrics': risk_metrics
+        })
+        
+    except Exception as e:
+        print(f"獲取BTC風險狀態失敗: {e}")
+        return jsonify({
+            'success': False,
+            'message': f'獲取失敗: {str(e)}'
+        })
+
+def start_btc_risk_monitoring():
+    """啟動BTC風險監控"""
+    print("BTC風險監控已啟動")
+    
+    while True:
+        try:
+            # 每分鐘檢查一次風險
+            check_btc_risk_alerts()
+            time.sleep(60)  # 等待60秒
+            
+        except Exception as e:
+            print(f"BTC風險監控異常: {e}")
+            time.sleep(60)  # 發生錯誤時也等待60秒
+
+# ========================== BTC WebSocket實時數據 ==========================
+import websocket
+import ssl
+
+# WebSocket全局變量
+btc_ws = None
+btc_ws_thread = None
+btc_real_time_data = {}
+btc_ws_connected = False
+
+def start_btc_websocket():
+    """啟動BTC WebSocket連接"""
+    global btc_ws, btc_ws_thread, btc_ws_connected
+    
+    try:
+        if btc_ws_connected:
+            print("BTC WebSocket已連接")
+            return True
+        
+        # 獲取活躍的交易對
+        env_data = load_btc_env_data()
+        trading_pair = env_data.get('TRADING_PAIR', 'BTCUSDT').lower()
+        
+        # 構建WebSocket URL - 幣安期貨WebSocket
+        ws_url = f"wss://fstream.binance.com/ws/{trading_pair}@ticker"
+        
+        print(f"啟動BTC WebSocket連接: {ws_url}")
+        
+        # 創建WebSocket連接
+        btc_ws = websocket.WebSocketApp(
+            ws_url,
+            on_open=on_btc_ws_open,
+            on_message=on_btc_ws_message,
+            on_error=on_btc_ws_error,
+            on_close=on_btc_ws_close
+        )
+        
+        # 在新線程中運行WebSocket
+        btc_ws_thread = threading.Thread(
+            target=btc_ws.run_forever,
+            kwargs={'sslopt': {"cert_reqs": ssl.CERT_NONE}},
+            daemon=True
+        )
+        btc_ws_thread.start()
+        
+        print("BTC WebSocket線程已啟動")
+        return True
+        
+    except Exception as e:
+        print(f"啟動BTC WebSocket失敗: {e}")
+        return False
+
+def on_btc_ws_open(ws):
+    """WebSocket連接開啟"""
+    global btc_ws_connected
+    btc_ws_connected = True
+    print("BTC WebSocket連接成功")
+
+def on_btc_ws_message(ws, message):
+    """處理WebSocket訊息"""
+    global btc_real_time_data
+    
+    try:
+        data = json.loads(message)
+        
+        # 更新實時數據
+        btc_real_time_data.update({
+            'symbol': data.get('s'),
+            'price': float(data.get('c', 0)),  # 最新價格
+            'price_change': float(data.get('P', 0)),  # 24小時價格變化百分比
+            'price_change_abs': float(data.get('p', 0)),  # 24小時價格變化金額
+            'high_price': float(data.get('h', 0)),  # 24小時最高價
+            'low_price': float(data.get('l', 0)),  # 24小時最低價
+            'volume': float(data.get('v', 0)),  # 24小時交易量
+            'quote_volume': float(data.get('q', 0)),  # 24小時交易額
+            'timestamp': datetime.now().isoformat()
+        })
+        
+        # 計算更新後的持倉盈虧（如果有持倉）
+        update_btc_position_pnl()
+        
+    except Exception as e:
+        print(f"處理BTC WebSocket訊息失敗: {e}")
+
+def on_btc_ws_error(ws, error):
+    """WebSocket錯誤"""
+    print(f"BTC WebSocket錯誤: {error}")
+
+def on_btc_ws_close(ws, close_status_code, close_msg):
+    """WebSocket連接關閉"""
+    global btc_ws_connected
+    btc_ws_connected = False
+    print(f"BTC WebSocket連接關閉: {close_status_code} - {close_msg}")
+    
+    # 嘗試重新連接
+    threading.Timer(5.0, reconnect_btc_websocket).start()
+
+def reconnect_btc_websocket():
+    """重新連接WebSocket"""
+    print("嘗試重新連接BTC WebSocket...")
+    start_btc_websocket()
+
+def stop_btc_websocket():
+    """停止BTC WebSocket連接"""
+    global btc_ws, btc_ws_connected
+    
+    try:
+        if btc_ws:
+            btc_ws_connected = False
+            btc_ws.close()
+            print("BTC WebSocket連接已關閉")
+    except Exception as e:
+        print(f"關閉BTC WebSocket失敗: {e}")
+
+def update_btc_position_pnl():
+    """根據實時價格更新持倉盈虧"""
+    global binance_client, btc_real_time_data
+    
+    try:
+        if not binance_client or not btc_real_time_data:
+            return
+        
+        current_price = btc_real_time_data.get('price', 0)
+        if current_price <= 0:
+            return
+        
+        # 獲取持倉信息（簡化版，只獲取基本數據）
+        positions = binance_client.get_position_info()
+        if not positions:
+            return
+        
+        # 更新實時盈虧數據
+        for pos in positions:
+            position_amt = float(pos.get('positionAmt', 0))
+            if position_amt != 0:
+                entry_price = float(pos.get('entryPrice', 0))
+                if entry_price > 0:
+                    # 計算實時盈虧
+                    if position_amt > 0:  # 多頭
+                        pnl = (current_price - entry_price) * position_amt
+                    else:  # 空頭
+                        pnl = (entry_price - current_price) * abs(position_amt)
+                    
+                    # 更新實時數據
+                    btc_real_time_data[f'position_pnl_{pos.get("symbol")}'] = pnl
+        
+    except Exception as e:
+        print(f"更新BTC持倉盈虧失敗: {e}")
+
+def get_btc_realtime_data():
+    """獲取BTC實時數據API"""
+    global btc_real_time_data, btc_ws_connected
+    
+    try:
+        return jsonify({
+            'success': True,
+            'connected': btc_ws_connected,
+            'data': btc_real_time_data,
+            'timestamp': datetime.now().isoformat()
+        })
+        
+    except Exception as e:
+        print(f"獲取BTC實時數據失敗: {e}")
+        return jsonify({
+            'success': False,
+            'message': f'獲取失敗: {str(e)}'
+        })
+

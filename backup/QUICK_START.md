@@ -1,6 +1,41 @@
-# 5 分鐘快速上手 AutoTX
+# 5 分鐘快速上手 Auto91 雙系統交易平台
 
-## 最新更新 (v1.3.11 - 2025-07-12)
+## 最新重大更新 (v1.4.0 - 2025-07-14)
+
+### BTC加密貨幣交易系統重大整合
+- **雙系統架構**：同時支援TX（永豐期貨）和BTC（幣安期貨）自動交易
+- **統一Webhook支援**：兩個系統都支援 `/webhook` 後綴接收TradingView訊號
+- **獨立配置管理**：tx.env 和 btc.env 分別管理各系統設定
+- **三面板界面**：設置、TX交易、BTC交易獨立管理面板
+- **智能訊號路由**：自動識別TradingView訊號並分發到對應系統
+- **完整代碼重構**：移除ngrok遺留代碼，大幅優化系統架構
+
+### 快速設置指南
+
+#### 1. TX系統設置（永豐期貨）
+```
+配置文件：config/tx.env
+支援合約：TXF（大台）、MXF（小台）、TMF（微台）
+交易時間：遵循台指期貨交易時段
+Webhook: https://your-tunnel-url/webhook 或 /webhook/tx
+```
+
+#### 2. BTC系統設置（幣安期貨）
+```
+配置文件：config/btc.env  
+支援合約：BTCUSDT永續合約
+交易時間：24/7全天候交易
+Webhook: https://your-tunnel-url/webhook 或 /webhook/btc
+```
+
+#### 3. TradingView設置
+```
+TX策略webhook: https://your-tunnel-url/webhook
+BTC策略webhook: https://your-tunnel-url/webhook
+系統會自動識別訊號類型並路由到正確系統
+```
+
+## 歷史更新 (v1.3.11 - 2025-07-12)
 - **隧道服務重構**：`cloudflare_tunnel.py` → `tunnel.py`，簡化模組命名結構
 - **域名選項修正**：移除已停用的 workers.dev 免費域名，突出臨時域名推薦
 - **界面顯示優化**：修正狀態文字對齊問題，統一請求數量顯示格式

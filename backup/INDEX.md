@@ -1,6 +1,18 @@
 # 文檔導航索引
 
-**最新版本：v1.3.11** - 隧道服務重構與界面優化 (2025-07-12)
+**最新版本：v1.4.0** - BTC加密貨幣交易系統重大整合 (2025-07-14)
+
+### 2025-07-14 重大更新內容
+- **雙系統架構**：同時支援TX（永豐期貨）和BTC（幣安期貨）自動交易
+- **BTC交易系統**：全新整合幣安期貨API，支援BTCUSDT永續合約交易
+- **統一Webhook支援**：兩個系統都支援 `/webhook` 後綴接收TradingView訊號
+- **獨立配置管理**：tx.env 和 btc.env 分別管理各系統設定
+- **三面板界面**：設置、TX交易、BTC交易獨立管理面板
+- **分離日誌系統**：各系統擁有獨立的前端日誌和請求記錄
+- **智能訊號路由**：自動識別TradingView訊號並分發到對應系統
+- **代碼大幅優化**：移除ngrok遺留代碼，清理重複imports，全面重構
+
+**歷史版本：v1.3.11** - 隧道服務重構與界面優化 (2025-07-12)
 
 ### 2025-07-12 更新內容
 - **隧道服務重構**：`cloudflare_tunnel.py` → `tunnel.py`，簡化模組命名
@@ -37,18 +49,33 @@
 
 - 2025-07-06：轉倉/保證金前端日誌、日誌格式優化、顏色說明、細節修正。
 
-- [README.md](README.md) 系統概況與功能 **[v1.3.11 已更新]**
-- [QUICK_START.md](QUICK_START.md) 5 分鐘快速上手 **[v1.3.11 已更新]**
-- [API_REFERENCE.md](API_REFERENCE.md) API 技術參考 **[v1.3.11 已更新]**
-- [CHANGELOG.md](CHANGELOG.md) 版本變更紀錄 **[v1.3.11 已更新]**
-- [TROUBLESHOOTING.md](TROUBLESHOOTING.md) 故障排除 **[v1.3.11 已更新]**
-- [DEPLOYMENT.md](DEPLOYMENT.md) 生產部署指南 **[v1.3.11 已更新]**
-- [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md) 開發者指南 **[v1.3.11 已更新]**
-- [MAINTENANCE.md](MAINTENANCE.md) 維護運營指南 **[v1.3.11 已更新]**
+- [README.md](README.md) 系統概況與功能 **[v1.4.0 已更新]**
+- [QUICK_START.md](QUICK_START.md) 5 分鐘快速上手 **[v1.4.0 已更新]**
+- [API_REFERENCE.md](API_REFERENCE.md) API 技術參考 **[v1.4.0 已更新]**
+- [CHANGELOG.md](CHANGELOG.md) 版本變更紀錄 **[v1.4.0 已更新]**
+- [TROUBLESHOOTING.md](TROUBLESHOOTING.md) 故障排除 **[v1.4.0 已更新]**
+- [DEPLOYMENT.md](DEPLOYMENT.md) 生產部署指南 **[v1.4.0 已更新]**
+- [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md) 開發者指南 **[v1.4.0 已更新]**
+- [MAINTENANCE.md](MAINTENANCE.md) 維護運營指南 **[v1.4.0 已更新]**
 
 ## 重點功能文檔
 
-### 隧道服務重構與界面優化（v1.3.11新增）
+### BTC加密貨幣交易系統整合（v1.4.0重大更新）
+- **雙系統架構**：同時支援TX（永豐期貨）和BTC（幣安期貨）自動交易
+- **BTC交易系統**：全新整合幣安期貨API，支援BTCUSDT永續合約交易
+- **統一Webhook路由**：自動識別TradingView訊號並分發到對應系統
+- **獨立配置管理**：tx.env 和 btc.env 分別管理各系統設定
+- **三面板界面**：設置、TX交易、BTC交易獨立管理面板
+- **分離日誌系統**：各系統擁有獨立的前端日誌和請求記錄
+- **智能訊號識別**：自動區分TX和BTC訊號格式並路由到正確系統
+- **代碼大幅清理**：移除ngrok遺留代碼，清理重複imports，優化系統架構
+- **30天數據保留**：TX和BTC系統都實施30天數據清理機制
+- **幣安API整合**：完整的HMAC-SHA256簽名驗證和期貨交易功能
+- **Telegram雙Bot支援**：TX和BTC系統各自獨立的通知機制
+- **雙系統排程**：TX（8:45，交易日）和BTC（8:00，24/7）分別排程
+- **統一文件命名**：TX和BTC使用不同前綴管理交易數據
+
+### 隧道服務重構與界面優化（v1.3.11歷史更新）
 - **隧道模組重命名**：`cloudflare_tunnel.py` → `tunnel.py`，簡化模組導入路徑
 - **域名模式更新**：移除已停用的 workers.dev 模式，保留 temporary 和 custom 模式
 - **時間戳處理修復**：新增 `format_timestamp` 函數，處理 Cloudflare Tunnel 日誌時間格式

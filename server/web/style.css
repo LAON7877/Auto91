@@ -67,14 +67,52 @@ input, button {
     transition: border 0.2s;
 }
 
-#trade-panel.panel {
+#trade-panel.panel, #btc-trade-panel.panel {
     max-width: 1100px;
     min-width: 1000px;
 }
 #settings-panel.panel {
-    border-left: 6px solid var(--main-blue);
+    max-width: none;
+    min-width: 1000px;
+    border-radius: 12px;
 }
-#trade-panel.panel {
+
+/* 帳戶容器並排布局 */
+.accounts-container {
+    display: flex;
+    gap: 24px;
+    width: 100%;
+}
+
+.account-panel {
+    flex: 1;
+    background: #f8f9fa;
+    border-radius: 12px;
+    padding: 24px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+}
+
+.account-panel .panel-header {
+    margin-bottom: 20px;
+}
+
+.account-panel h2 {
+    color: #2c3e50;
+    margin: 0 0 16px 0;
+}
+
+.tx-panel {
+    border-left: 4px solid #3498db;
+}
+
+.btc-panel {
+    border-left: 4px solid #2c3e50;
+}
+
+.btc-panel h2 {
+    color: #2c3e50;
+}
+#trade-panel.panel, #btc-trade-panel.panel {
     border-left: 6px solid var(--main-blue);
 }
 .form-group {
@@ -87,14 +125,22 @@ input, button {
     font-weight: 600;
     color: #34495e;
 }
-input[type="text"], input[type="password"], input[type="datetime-local"] {
+input[type="text"], input[type="password"], input[type="datetime-local"], select {
     padding: 10px;
     font-size: 1.05rem;
     border: 1.5px solid #b2bec3;
     border-radius: 5px;
     transition: border 0.2s;
 }
-input[type="text"]:focus, input[type="password"]:focus, input[type="datetime-local"]:focus {
+
+select {
+    padding: 10px;
+    font-size: 1.05rem;
+    min-height: 44px;
+    background-color: #fff;
+    cursor: pointer;
+}
+input[type="text"]:focus, input[type="password"]:focus, input[type="datetime-local"]:focus, select:focus {
     border: 1.5px solid var(--main-blue);
     outline: none;
 }
@@ -298,6 +344,16 @@ button[type="submit"]:hover {
     box-shadow: none !important;
 }
 #login-btn:disabled:hover {
+    background-color: #9E9E9E;
+}
+#login-btn-btc:disabled {
+    background-color: #9E9E9E !important;
+    color: #E0E0E0 !important;
+    cursor: not-allowed !important;
+    border: none !important;
+    box-shadow: none !important;
+}
+#login-btn-btc:disabled:hover {
     background-color: #9E9E9E;
 }
 .file-input-row {
@@ -516,6 +572,7 @@ button[type="submit"]:hover {
     color: #2c3e50;
     font-size: 1.4rem;
     font-weight: 600;
+    line-height: 1.4;
 }
 
 .tunnel-header .status-value {
@@ -616,8 +673,8 @@ button[type="submit"]:hover {
     word-break: break-all;
     flex: 1;
     display: flex;
-    align-items: flex-end;
-    line-height: 1.2;
+    align-items: center;
+    line-height: 1.4;
 }
 
 .ngrok-latency {
@@ -654,37 +711,42 @@ button[type="submit"]:hover {
     line-height: 1;
 }
 
-.status-value.running {
+.status-value.running,
+.status-value.online {
     color: var(--main-green);
     font-weight: 600;
     display: flex;
-    align-items: flex-end;
-    line-height: 1;
+    align-items: center;
+    line-height: 1.4;
 }
 
-.status-value.stopped {
+.status-value.stopped,
+.status-value.offline,
+.status-value.error {
     color: #dc3545;
     font-weight: 600;
     display: flex;
-    align-items: flex-end;
-    line-height: 1;
+    align-items: center;
+    line-height: 1.4;
 }
 
 .status-value.checking {
     color: #6c757d;
     font-weight: 600;
     display: flex;
-    align-items: flex-end;
-    line-height: 1;
+    align-items: center;
+    line-height: 1.4;
 }
 
-/* 直接針對具體ID的樣式，確保狀態文字靠下對齊 */
+/* 直接針對具體ID的樣式，確保狀態文字對齊 */
 #ngrok-status,
 #sinopac-api-status,
-#tunnel-status {
+#tunnel-status,
+#tunnel-status-btc,
+#binance-api-status {
     display: flex !important;
-    align-items: flex-end !important;
-    line-height: 1 !important;
+    align-items: center !important;
+    line-height: 1.4 !important;
     min-height: 24px;
 }
 
@@ -1182,7 +1244,10 @@ button[type="submit"]:hover {
     color: #2c3e50;
     font-size: 1.4rem;
     font-weight: 600;
+    line-height: 1.4;
 }
+
+/* BTC和TX面板統一對齊樣式 */
 
 .right-header .status-value {
     /* margin-left移除，使用gap統一間距 */
@@ -1545,6 +1610,11 @@ button[type="submit"]:hover {
     margin-left: 10px;
 }
 
+/* BTC選用交易對特殊樣式 - 內容靠右 */
+#available-contracts-btc .info-value {
+    text-align: right;
+}
+
 /* 可展開合約樣式 */
 .toggle-icon {
     cursor: pointer;
@@ -1576,7 +1646,7 @@ button[type="submit"]:hover {
         width: 100%;
     }
     
-    #trade-panel.panel {
+    #trade-panel.panel, #btc-trade-panel.panel {
         max-width: 100%;
         min-width: 100%;
     }

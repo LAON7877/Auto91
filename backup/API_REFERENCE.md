@@ -1,6 +1,122 @@
 # API 參考文檔
 
-## 最新更新 (v1.3.11 - 2025-07-12)
+## 最新更新 (v1.4.0 - 2025-07-14)
+
+### BTC加密貨幣交易系統重大整合
+
+#### 新增 BTC 系統 API 端點
+
+**BTC 系統管理**
+```
+POST /api/btc/login          - BTC系統登入
+POST /api/btc/logout         - BTC系統登出
+GET  /api/btc/status         - BTC系統狀態
+POST /api/btc/load_env       - 載入BTC環境配置
+POST /api/btc/save_env       - 保存BTC環境配置
+```
+
+**BTC 交易功能**
+```
+POST /api/btc/webhook        - BTC專用Webhook端點
+GET  /api/btc/account/balance - 獲取BTC帳戶餘額
+GET  /api/btc/position       - 獲取BTC持倉資訊
+GET  /api/btc/trading_pairs  - 獲取可用交易對
+POST /api/btc/manual_order   - BTC手動下單
+```
+
+**BTC 策略和風險**
+```
+GET  /api/btc/strategy/status - 獲取BTC策略狀態
+POST /api/btc/risk/update    - 更新BTC風險參數
+GET  /api/btc/risk/monitor   - 獲取BTC風險監控狀態
+```
+
+#### 統一 Webhook 路由系統
+
+**多路徑支援**
+```
+POST /webhook                - 自動識別系統類型
+POST /webhook/tx             - 明確指定TX系統
+POST /webhook/btc            - 明確指定BTC系統
+POST /api/btc/webhook        - BTC專用端點（向後兼容）
+```
+
+**訊號格式自動識別**
+- TX訊號：包含 `tradeId`, `contract`, `direction` 等字段
+- BTC訊號：包含 `symbol`, `action` (LONG/SHORT/CLOSE) 等字段
+
+#### BTC 系統環境配置
+
+**BTC環境變數 (config/btc.env)**
+```
+BOT_TOKEN_BTC=xxx           # BTC系統Telegram Bot Token
+CHAT_ID_BTC=xxx             # BTC系統Telegram Chat ID
+BINANCE_API_KEY=xxx         # 幣安API金鑰
+BINANCE_SECRET_KEY=xxx      # 幣安Secret金鑰
+BINANCE_USER_ID=xxx         # 幣安用戶ID
+TRADING_PAIR=BTCUSDT        # 交易對
+LEVERAGE=5                  # 槓桿倍數
+CONTRACT_TYPE=PERPETUAL     # 合約類型
+LOGIN_BTC=1                 # BTC系統登入狀態
+```
+
+#### BTC Webhook 訊號格式
+
+**開倉訊號範例**
+```json
+{
+  "action": "LONG",
+  "symbol": "BTCUSDT",
+  "price": 50000.0,
+  "position_size": 2.0
+}
+```
+
+**平倉訊號範例**
+```json
+{
+  "action": "CLOSE",
+  "symbol": "BTCUSDT"
+}
+```
+
+**支援的 action 類型**
+- `LONG`, `BUY` - 開多倉
+- `SHORT`, `SELL` - 開空倉  
+- `CLOSE`, `EXIT` - 平倉
+- `CLOSE_LONG` - 平多倉
+- `CLOSE_SHORT` - 平空倉
+
+#### BTC 系統日誌和數據
+
+**數據存儲結構**
+```
+BTCtransdata/
+├── BTCtrades_20250714.json  # BTC交易記錄
+├── BTCtrades_20250713.json
+└── ...
+```
+
+**BTC 報表生成**
+- BTC日報：每日23:59後30秒生成
+- BTC月報：月末日報生成後30秒生成
+- Excel格式，包含交易統計、帳戶狀態、交易明細
+
+#### 系統架構更新
+
+**雙系統並行**
+- TX系統：處理永豐期貨交易 (TXF, MXF, TMF)
+- BTC系統：處理幣安期貨交易 (BTCUSDT)
+- 完全獨立的配置、日誌、數據存儲
+
+**前端界面擴展**
+- 三面板設計：設置、TX交易、BTC交易
+- 獨立的登入狀態和API連線顯示
+- 分離的系統日誌和請求日誌
+
+---
+
+## 歷史更新 (v1.3.11 - 2025-07-12)
 
 ### 隧道服務重構與界面優化
 - 重命名 `cloudflare_tunnel.py` → `tunnel.py`，簡化模組命名

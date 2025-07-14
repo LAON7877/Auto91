@@ -1,6 +1,121 @@
 # 故障排除指南
 
-## 最新更新 (v1.3.11 - 2025-07-12)
+## 最新重大更新 (v1.4.0 - 2025-07-14)
+
+### BTC加密貨幣交易系統整合問題
+
+#### 問題：BTC模組導入失敗
+**症狀**：
+- 系統啟動時出現 `ModuleNotFoundError: No module named 'btcmain'`
+- BTC面板顯示「BTC模組不可用」
+
+**解決方案**：
+1. **檢查文件**：確認 `btcmain.py` 文件存在於 server 目錄
+2. **檢查語法**：運行 `python -m py_compile btcmain.py` 檢查語法錯誤
+3. **重新啟動**：完全關閉後重新啟動系統
+4. **檢查路徑**：確認 Python 能找到模組文件
+
+#### 問題：BTC API連線失敗
+**症狀**：
+- BTC登入失敗，顯示API錯誤
+- 幣安API返回簽名錯誤
+
+**解決方案**：
+1. **檢查配置**：確認 `config/btc.env` 中API金鑰正確
+2. **檢查權限**：確認幣安API金鑰有期貨交易權限
+3. **檢查時間**：確保系統時間與UTC時間同步
+4. **檢查網路**：確認能正常訪問 fapi.binance.com
+
+#### 問題：Webhook訊號路由錯誤
+**症狀**：
+- TX訊號被錯誤路由到BTC系統
+- BTC訊號被錯誤路由到TX系統
+
+**解決方案**：
+1. **檢查訊號格式**：確認TradingView發送的JSON格式正確
+2. **檢查識別邏輯**：
+   - TX訊號應包含 `tradeId`, `contract` 字段
+   - BTC訊號應包含 `symbol`, `action` 字段
+3. **使用明確路由**：
+   - TX系統：`/webhook/tx`
+   - BTC系統：`/webhook/btc`
+
+#### 問題：雙系統日誌混亂
+**症狀**：
+- TX和BTC日誌顯示在錯誤面板
+- 系統日誌無法正確分離
+
+**解決方案**：
+1. **清除快取**：清除瀏覽器快取並重新整理
+2. **檢查API**：確認 `/api/system_log` 正確處理不同系統日誌
+3. **重新載入**：重新載入前端頁面
+
+#### 問題：BTCtransdata目錄權限錯誤
+**症狀**：
+- BTC交易記錄無法保存
+- 報表生成失敗
+
+**解決方案**：
+1. **檢查目錄**：確認 `BTCtransdata` 目錄存在
+2. **檢查權限**：確保Python進程有寫入權限
+3. **手動創建**：如需要手動創建目錄：`mkdir BTCtransdata`
+
+#### 問題：配置文件載入錯誤
+**症狀**：
+- BTC系統無法載入配置
+- 環境變數讀取失敗
+
+**解決方案**：
+1. **檢查格式**：確認 `config/btc.env` 格式正確（KEY=VALUE）
+2. **檢查編碼**：確保文件使用UTF-8編碼
+3. **檢查必要字段**：確認所有必要配置項目都存在
+
+**必要配置檢查清單**：
+```
+BOT_TOKEN_BTC=xxx
+CHAT_ID_BTC=xxx  
+BINANCE_API_KEY=xxx
+BINANCE_SECRET_KEY=xxx
+TRADING_PAIR=BTCUSDT
+LEVERAGE=5
+LOGIN_BTC=1
+```
+
+#### 問題：代碼清理後功能異常
+**症狀**：
+- 原有功能無法正常運作
+- 出現未定義的變數或函數錯誤
+
+**解決方案**：
+1. **檢查import**：確認所有必要的import都存在
+2. **檢查函數**：確認函數名稱和參數正確
+3. **查看日誌**：檢查後端日誌中的具體錯誤訊息
+4. **重新部署**：如果問題持續，重新部署整個系統
+
+### 通用偵錯步驟
+
+**系統啟動問題**：
+1. 檢查Python語法：`python -m py_compile main.py`
+2. 檢查模組導入：`python -c "import btcmain; print('BTC模組正常')"`
+3. 檢查配置文件：確認所有.env文件格式正確
+4. 檢查目錄權限：確保所有必要目錄存在且可寫
+
+**Webhook測試**：
+1. 使用curl測試TX訊號：
+```bash
+curl -X POST http://localhost:5000/webhook \
+  -H "Content-Type: application/json" \
+  -d '{"tradeId":"test","action":"buy","contract":"TXFR5"}'
+```
+
+2. 使用curl測試BTC訊號：
+```bash
+curl -X POST http://localhost:5000/webhook \
+  -H "Content-Type: application/json" \
+  -d '{"action":"LONG","symbol":"BTCUSDT","price":50000}'
+```
+
+## 歷史更新 (v1.3.11 - 2025-07-12)
 
 ### 隧道服務重構與界面優化問題
 **隧道服務重構相關問題**：修復隧道模組重命名和域名選項更新

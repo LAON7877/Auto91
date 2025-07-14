@@ -24,11 +24,19 @@ from openpyxl.utils import get_column_letter
 
 # 導入 Tunnel
 try:
-    from tunnel import CloudflareTunnel
+    from tunnel import CloudflareTunnel, TunnelManager
     CLOUDFLARE_TUNNEL_AVAILABLE = True
 except ImportError:
     CLOUDFLARE_TUNNEL_AVAILABLE = False
     print("警告: Tunnel 模組未找到")
+
+# 導入 BTC 模組
+try:
+    import btcmain
+    BTC_MODULE_AVAILABLE = True
+except ImportError:
+    BTC_MODULE_AVAILABLE = False
+    print("警告: BTC 模組未找到")
 
 # 永豐API相關
 try:
@@ -151,49 +159,96 @@ app = Flask(__name__, static_folder='web', static_url_path='')
 CORS(app, origins=['*'])  # 允許所有域名的跨域請求
 
 # 請求記錄中間件
+def identify_tunnel_type(host):
+    """根據Host頭部識別隧道類型"""
+    global tunnel_manager
+    
+    if not tunnel_manager:
+        return 'tx'  # 默認為TX
+    
+    # 獲取兩個隧道的URL
+    tx_tunnel = tunnel_manager.get_tunnel('tx')
+    btc_tunnel = tunnel_manager.get_tunnel('btc')
+    
+    # 檢查host是否匹配隧道URL
+    if tx_tunnel and tx_tunnel.tunnel_url:
+        tx_hostname = tx_tunnel.tunnel_url.replace('https://', '').replace('http://', '')
+        if tx_hostname in host:
+            return 'tx'
+    
+    if btc_tunnel and btc_tunnel.tunnel_url:
+        btc_hostname = btc_tunnel.tunnel_url.replace('https://', '').replace('http://', '')
+        if btc_hostname in host:
+            return 'btc'
+    
+    # 如果無法識別，根據請求路徑判斷
+    if hasattr(request, 'path') and '/api/btc' in request.path:
+        return 'btc'
+    
+    return 'tx'  # 默認為TX
+
 @app.before_request
 def log_request():
     """記錄所有進入的請求"""
-    if tunnel_service and hasattr(tunnel_service, 'add_request_log'):
-        try:
-            # 記錄請求開始時間
-            request.start_time = time.time()
-        except Exception as e:
-            print(f"記錄請求開始時間失敗: {e}")
+    try:
+        # 記錄請求開始時間
+        request.start_time = time.time()
+        
+        # 識別請求來源隧道
+        host = request.headers.get('Host', '')
+        request.tunnel_type = identify_tunnel_type(host)
+        
+    except Exception as e:
+        print(f"記錄請求開始時間失敗: {e}")
 
 @app.after_request
 def log_response(response):
     """記錄所有請求的響應"""
-    if tunnel_service and hasattr(tunnel_service, 'add_request_log'):
-        try:
-            # 計算響應時間
-            response_time = None
-            if hasattr(request, 'start_time'):
-                response_time = round((time.time() - request.start_time) * 1000, 2)  # 轉換為毫秒
-            
-            # 記錄請求日誌
+    global tunnel_manager
+    
+    try:
+        # 計算響應時間
+        response_time = None
+        if hasattr(request, 'start_time'):
+            response_time = round((time.time() - request.start_time) * 1000, 2)  # 轉換為毫秒
+        
+        # 獲取隧道類型
+        tunnel_type = getattr(request, 'tunnel_type', 'tx')
+        
+        # 記錄到對應的隧道日誌
+        if tunnel_manager:
+            tunnel = tunnel_manager.get_tunnel(tunnel_type)
+            if tunnel and hasattr(tunnel, 'add_request_log'):
+                tunnel.add_request_log(
+                    method=request.method,
+                    path=request.path,
+                    status_code=response.status_code,
+                    response_time=response_time
+                )
+        
+        # 保持向後兼容，也記錄到主tunnel_service
+        if tunnel_service and hasattr(tunnel_service, 'add_request_log'):
             tunnel_service.add_request_log(
                 method=request.method,
                 path=request.path,
                 status_code=response.status_code,
                 response_time=response_time
             )
-        except Exception as e:
-            print(f"記錄請求日誌失敗: {e}")
+        
+    except Exception as e:
+        print(f"記錄請求響應失敗: {e}")
     
     return response
 
 # Cloudflare Tunnel 相關變數（直接替換 ngrok）
-tunnel_service = None  # Cloudflare Tunnel 服務實例
+tunnel_manager = None  # 隧道管理器實例
+tunnel_service = None  # 保持向後兼容
 tunnel_process = None
 tunnel_status = "stopped"  # stopped, starting, running, error
 tunnel_version = None
 tunnel_update_available = False
 tunnel_auto_restart_timer = None  # 自動重啟定時器
 
-# 為了保持兼容性，保留 ngrok 變數名但使用 Cloudflare Tunnel
-ngrok_process = None
-ngrok_status = "stopped"
 
 # 永豐API相關變數
 sinopac_api = None
@@ -324,7 +379,8 @@ LOGIN=0
 '''
 
 CONFIG_DIR = os.path.join(os.path.dirname(__file__), 'config')
-ENV_PATH = os.path.join(CONFIG_DIR, '.env')
+TX_ENV_PATH = os.path.join(CONFIG_DIR, 'tx.env')
+ENV_PATH = TX_ENV_PATH  # 為了向後兼容，保持TX為默認
 os.makedirs(CONFIG_DIR, exist_ok=True)
 if not os.path.exists(ENV_PATH):
     with open(ENV_PATH, 'w', encoding='utf-8') as f:
@@ -351,41 +407,39 @@ def update_login_status(status):
 
 
 def init_tunnel_service(mode="temporary"):
-    """初始化隧道服務（直接使用 Cloudflare Tunnel）"""
-    global tunnel_service
+    """初始化隧道服務（使用隧道管理器）"""
+    global tunnel_manager, tunnel_service
     
     try:
         if CLOUDFLARE_TUNNEL_AVAILABLE:
-            tunnel_service = CloudflareTunnel(port=CURRENT_PORT, mode=mode)
-            print(f"已初始化 Cloudflare Tunnel 服務 (模式: {mode})")
+            tunnel_manager = TunnelManager()
+            # 為保持向後兼容，創建TX隧道作為默認隧道服務
+            tunnel_service = tunnel_manager.create_tunnel('tx', mode)
+            print(f"已初始化隧道管理器 (模式: {mode})")
         else:
             print("警告: Cloudflare Tunnel 不可用，請檢查模組")
     except Exception as e:
-        print(f"初始化 Cloudflare Tunnel 失敗: {e}")
+        print(f"初始化隧道管理器失敗: {e}")
+        tunnel_manager = None
         tunnel_service = None
 
 def start_tunnel():
     """啟動隧道服務（直接使用 Cloudflare Tunnel）"""
     return start_cloudflare_tunnel()
 
-def start_ngrok():
-    """啟動 ngrok（現在直接使用 Cloudflare Tunnel）"""
-    return start_cloudflare_tunnel()
 
 def start_cloudflare_tunnel():
     """啟動 Cloudflare Tunnel"""
-    global tunnel_service, tunnel_status, ngrok_status
+    global tunnel_service, tunnel_status
     
     try:
         if not tunnel_service:
             print("Cloudflare Tunnel 服務未初始化")
             tunnel_status = "error"
-            ngrok_status = "error"
             return False
         
         # 設定狀態為啟動中
         tunnel_status = "starting"
-        ngrok_status = "starting"
         
         # 根據模式決定啟動方式
         if tunnel_service.mode == 'temporary':
@@ -398,7 +452,6 @@ def start_cloudflare_tunnel():
             if not os.path.exists(token_file):
                 print("未找到 Cloudflare Token，請先設定")
                 tunnel_status = "error"
-                ngrok_status = "error"
                 return False
             
             with open(token_file, 'r') as f:
@@ -407,7 +460,6 @@ def start_cloudflare_tunnel():
             if not token:
                 print("Cloudflare Token 為空，請先設定")
                 tunnel_status = "error"
-                ngrok_status = "error"
                 return False
                 
             # 使用快速設定
@@ -415,11 +467,9 @@ def start_cloudflare_tunnel():
         
         if success:
             tunnel_status = "running"
-            ngrok_status = "running"
             print("Cloudflare Tunnel 啟動成功!")
         else:
             tunnel_status = "error"
-            ngrok_status = "error"
             print("Cloudflare Tunnel 啟動失敗!")
         
         return success
@@ -427,7 +477,6 @@ def start_cloudflare_tunnel():
     except Exception as e:
         print(f"啟動 Cloudflare Tunnel 失敗: {e}")
         tunnel_status = "error"
-        ngrok_status = "error"
         return False
 
 
@@ -435,25 +484,20 @@ def stop_tunnel():
     """停止隧道服務（直接使用 Cloudflare Tunnel）"""
     return stop_cloudflare_tunnel()
 
-def stop_ngrok():
-    """停止 ngrok（現在直接使用 Cloudflare Tunnel）"""
-    return stop_cloudflare_tunnel()
 
 def stop_cloudflare_tunnel():
     """停止 Cloudflare Tunnel"""
-    global tunnel_service, tunnel_status, ngrok_status
+    global tunnel_service, tunnel_status
     
     try:
         if tunnel_service:
             success = tunnel_service.stop_tunnel()
             if success:
                 tunnel_status = "stopped"
-                ngrok_status = "stopped"
             return success
         
         # 即使沒有服務實例，也更新狀態
         tunnel_status = "stopped"
-        ngrok_status = "stopped"
         return True
     except Exception as e:
         print(f"停止 Cloudflare Tunnel 失敗: {e}")
@@ -463,9 +507,6 @@ def get_tunnel_status():
     """獲取隧道狀態（直接使用 Cloudflare Tunnel）"""
     return get_cloudflare_tunnel_status()
 
-def get_ngrok_status():
-    """獲取 ngrok 狀態（現在直接使用 Cloudflare Tunnel）"""
-    return get_cloudflare_tunnel_status_as_ngrok()
 
 def get_cloudflare_tunnel_status():
     """獲取 Cloudflare Tunnel 狀態"""
@@ -617,7 +658,7 @@ def get_status_text(status_code):
     return status_texts.get(status_code, 'Unknown')
 
 
-def get_ngrok_requests():
+def get_tunnel_requests():
     """獲取請求記錄（結合自定義記錄和 Cloudflare Tunnel 記錄）"""
     global custom_request_logs, tunnel_service
     
@@ -915,10 +956,10 @@ def api_start_tunnel():
 @app.route('/api/ngrok/start', methods=['POST'])
 def api_start_ngrok():
     """啟動ngrok API (保持兼容性)"""
-    success = start_ngrok()
+    success = start_cloudflare_tunnel()
     return jsonify({
         'success': success,
-        'status': get_ngrok_status()
+        'status': get_cloudflare_tunnel_status()
     })
 
 @app.route('/api/tunnel/stop', methods=['POST'])
@@ -933,10 +974,10 @@ def api_stop_tunnel():
 @app.route('/api/ngrok/stop', methods=['POST'])
 def api_stop_ngrok():
     """停止ngrok API (保持兼容性)"""
-    stop_ngrok()
+    success = stop_cloudflare_tunnel()
     return jsonify({
-        'success': True,
-        'status': get_ngrok_status()
+        'success': success,
+        'status': get_cloudflare_tunnel_status()
     })
 
 @app.route('/api/tunnel/status', methods=['GET'])
@@ -944,17 +985,495 @@ def api_tunnel_status():
     """獲取隧道狀態 API"""
     return jsonify(get_tunnel_status())
 
+@app.route('/api/tunnel/<tunnel_type>/start', methods=['POST'])
+def api_start_tunnel_by_type(tunnel_type):
+    """啟動指定類型的隧道服務 API"""
+    global tunnel_manager
+    
+    if not tunnel_manager:
+        return jsonify({
+            'success': False,
+            'error': '隧道管理器未初始化'
+        })
+    
+    try:
+        success = tunnel_manager.start_tunnel(tunnel_type)
+        return jsonify({
+            'success': success,
+            'status': tunnel_manager.get_tunnel_status(tunnel_type)
+        })
+    except ValueError as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        })
+
+@app.route('/api/tunnel/<tunnel_type>/stop', methods=['POST'])
+def api_stop_tunnel_by_type(tunnel_type):
+    """停止指定類型的隧道服務 API"""
+    global tunnel_manager
+    
+    if not tunnel_manager:
+        return jsonify({
+            'success': False,
+            'error': '隧道管理器未初始化'
+        })
+    
+    try:
+        success = tunnel_manager.stop_tunnel(tunnel_type)
+        return jsonify({
+            'success': success,
+            'status': tunnel_manager.get_tunnel_status(tunnel_type)
+        })
+    except ValueError as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        })
+
+@app.route('/api/tunnel/<tunnel_type>/requests', methods=['GET'])
+def api_tunnel_requests_by_type(tunnel_type):
+    """獲取指定類型隧道的請求日誌 API"""
+    global tunnel_manager
+    
+    if not tunnel_manager:
+        return jsonify([])
+    
+    try:
+        tunnel = tunnel_manager.get_tunnel(tunnel_type)
+        if tunnel:
+            requests = tunnel.get_request_logs()
+            return jsonify(requests)
+        else:
+            return jsonify([])
+    except Exception as e:
+        print(f"獲取{tunnel_type}隧道請求日誌失敗: {e}")
+        return jsonify([])
+
+@app.route('/api/tunnel/<tunnel_type>/status', methods=['GET'])
+def api_tunnel_status_by_type(tunnel_type):
+    """獲取指定類型隧道狀態 API"""
+    global tunnel_manager
+    
+    if not tunnel_manager:
+        return jsonify({
+            'status': 'stopped',
+            'error': '隧道管理器未初始化'
+        })
+    
+    try:
+        return jsonify(tunnel_manager.get_tunnel_status(tunnel_type))
+    except ValueError as e:
+        return jsonify({
+            'status': 'error',
+            'error': str(e)
+        })
+
+@app.route('/api/tunnels/status', methods=['GET'])
+def api_all_tunnels_status():
+    """獲取所有隧道狀態 API"""
+    global tunnel_manager
+    
+    if not tunnel_manager:
+        return jsonify({
+            'tx': {'status': 'stopped', 'error': '隧道管理器未初始化'},
+            'btc': {'status': 'stopped', 'error': '隧道管理器未初始化'}
+        })
+    
+    return jsonify(tunnel_manager.get_all_status())
+
+# ========================== BTC 相關 API ==========================
+
+
+@app.route('/api/btc/login', methods=['POST'])
+def api_btc_login():
+    """BTC帳戶登入/連接"""
+    if BTC_MODULE_AVAILABLE:
+        return btcmain.btc_login()
+    else:
+        return jsonify({'success': False, 'message': 'BTC模組不可用'})
+
+@app.route('/api/btc/logout', methods=['POST'])
+def api_btc_logout():
+    """BTC帳戶登出"""
+    if BTC_MODULE_AVAILABLE:
+        return btcmain.btc_logout()
+    else:
+        return jsonify({'success': False, 'message': 'BTC模組不可用'})
+
+@app.route('/api/btc/save_env', methods=['POST'])
+def api_btc_save_env():
+    """保存BTC環境變量"""
+    if BTC_MODULE_AVAILABLE:
+        return btcmain.save_btc_env()
+    else:
+        return jsonify({'success': False, 'message': 'BTC模組不可用'})
+
+@app.route('/api/btc/get_config', methods=['GET'])
+def api_btc_get_config():
+    """獲取BTC配置"""
+    if BTC_MODULE_AVAILABLE:
+        return btcmain.get_btc_config()
+    else:
+        return jsonify({'success': False, 'message': 'BTC模組不可用'})
+
+@app.route('/api/btc/account_info', methods=['GET'])
+def api_btc_account_info():
+    """獲取BTC帳戶資訊"""
+    if BTC_MODULE_AVAILABLE:
+        return btcmain.get_btc_account_info()
+    else:
+        return jsonify({'success': False, 'message': 'BTC模組不可用'})
+
+@app.route('/api/btc/positions', methods=['GET'])
+def api_btc_positions():
+    """獲取BTC持倉資訊"""
+    if BTC_MODULE_AVAILABLE:
+        return btcmain.get_btc_positions()
+    else:
+        return jsonify({'success': False, 'message': 'BTC模組不可用'})
+
+@app.route('/api/btc_bot_username', methods=['GET'])
+def api_get_btc_bot_username():
+    if BTC_MODULE_AVAILABLE:
+        return btcmain.get_btc_bot_username()
+    else:
+        return jsonify({'success': False, 'message': 'BTC模組不可用'})
+
+@app.route('/api/load_btc_env', methods=['GET'])
+def api_load_btc_env():
+    if BTC_MODULE_AVAILABLE:
+        return btcmain.load_btc_env()
+    else:
+        return jsonify({'success': False, 'message': 'BTC模組不可用'})
+
+@app.route('/api/btc/webhook', methods=['POST'])
+def api_btc_webhook():
+    if BTC_MODULE_AVAILABLE:
+        return btcmain.btc_webhook()
+    else:
+        return jsonify({'success': False, 'message': 'BTC模組不可用'})
+
+# 為BTC添加 /webhook 路由支持（通過URL參數區分）
+@app.route('/webhook', methods=['POST'], defaults={'system': 'auto'})
+@app.route('/webhook/<system>', methods=['POST'])
+def unified_webhook(system):
+    """統一webhook處理器，支持TX和BTC系統"""
+    
+    # 如果明確指定BTC系統
+    if system == 'btc':
+        if BTC_MODULE_AVAILABLE:
+            return btcmain.btc_webhook()
+        else:
+            return jsonify({'success': False, 'message': 'BTC模組不可用'})
+    
+    # 如果明確指定TX系統
+    elif system == 'tx':
+        return tradingview_webhook_tx()
+    
+    # 自動識別系統類型
+    elif system == 'auto':
+        try:
+            # 嘗試解析請求數據
+            raw = request.data.decode('utf-8')
+            if not raw.strip():
+                return jsonify({'success': False, 'message': '無效的請求數據'}), 400
+                
+            data = json.loads(raw)
+            
+            # 自動識別訊號類型
+            if is_btc_signal(data):
+                print("自動識別為BTC訊號")
+                if BTC_MODULE_AVAILABLE:
+                    return btcmain.btc_webhook()
+                else:
+                    return jsonify({'success': False, 'message': 'BTC模組不可用'})
+            else:
+                print("自動識別為TX訊號")
+                return tradingview_webhook_tx()
+                
+        except json.JSONDecodeError:
+            return jsonify({'success': False, 'message': 'JSON格式錯誤'}), 400
+        except Exception as e:
+            return jsonify({'success': False, 'message': f'處理錯誤: {str(e)}'}), 500
+    
+    else:
+        return jsonify({'success': False, 'message': '不支援的系統類型'}), 400
+
+def is_btc_signal(data):
+    """判斷是否為BTC訊號"""
+    # BTC訊號特徵：包含symbol字段且action為BTC特有的動作
+    btc_actions = ['LONG', 'SHORT', 'CLOSE', 'EXIT', 'CLOSE_LONG', 'CLOSE_SHORT']
+    
+    # 檢查是否有symbol字段（BTC訊號特有）
+    has_symbol = 'symbol' in data
+    
+    # 檢查action是否為BTC特有的動作
+    action = data.get('action', '').upper()
+    is_btc_action = action in btc_actions
+    
+    # 檢查是否沒有TX特有的字段
+    has_contract = 'contract' in data
+    has_trade_id = 'tradeId' in data
+    
+    # BTC訊號：有symbol字段或者是BTC特有動作，且沒有TX特有字段
+    return (has_symbol or is_btc_action) and not (has_contract and has_trade_id)
+
+def tradingview_webhook_tx():
+    """處理TX系統的webhook邏輯"""
+    global has_processed_delivery_exit, active_trades, recent_signals, rollover_processed_signals
+    
+    client_ip = request.remote_addr
+    # 暫時不進行IP限制，但記錄來源IP
+    print(f"客戶端IP: {client_ip}")
+    
+    try:
+        raw = request.data.decode('utf-8')
+        current_time = datetime.now().strftime('%Y/%m/%d %H:%M:%S')
+        print(f"=== [{current_time}] 收到TradingView Webhook請求 (TX) ===")
+        print(f"原始數據: {raw}")
+        
+        # 檢查無效訊號
+        if '{{strategy.order.alert_message}}' in raw or not raw.strip():
+            print("警告: 無效訊號")
+            # 記錄失敗的請求
+            add_custom_request_log('POST', '/webhook', 400, {
+                'reason': '無效訊號',
+                'client_ip': client_ip,
+                'data_preview': raw[:50] if raw else 'empty'
+            })
+            return '無效訊號', 400
+            
+        data = json.loads(raw)
+        signal_id = data.get('tradeId')
+        action = data.get('action', '')
+        contract_code = data.get('contract', '')
+        
+        # 重複訊號檢查（優化功能）
+        if is_duplicate_signal(signal_id, action, contract_code):
+            print(f"忽略重複訊號: {signal_id}")
+            add_custom_request_log('POST', '/webhook', 200, {
+                'reason': '重複訊號已忽略',
+                'signal_id': signal_id,
+                'action': action,
+                'contract': contract_code
+            })
+            return '重複訊號已忽略', 200
+        
+        # 轉倉邏輯檢查
+        if process_rollover_signal(data):
+            print(f"轉倉模式: 處理訊號 {signal_id}")
+            # 在轉倉模式下，強制使用次月合約
+            data['rollover_mode'] = True
+        
+        # 重複訊號檢查
+        with global_lock:
+            print(f"檢查重複訊號: recent_signals={recent_signals}")
+            if signal_id in recent_signals:
+                print(f"警告: 重複訊號 {signal_id}，忽略")
+                # 記錄重複訊號
+                add_custom_request_log('POST', '/webhook', 400, {
+                    'reason': '重複訊號',
+                    'signal_id': signal_id,
+                    'client_ip': client_ip
+                })
+                return '重複訊號', 400
+            recent_signals.add(signal_id)
+            # 10秒後清除記錄
+            threading.Timer(10, lambda: recent_signals.discard(signal_id)).start()
+        
+        data['receive_time'] = datetime.now()
+        process_signal(data)
+        
+        # 添加前端日誌 - 顯示訊號類型
+        signal_type = data.get('type', 'entry')
+        direction = data.get('direction', '未知')
+        
+        if signal_type == 'entry':
+            if direction == '開多':
+                log_message = f"來自 webhook開倉訊號：開多"
+            elif direction == '開空':
+                log_message = f"來自 webhook開倉訊號：開空"
+            else:
+                log_message = f"來自 webhook開倉訊號：{direction}"
+        elif signal_type == 'exit':
+            if direction == '平多':
+                log_message = f"來自 webhook平倉訊號：平多"
+            elif direction == '平空':
+                log_message = f"來自 webhook平倉訊號：平空"
+            else:
+                log_message = f"來自 webhook平倉訊號：{direction}"
+        else:
+            log_message = f"來自 webhook訊號：{signal_type} - {direction}"
+        
+        # 發送到前端系統日誌
+        try:
+            requests.post(
+                f'http://127.0.0.1:{CURRENT_PORT}/api/system_log',
+                json={'message': log_message, 'type': 'info'},
+                timeout=5
+            )
+        except:
+            pass
+        
+        return 'OK', 200
+        
+    except Exception as e:
+        error_msg = str(e)
+        print(f"TX Webhook 處理錯誤：{error_msg}")
+        import traceback
+        traceback.print_exc()
+        
+        # 嘗試使用統一格式，如果無法解析data就用簡單訊息
+        try:
+            send_unified_failure_message(data, f"TX Webhook解析錯誤：{error_msg[:100]}")
+        except:
+            send_telegram_message(f"❌ TX Webhook 錯誤：{error_msg[:100]}")
+        
+        # 記錄錯誤的請求
+        add_custom_request_log('POST', '/webhook', 500, {
+            'reason': error_msg[:100],
+            'client_ip': client_ip
+        })
+        
+        return f'TX錯誤：{error_msg}', 500
+
+
+@app.route('/api/btc/strategy/status', methods=['GET'])
+def api_get_btc_strategy_status():
+    if BTC_MODULE_AVAILABLE:
+        return btcmain.get_btc_strategy_status()
+    else:
+        return jsonify({'success': False, 'message': 'BTC模組不可用'})
+
+@app.route('/api/btc/account/balance', methods=['GET'])
+def api_get_btc_account_balance():
+    """獲取BTC帳戶餘額"""
+    if BTC_MODULE_AVAILABLE:
+        return btcmain.get_btc_account_balance()
+    else:
+        return jsonify({'success': False, 'message': 'BTC模組不可用'})
+
+@app.route('/api/btc/position', methods=['GET'])
+def api_get_btc_position():
+    """獲取BTC持倉信息"""
+    if BTC_MODULE_AVAILABLE:
+        return btcmain.get_btc_position()
+    else:
+        return jsonify({'success': False, 'message': 'BTC模組不可用'})
+
+@app.route('/api/btc/version', methods=['GET'])
+def api_get_btc_version():
+    """獲取幣安版本信息"""
+    if BTC_MODULE_AVAILABLE:
+        return btcmain.get_btc_version()
+    else:
+        return jsonify({'success': False, 'message': 'BTC模組不可用'})
+
+@app.route('/api/btc/trading/status', methods=['GET'])
+def api_get_btc_trading_status():
+    """獲取BTC交易狀態"""
+    if BTC_MODULE_AVAILABLE:
+        return btcmain.get_btc_trading_status()
+    else:
+        return jsonify({'success': False, 'message': 'BTC模組不可用'})
+
+@app.route('/api/btc/risk/status', methods=['GET'])
+def api_get_btc_risk_status():
+    """獲取BTC風險狀態"""
+    if BTC_MODULE_AVAILABLE:
+        return btcmain.get_btc_risk_status()
+    else:
+        return jsonify({'success': False, 'message': 'BTC模組不可用'})
+
+@app.route('/api/btc/realtime', methods=['GET'])
+def api_get_btc_realtime_data():
+    """獲取BTC實時數據"""
+    if BTC_MODULE_AVAILABLE:
+        return btcmain.get_btc_realtime_data()
+    else:
+        return jsonify({'success': False, 'message': 'BTC模組不可用'})
+
+@app.route('/api/btc/websocket/start', methods=['POST'])
+def api_start_btc_websocket():
+    """啟動BTC WebSocket"""
+    if BTC_MODULE_AVAILABLE:
+        try:
+            result = btcmain.start_btc_websocket()
+            return jsonify({
+                'success': result,
+                'message': 'WebSocket啟動成功' if result else 'WebSocket啟動失敗'
+            })
+        except Exception as e:
+            return jsonify({'success': False, 'message': f'啟動失敗: {str(e)}'})
+    else:
+        return jsonify({'success': False, 'message': 'BTC模組不可用'})
+
+@app.route('/api/btc/websocket/stop', methods=['POST'])
+def api_stop_btc_websocket():
+    """停止BTC WebSocket"""
+    if BTC_MODULE_AVAILABLE:
+        try:
+            btcmain.stop_btc_websocket()
+            return jsonify({'success': True, 'message': 'WebSocket已停止'})
+        except Exception as e:
+            return jsonify({'success': False, 'message': f'停止失敗: {str(e)}'})
+    else:
+        return jsonify({'success': False, 'message': 'BTC模組不可用'})
+
+@app.route('/api/btc/statistics', methods=['POST'])
+def api_send_btc_statistics():
+    """發送BTC交易統計"""
+    if BTC_MODULE_AVAILABLE:
+        try:
+            btcmain.send_btc_trading_statistics()
+            return jsonify({'success': True, 'message': 'BTC交易統計已發送'})
+        except Exception as e:
+            return jsonify({'success': False, 'message': f'發送BTC統計失敗: {str(e)}'})
+    else:
+        return jsonify({'success': False, 'message': 'BTC模組不可用'})
+
+@app.route('/api/btc/generate_report', methods=['POST'])
+def api_generate_btc_report():
+    """生成BTC交易日報"""
+    if BTC_MODULE_AVAILABLE:
+        try:
+            result = btcmain.generate_btc_trading_report()
+            if result:
+                return jsonify({'success': True, 'message': 'BTC交易日報生成成功', 'filepath': result})
+            else:
+                return jsonify({'success': False, 'message': 'BTC交易日報生成失敗'})
+        except Exception as e:
+            return jsonify({'success': False, 'message': f'生成BTC日報失敗: {str(e)}'})
+    else:
+        return jsonify({'success': False, 'message': 'BTC模組不可用'})
+
+@app.route('/api/btc/generate_monthly_report', methods=['POST'])
+def api_generate_btc_monthly_report():
+    """生成BTC交易月報"""
+    if BTC_MODULE_AVAILABLE:
+        try:
+            result = btcmain.generate_btc_monthly_report()
+            if result:
+                return jsonify({'success': True, 'message': 'BTC交易月報生成成功', 'filepath': result})
+            else:
+                return jsonify({'success': False, 'message': 'BTC交易月報生成失敗'})
+        except Exception as e:
+            return jsonify({'success': False, 'message': f'生成BTC月報失敗: {str(e)}'})
+    else:
+        return jsonify({'success': False, 'message': 'BTC模組不可用'})
+
 @app.route('/api/ngrok/status', methods=['GET'])
 def api_ngrok_status():
     """獲取ngrok狀態 API (保持兼容性)"""
-    return jsonify(get_ngrok_status())
+    return jsonify(get_cloudflare_tunnel_status())
 
 
 @app.route('/api/ngrok/requests', methods=['GET'])
 def api_ngrok_requests():
     """獲取請求記錄 API（結合自定義記錄和 Cloudflare Tunnel 記錄）"""
     try:
-        requests_data = get_ngrok_requests()
+        requests_data = get_tunnel_requests()
         
         # 添加額外的統計信息
         latency_info = {}
@@ -1157,8 +1676,8 @@ def api_tunnel_setup():
                     init_tunnel_service()
                     success = start_cloudflare_tunnel()
                 else:
-                    # 使用 ngrok 設置
-                    success = start_ngrok()
+                    # 使用 Cloudflare Tunnel 設置
+                    success = start_cloudflare_tunnel()
                 
                 if success:
                     print(f"{service_type} 設置並啟動成功!")
@@ -1815,6 +2334,25 @@ def api_system_log():
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
+@app.route('/api/btc_system_log', methods=['POST'])
+def api_btc_system_log():
+    """接收前端BTC系統日誌"""
+    try:
+        data = request.get_json()
+        message = data.get('message', '')
+        log_type = data.get('type', 'info')
+        
+        # 儲存到 BTC 專用的日誌記錄
+        if BTC_MODULE_AVAILABLE:
+            btcmain.log_btc_system_message(message, log_type)
+        
+        # 後端日誌記錄
+        print(f"前端BTC系統日誌 [{log_type.upper()}]: {message}")
+        
+        return jsonify({'status': 'success'})
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
 @app.route('/api/rollover/status', methods=['GET'])
 def api_rollover_status():
     """獲取轉倉狀態"""
@@ -2142,7 +2680,7 @@ def order_callback(state, deal, order=None):
         if octype_info is None:
             # 如果找不到映射資訊，嘗試從交易記錄JSON文件中讀取（參考TXserver.py）
             today = datetime.now().strftime("%Y%m%d")
-            filename = f"{LOG_DIR}/trades_{today}.json"
+            filename = f"{LOG_DIR}/TXtrades_{today}.json"
             oc_type, direction, order_type, price_type, is_manual = None, None, None, None, True
             
             if os.path.exists(filename):
@@ -3226,8 +3764,8 @@ def get_sinopac_status():
 
 def reset_login_flag():
     update_login_status(0)
-    # 重置LOGIN時停止ngrok
-    stop_ngrok()
+    # 重置LOGIN時停止隧道
+    stop_cloudflare_tunnel()
     # 重置時也登出永豐API（如果已經初始化的話）
     if sinopac_api is not None:
         logout_sinopac()
@@ -3237,7 +3775,7 @@ reset_login_flag()
 
 def cleanup_on_exit():
     """程式退出時的清理工作"""
-    global sinopac_api, sinopac_connected, sinopac_account, sinopac_login_status, auto_logout_timer, ngrok_process, order_octype_map, connection_monitor_timer
+    global sinopac_api, sinopac_connected, sinopac_account, sinopac_login_status, auto_logout_timer, order_octype_map, connection_monitor_timer
     
     try:
         # 停止自動登出定時器
@@ -3247,21 +3785,14 @@ def cleanup_on_exit():
         stop_connection_monitor()
         
         
-        # 關閉 ngrok 進程
-        if ngrok_process:
-            try:
-                print("正在關閉 ngrok 進程...")
-                ngrok_process.terminate()
-                # 等待最多3秒讓進程正常關閉
-                ngrok_process.wait(timeout=3)
-                print("ngrok 進程已關閉")
-            except subprocess.TimeoutExpired:
-                print("ngrok 進程關閉超時，強制終止...")
-                ngrok_process.kill()
-            except Exception as e:
-                print(f"關閉 ngrok 進程時發生錯誤: {e}")
-            finally:
-                ngrok_process = None
+        # 關閉隧道服務
+        try:
+            if tunnel_service:
+                print("正在關閉隧道服務...")
+                tunnel_service.stop_tunnel()
+                print("隧道服務已關閉")
+        except Exception as e:
+            print(f"關閉隧道服務時發生錯誤: {e}")
         
         # 永豐API登出（靜默）
         if sinopac_api and sinopac_connected:
@@ -3301,9 +3832,9 @@ def signal_handler(signum, frame):
 # 註冊程序關閉時的清理函數
 # atexit.register(cleanup_on_exit)  # 移除atexit註冊，避免重複執行
 
-# 註冊信號處理器
-signal.signal(signal.SIGINT, signal_handler)
-signal.signal(signal.SIGTERM, signal_handler)
+# 註冊信號處理器 - 移至main.py主線程處理
+# signal.signal(signal.SIGINT, signal_handler)
+# signal.signal(signal.SIGTERM, signal_handler)
 
 
 
@@ -3350,6 +3881,17 @@ def schedule_next_check():
     # 設定明天早上 8:45 的檢查
     tomorrow = datetime.now() + timedelta(days=1)
     schedule.every().day.at("08:45").do(check_daily_startup_notification)
+    
+    # 設定BTC每日啟動通知 8:00 (24/7無交易日限制)
+    if BTC_MODULE_AVAILABLE:
+        schedule.every().day.at("08:00").do(lambda: btcmain.send_btc_daily_startup_notification())
+        
+        # 設定BTC每日交易統計 23:59 (24/7無交易日限制，統計後會自動延遲生成日報和月報)
+        schedule.every().day.at("23:59").do(lambda: btcmain.check_btc_daily_trading_statistics())
+        
+        print("已設定BTC定時任務：")
+        print("  - 08:00: BTC每日啟動通知")
+        print("  - 23:59: BTC每日交易統計 (統計後延遲30秒生成日報，月末再延遲30秒生成月報)")
     
     # 設定今天下午 14:50 的夜盤檢查
     schedule.every().day.at("14:50").do(check_night_session_notification)
@@ -3544,8 +4086,8 @@ def check_margin_changes():
 def generate_trading_report(trades, account_data, position_data, cover_trades, total_orders, total_cancels, total_trades, total_cover_quantity, contract_pnl):
     """生成交易日報Excel文件"""
     try:
-        # 創建交易日報目錄
-        report_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), '交易日報')
+        # 創建TX交易日報目錄
+        report_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'TX交易日報')
         os.makedirs(report_dir, exist_ok=True)
         
         # 創建工作簿和工作表
@@ -3726,7 +4268,7 @@ def generate_trading_report(trades, account_data, position_data, cover_trades, t
         
         # 保存文件
         today = datetime.now().strftime('%Y-%m-%d')
-        filename = f"{today}.xlsx"
+        filename = f"TX_{today}.xlsx"
         filepath = os.path.join(report_dir, filename)
         wb.save(filepath)
         
@@ -3903,12 +4445,12 @@ def generate_monthly_trading_report():
         year = today.year
         month = today.month
         
-        # 創建交易月報目錄
-        monthly_report_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), '交易月報')
+        # 創建TX交易月報目錄
+        monthly_report_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'TX交易月報')
         os.makedirs(monthly_report_dir, exist_ok=True)
         
-        # 讀取當月所有日報
-        daily_report_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), '交易日報')
+        # 讀取當月所有TX交易日報
+        daily_report_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'TX交易日報')
         monthly_data = {
             'total_orders': 0,
             'total_cancels': 0,
@@ -3935,9 +4477,10 @@ def generate_monthly_trading_report():
         # 檢查是否有當月的日報
         has_reports = False
         for filename in os.listdir(daily_report_dir):
-            if filename.endswith('.xlsx'):
+            if filename.endswith('.xlsx') and filename.startswith('TX_'):
                 try:
-                    file_date = datetime.strptime(filename.split('.')[0], '%Y-%m-%d')
+                    date_part = filename.replace('TX_', '').split('.')[0]
+                    file_date = datetime.strptime(date_part, '%Y-%m-%d')
                     if file_date.year == year and file_date.month == month:
                         has_reports = True
                         filepath = os.path.join(daily_report_dir, filename)
@@ -4059,9 +4602,10 @@ def generate_monthly_trading_report():
         # 收集所有平倉交易
         all_cover_trades = []
         for filename in os.listdir(daily_report_dir):
-            if filename.endswith('.xlsx'):
+            if filename.endswith('.xlsx') and filename.startswith('TX_'):
                 try:
-                    file_date = datetime.strptime(filename.split('.')[0], '%Y-%m-%d')
+                    date_part = filename.replace('TX_', '').split('.')[0]
+                    file_date = datetime.strptime(date_part, '%Y-%m-%d')
                     if file_date.year == year and file_date.month == month:
                         filepath = os.path.join(daily_report_dir, filename)
                         wb_daily = openpyxl.load_workbook(filepath, data_only=True)
@@ -4131,9 +4675,10 @@ def generate_monthly_trading_report():
         latest_position_data = None
         latest_date = None
         for filename in os.listdir(daily_report_dir):
-            if filename.endswith('.xlsx'):
+            if filename.endswith('.xlsx') and filename.startswith('TX_'):
                 try:
-                    file_date = datetime.strptime(filename.split('.')[0], '%Y-%m-%d')
+                    date_part = filename.replace('TX_', '').split('.')[0]
+                    file_date = datetime.strptime(date_part, '%Y-%m-%d')
                     if file_date.year == year and file_date.month == month:
                         if latest_date is None or file_date > latest_date:
                             latest_date = file_date
@@ -4188,7 +4733,7 @@ def generate_monthly_trading_report():
                 ws[f'K{row}'] = position['unrealized_pnl']
         
         # 保存文件
-        filename = f"{year}-{month}月交易報表.xlsx"
+        filename = f"TX_{year}-{month:02d}.xlsx"
         filepath = os.path.join(monthly_report_dir, filename)
         wb.save(filepath)
         
@@ -4228,7 +4773,7 @@ def send_daily_trading_statistics():
         
         # 獲取今天的交易記錄
         today = datetime.now().strftime('%Y%m%d')
-        trades_file = os.path.join('transdata', f'trades_{today}.json')
+        trades_file = os.path.join(TX_LOG_DIR, f'TXtrades_{today}.json')
         
         # 初始化 trades 變數
         trades = []
@@ -4508,134 +5053,6 @@ def is_ip_allowed(ip):
     allowed_ips = {"127.0.0.1", "::1"}  # 本地IP白名單，可根據需要擴充
     return ip in allowed_ips
 
-@app.route('/webhook', methods=['POST'])
-def tradingview_webhook():
-    """接收TradingView的webhook信號（使用TXserver邏輯）"""
-    global has_processed_delivery_exit, active_trades, recent_signals, rollover_processed_signals
-    
-    client_ip = request.remote_addr
-    # 暫時不進行IP限制，但記錄來源IP
-    print(f"客戶端IP: {client_ip}")
-    
-    try:
-        raw = request.data.decode('utf-8')
-        current_time = datetime.now().strftime('%Y/%m/%d %H:%M:%S')
-        print(f"=== [{current_time}] 收到TradingView Webhook請求 ===")
-        print(f"原始數據: {raw}")
-        
-        # 檢查無效訊號
-        if '{{strategy.order.alert_message}}' in raw or not raw.strip():
-            print("警告: 無效訊號")
-            # 記錄失敗的請求
-            add_custom_request_log('POST', '/webhook', 400, {
-                'reason': '無效訊號',
-                'client_ip': client_ip,
-                'data_preview': raw[:50] if raw else 'empty'
-            })
-            return '無效訊號', 400
-            
-        data = json.loads(raw)
-        signal_id = data.get('tradeId')
-        action = data.get('action', '')
-        contract_code = data.get('contract', '')
-        
-        # 重複訊號檢查（優化功能）
-        if is_duplicate_signal(signal_id, action, contract_code):
-            print(f"忽略重複訊號: {signal_id}")
-            add_custom_request_log('POST', '/webhook', 200, {
-                'reason': '重複訊號已忽略',
-                'signal_id': signal_id,
-                'action': action,
-                'contract': contract_code
-            })
-            return '重複訊號已忽略', 200
-        
-        # 轉倉邏輯檢查
-        if process_rollover_signal(data):
-            print(f"轉倉模式: 處理訊號 {signal_id}")
-            # 在轉倉模式下，強制使用次月合約
-            data['rollover_mode'] = True
-        
-        # 重複訊號檢查
-        with global_lock:
-            print(f"檢查重複訊號: recent_signals={recent_signals}")
-            if signal_id in recent_signals:
-                print(f"警告: 重複訊號 {signal_id}，忽略")
-                # 記錄重複訊號
-                add_custom_request_log('POST', '/webhook', 400, {
-                    'reason': '重複訊號',
-                    'signal_id': signal_id,
-                    'client_ip': client_ip
-                })
-                return '重複訊號', 400
-            recent_signals.add(signal_id)
-            # 10秒後清除記錄
-            threading.Timer(10, lambda: recent_signals.discard(signal_id)).start()
-        
-        data['receive_time'] = datetime.now()
-        process_signal(data)
-        
-        # 記錄成功的 webhook 請求（前端顯示已移除）
-        # add_custom_request_log('POST', '/webhook', 200, {
-        #     'signal_id': signal_id,
-        #     'signal_type': data.get('type'),
-        #     'direction': data.get('direction'),
-        #     'client_ip': client_ip,
-        #     'contracts': f"TXF:{data.get('txf', 0)} MXF:{data.get('mxf', 0)} TMF:{data.get('tmf', 0)}"
-        # })
-        
-        # 添加前端日誌 - 顯示訊號類型
-        signal_type = data.get('type', 'entry')
-        direction = data.get('direction', '未知')
-        
-        if signal_type == 'entry':
-            if direction == '開多':
-                log_message = f"來自 webhook開倉訊號：開多"
-            elif direction == '開空':
-                log_message = f"來自 webhook開倉訊號：開空"
-            else:
-                log_message = f"來自 webhook開倉訊號：{direction}"
-        elif signal_type == 'exit':
-            if direction == '平多':
-                log_message = f"來自 webhook平倉訊號：平多"
-            elif direction == '平空':
-                log_message = f"來自 webhook平倉訊號：平空"
-            else:
-                log_message = f"來自 webhook平倉訊號：{direction}"
-        else:
-            log_message = f"來自 webhook訊號：{signal_type} - {direction}"
-        
-        # 發送到前端系統日誌
-        try:
-            requests.post(
-                f'http://127.0.0.1:{CURRENT_PORT}/api/system_log',
-                json={'message': log_message, 'type': 'info'},
-                timeout=5
-            )
-        except:
-            pass
-        
-        return 'OK', 200
-        
-    except Exception as e:
-        error_msg = str(e)
-        print(f"Webhook 處理錯誤：{error_msg}")
-        import traceback
-        traceback.print_exc()
-        
-        # 嘗試使用統一格式，如果無法解析data就用簡單訊息
-        try:
-            send_unified_failure_message(data, f"Webhook解析錯誤：{error_msg[:100]}")
-        except:
-            send_telegram_message(f"❌ Webhook 錯誤：{error_msg[:100]}")
-        
-        # 記錄錯誤的請求
-        add_custom_request_log('POST', '/webhook', 500, {
-            'reason': error_msg[:100],
-            'client_ip': client_ip
-        })
-        
-        return f'錯誤：{error_msg}', 500
 
 def send_unified_failure_message(data, reason, order_id="未知"):
     """發送統一的提交失敗訊息"""
@@ -5636,13 +6053,15 @@ def send_telegram_message(message, log_type="info"):
 # 移除舊的send_order_notification函數，新的回調機制會自動處理
 
 # 新增：交易記錄目錄
-LOG_DIR = "transdata"
+TX_LOG_DIR = "TXtransdata"
+BTC_LOG_DIR = "BTCtransdata"
+LOG_DIR = TX_LOG_DIR  # 為了向後兼容，保持TX為默認
 
 def save_trade(data):
     """保存交易記錄到JSON文件（參考TXserver.py）"""
     try:
         today = datetime.now().strftime("%Y%m%d")
-        filename = f"{LOG_DIR}/trades_{today}.json"
+        filename = f"{LOG_DIR}/TXtrades_{today}.json"
         os.makedirs(LOG_DIR, exist_ok=True)
         try:
             trades = json.load(open(filename, 'r')) if os.path.exists(filename) else []
@@ -5670,10 +6089,10 @@ def cleanup_old_trade_files():
         # 獲取所有交易記錄檔案
         trade_files = []
         for filename in os.listdir(LOG_DIR):
-            if filename.startswith('trades_') and filename.endswith('.json'):
+            if filename.startswith('TXtrades_') and filename.endswith('.json'):
                 try:
                     # 從檔案名提取日期
-                    date_str = filename.replace('trades_', '').replace('.json', '')
+                    date_str = filename.replace('TXtrades_', '').replace('.json', '')
                     file_date = datetime.strptime(date_str, '%Y%m%d')
                     trade_files.append((filename, file_date))
                 except ValueError:
@@ -6215,8 +6634,8 @@ def load_historical_open_trades(close_trades):
     historical_opens = []
     
     # 取得所有歷史交易記錄檔案
-    transdata_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'transdata')
-    trade_files = glob.glob(os.path.join(transdata_dir, 'trades_*.json'))
+    tx_transdata_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), TX_LOG_DIR)
+    trade_files = glob.glob(os.path.join(tx_transdata_dir, 'TXtrades_*.json'))
     
     # 按日期排序（從最新到最舊）
     trade_files.sort(reverse=True)
@@ -6469,12 +6888,15 @@ def analyze_daily_trades_with_pnl(trades):
      
     return cover_trades_with_pnl, total_cover_quantity
 
-if __name__ == '__main__':
+def start_tx_service():
+    """啟動TX交易服務"""
+    global notification_sent_date
+    
     # 在其他初始化代碼之前添加
     notification_sent_date = None
     
     # 顯示啟動設定
-    print(f"=== Auto91 交易系統啟動 ===")
+    print(f"=== TX 期貨交易系統啟動 ===")
     print(f"版本資訊: v1.3.11 (2025-07-12)")
     print(f"端口設定: {CURRENT_PORT}")
     print(f"日誌模式: {'背景執行' if LOG_CONSOLE == 0 else '正常顯示'}")
@@ -6483,11 +6905,12 @@ if __name__ == '__main__':
     # 啟動時清理舊的交易記錄檔案
     cleanup_old_trade_files()
     
+    # 啟動時清理舊的BTC交易記錄檔案
+    if BTC_MODULE_AVAILABLE:
+        btcmain.cleanup_old_btc_trade_files()
+    
     # 加載訂單映射
     load_order_mapping()
-    
-    # 初始化隧道服務
-    init_tunnel_service()
     
     # 初始化保證金記錄
     if update_margin_requirements_from_api():
@@ -6508,7 +6931,6 @@ if __name__ == '__main__':
     # 初始化永豐API
     init_sinopac_api()
     
-    
     # 啟動通知檢查器
     start_notification_checker()
     
@@ -6518,11 +6940,24 @@ if __name__ == '__main__':
     # 啟動連線監控器
     start_connection_monitor()
     
-    # 註冊信號處理器
-    signal.signal(signal.SIGINT, signal_handler)
-    signal.signal(signal.SIGTERM, signal_handler)
+    # 信號處理器只能在主線程中設置，在 start_tx_service 中不設置
+    # signal.signal(signal.SIGINT, signal_handler)
+    # signal.signal(signal.SIGTERM, signal_handler)
     
+    print("TX交易服務初始化完成")
+
+if __name__ == '__main__':
     try:
+        # 設置信號處理器 (只能在主線程中設置)
+        signal.signal(signal.SIGINT, signal_handler)
+        signal.signal(signal.SIGTERM, signal_handler)
+        
+        # 初始化隧道管理器
+        init_tunnel_service()
+        
+        # 啟動完整服務
+        start_tx_service()
+        
         # 啟動Flask伺服器和webview
         threading.Thread(target=start_flask, daemon=True).start()
         time.sleep(2)  # 等待伺服器啟動

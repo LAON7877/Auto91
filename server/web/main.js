@@ -3,15 +3,38 @@ function showPanel(panel) {
         // 未登入，強制回到設置面板
         document.getElementById('settings-panel').style.display = '';
         document.getElementById('trade-panel').style.display = 'none';
+        document.getElementById('btc-trade-panel').style.display = 'none';
         document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
         document.querySelectorAll('.tab-btn')[0].classList.add('active');
-        alert('請先登入！');
+        alert('請先登入TX帳戶！');
         return;
     }
+    
+    if (panel === 'btc-trade' && sessionStorage.getItem('isBtcLoggedIn') !== '1') {
+        // BTC未登入，強制回到設置面板
+        document.getElementById('settings-panel').style.display = '';
+        document.getElementById('trade-panel').style.display = 'none';
+        document.getElementById('btc-trade-panel').style.display = 'none';
+        document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
+        document.querySelectorAll('.tab-btn')[0].classList.add('active');
+        alert('請先登入BTC帳戶！');
+        return;
+    }
+    
+    // 控制面板顯示
     document.getElementById('settings-panel').style.display = (panel === 'settings') ? '' : 'none';
     document.getElementById('trade-panel').style.display = (panel === 'trade') ? '' : 'none';
+    document.getElementById('btc-trade-panel').style.display = (panel === 'btc-trade') ? '' : 'none';
+    
+    // 更新標籤狀態
     document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
-    document.querySelectorAll('.tab-btn')[panel === 'settings' ? 0 : 1].classList.add('active');
+    if (panel === 'settings') {
+        document.querySelectorAll('.tab-btn')[0].classList.add('active');
+    } else if (panel === 'trade') {
+        document.querySelectorAll('.tab-btn')[1].classList.add('active');
+    } else if (panel === 'btc-trade') {
+        document.querySelectorAll('.tab-btn')[2].classList.add('active');
+    }
 }
 
 function copyUsername() {
@@ -226,6 +249,33 @@ function setMaskedFields() {
     }
 }
 
+function setBtcMaskedFields() {
+    const btcApiKey = document.getElementById('binance_api_key');
+    const btcSecretKey = document.getElementById('binance_secret_key');
+    
+    // 只有有值的欄位才應用遮擋
+    const btcApiKeyRaw = btcApiKey.dataset.raw || sessionStorage.getItem('binance_api_key_raw') || '';
+    const btcSecretKeyRaw = btcSecretKey.dataset.raw || sessionStorage.getItem('binance_secret_key_raw') || '';
+    
+    if (btcApiKeyRaw && btcApiKeyRaw.trim()) {
+        sessionStorage.setItem('binance_api_key_raw', btcApiKeyRaw);
+        btcApiKey.value = maskApiKey(btcApiKeyRaw);
+        btcApiKey.readOnly = false;
+    } else {
+        btcApiKey.value = '';
+        btcApiKey.readOnly = false;
+    }
+    
+    if (btcSecretKeyRaw && btcSecretKeyRaw.trim()) {
+        sessionStorage.setItem('binance_secret_key_raw', btcSecretKeyRaw);
+        btcSecretKey.value = maskApiKey(btcSecretKeyRaw);
+        btcSecretKey.readOnly = false;
+    } else {
+        btcSecretKey.value = '';
+        btcSecretKey.readOnly = false;
+    }
+}
+
 // 驗證身分證字號格式
 function validatePersonId(personId) {
     if (!personId) return false;
@@ -310,6 +360,28 @@ function validateInputs() {
     });
 });
 
+// 為BTC API欄位添加事件監聽器
+['binance_api_key', 'binance_secret_key'].forEach(id => {
+    const input = document.getElementById(id);
+    input.addEventListener('focus', function() {
+        // 不顯示原始值，保持遮擋狀態，但允許編輯
+        // 不需要做任何改變，保持當前的遮擋顯示
+    });
+    input.addEventListener('blur', function() {
+        // 失去焦點時恢復遮擋
+        const rawValue = sessionStorage.getItem(`${id}_raw`) || input.dataset.raw;
+        if (rawValue && rawValue.trim()) {
+            input.value = maskApiKey(rawValue);
+        }
+    });
+    input.addEventListener('input', function() {
+        // 更新原始值到sessionStorage
+        sessionStorage.setItem(`${id}_raw`, input.value);
+        // 標記為未儲存狀態
+        input.dataset.saved = 'false';
+    });
+});
+
 async function checkLoginButton() {
     const loginBtn = document.getElementById('login-btn');
     loginBtn.disabled = true; // 預設禁用
@@ -339,6 +411,41 @@ async function checkLoginButton() {
             window.isLoggedIn = false;
             showPanel('settings');
         }
+    }
+}
+
+async function checkBtcLoginButton() {
+    const loginBtn = document.getElementById('login-btn-btc');
+    if (!loginBtn) return; // 如果元素不存在就返回
+    
+    loginBtn.disabled = true; // 預設禁用
+
+    try {
+        // 取得BTC env
+        const res = await fetch('/api/load_btc_env');
+        const env = await res.json();
+
+        // 必填欄位
+        const requiredFields = [
+            'CHAT_ID_BTC', 'BINANCE_API_KEY', 'BINANCE_SECRET_KEY', 'BINANCE_USER_ID', 'TRADING_PAIR', 'LEVERAGE', 'CONTRACT_TYPE'
+        ];
+        let allFilled = true;
+        for (const key of requiredFields) {
+            const value = env[key];
+            if (!value || !value.toString().trim()) {
+                console.log(`BTC欄位 ${key} 為空:`, value);
+                allFilled = false;
+                break;
+            }
+        }
+
+        console.log('BTC所有欄位已填:', allFilled);
+        if (allFilled) {
+            loginBtn.disabled = false;
+        }
+    } catch (error) {
+        console.error('檢查BTC登入按鈕狀態失敗:', error);
+        loginBtn.disabled = true;
     }
 }
 
@@ -435,7 +542,9 @@ function saveEnv(e) {
 window.onload = function() {
     // 重整後自動登出
     sessionStorage.removeItem('isLoggedIn');
+    sessionStorage.removeItem('isBtcLoggedIn');
     window.isLoggedIn = false;
+    window.isBtcLoggedIn = false;
     
     fetch('/api/load_env')
     .then(res => res.json())
@@ -479,11 +588,63 @@ window.onload = function() {
         
         checkLoginButton();
     });
+    
+    // 載入BTC環境變量
+    fetch('/api/load_btc_env')
+    .then(res => res.json())
+    .then(btcEnv => {
+        document.getElementById('chat_id_btc').value = btcEnv.CHAT_ID_BTC || '';
+        document.getElementById('binance_api_key').dataset.raw = btcEnv.BINANCE_API_KEY || '';
+        document.getElementById('binance_secret_key').dataset.raw = btcEnv.BINANCE_SECRET_KEY || '';
+        document.getElementById('binance_user_id').value = btcEnv.BINANCE_USER_ID || '';
+        document.getElementById('trading_pair').value = btcEnv.TRADING_PAIR || 'BTCUSDT';
+        document.getElementById('leverage').value = btcEnv.LEVERAGE || '5';
+        document.getElementById('contract_type').value = btcEnv.CONTRACT_TYPE || 'PERPETUAL';
+        
+        // 同步sessionStorage，確保空值也被正確處理
+        sessionStorage.setItem('binance_api_key_raw', btcEnv.BINANCE_API_KEY || '');
+        sessionStorage.setItem('binance_secret_key_raw', btcEnv.BINANCE_SECRET_KEY || '');
+        
+        ['binance_api_key', 'binance_secret_key'].forEach(id => {
+            const input = document.getElementById(id);
+            input.dataset.saved = 'true';
+        });
+        setBtcMaskedFields();
+        
+        // BTC登入狀態由使用者手動操作，不自動恢復（與TX一致）
+        
+        // 檢查BTC登入按鈕狀態
+        checkBtcLoginButton();
+    })
+    .catch(error => {
+        console.error('載入BTC環境變量失敗:', error);
+    });
+    
+    // 獲取BTC Bot正確的用戶名
+    fetch('/api/btc_bot_username')
+    .then(res => res.json())
+    .then(data => {
+        if (data.username) {
+            document.getElementById('bot-username-btc').value = data.username;
+        }
+    })
+    .catch(error => {
+        console.error('獲取BTC Bot用戶名失敗:', error);
+    });
+    
     loadUploadedFiles();
     ['chat_id', 'cert_start', 'cert_end'].forEach(id => {
         document.getElementById(id).addEventListener('input', checkLoginButton);
     });
+    // 為BTC欄位添加輸入事件監聽器
+    ['chat_id_btc', 'binance_api_key', 'binance_secret_key', 'binance_user_id', 'trading_pair', 'leverage', 'contract_type'].forEach(id => {
+        const element = document.getElementById(id);
+        if (element) {
+            element.addEventListener('input', checkBtcLoginButton);
+        }
+    });
     checkLoginButton();
+    checkBtcLoginButton();
     showPanel('settings');
     
     // 如果已經登入，立即檢查ngrok狀態
@@ -570,7 +731,9 @@ function closeHolidayModal() {
 
 
 // 新的隧道設置函數
-function showTunnelSetupModal() {
+function showTunnelSetupModal(tunnelType = 'tx') {
+    // 保存隧道類型到全局變量
+    window.currentTunnelType = tunnelType;
     // 直接調用管理隧道設置
     showTunnelSetup();
 }
@@ -728,11 +891,28 @@ function login() {
                 startAccountAutoUpdate();
             }, 2000); // 延遲2秒
             
+            // 自動啟動臨時隧道
+            fetch('/api/tunnel/tx/start', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    mode: 'temporary',
+                    token: ''
+                })
+            })
+            .then(res => res.json())
+            .then(tunnelData => {
+                console.log('TX隧道啟動結果:', tunnelData);
+            })
+            .catch(error => {
+                console.error('TX隧道啟動失敗:', error);
+            });
+            
             // 立即顯示檢查中狀態
             updateTunnelStatus({
                 status: 'checking',
                 url: '-',
-                message: '檢查隧道狀態...'
+                message: '啟動隧道中...'
             });
             
             // 已移除延遲時間顯示 - Cloudflare Tunnel 不需要延遲監控
@@ -745,6 +925,7 @@ function login() {
                     updateTunnelStatus(data);
                     if (data.status === 'running') {
                         clearInterval(statusCheckInterval);
+                        // TX隧道啟動完成（不顯示系統日誌）
                         // 已移除延遲時間更新 - Cloudflare Tunnel 不需要延遲監控
                     }
                 })
@@ -802,20 +983,57 @@ function logout() {
 
 // Cloudflare Tunnel 狀態檢查函數（保持原 ngrok 函數名以維持兼容性）
 function refreshNgrokStatus() {
-    fetch('/api/ngrok/status')
+    refreshTunnelStatus('tx');
+}
+
+function refreshTunnelStatus(tunnelType = 'tx') {
+    // 根據隧道類型使用不同的API端點
+    const apiEndpoint = tunnelType === 'tx' ? '/api/ngrok/status' : `/api/tunnel/${tunnelType}/status`;
+    
+    fetch(apiEndpoint)
     .then(res => res.json())
     .then(data => {
-        updateNgrokStatus(data);
+        updateTunnelStatus(data, tunnelType);
     })
     .catch(error => {
-        console.error('獲取隧道狀態失敗：', error);
-        updateNgrokStatus({
-            status: 'error',
+        console.error(`獲取${tunnelType.toUpperCase()}隧道狀態失敗：`, error);
+        updateTunnelStatus({
+            status: 'stopped',
             url: '-',
-            message: '無法連接到隧道服務'
-        });
+            message: '隧道未啟動'
+        }, tunnelType);
     });
+}
+
+// BTC面板切換函數
+function toggleAvailablePairs() {
+    const contractsList = document.getElementById('available-contracts-btc');
+    const toggleIcon = document.getElementById('toggle-available-btc');
     
+    if (contractsList.style.display === 'none') {
+        contractsList.style.display = 'block';
+        toggleIcon.classList.remove('collapsed');
+        toggleIcon.classList.add('expanded');
+    } else {
+        contractsList.style.display = 'none';
+        toggleIcon.classList.remove('expanded');
+        toggleIcon.classList.add('collapsed');
+    }
+}
+
+function toggleAccountInfo() {
+    const accountInfo = document.getElementById('account-info-btc');
+    const toggleIcon = document.getElementById('toggle-account-btc');
+    
+    if (accountInfo.style.display === 'none') {
+        accountInfo.style.display = 'block';
+        toggleIcon.classList.remove('collapsed');
+        toggleIcon.classList.add('expanded');
+    } else {
+        accountInfo.style.display = 'none';
+        toggleIcon.classList.remove('expanded');
+        toggleIcon.classList.add('collapsed');
+    }
 }
 
 
@@ -851,10 +1069,10 @@ function getSinopacVersion() {
 
 
 
-function updateTunnelStatus(statusData) {
-    const statusElement = document.getElementById('tunnel-status');
+function updateTunnelStatus(statusData, tunnelType = 'tx') {
+    const statusElement = document.getElementById(tunnelType === 'btc' ? 'tunnel-status-btc' : 'tunnel-status');
     // 已移除延遲和TTL元素引用 - Cloudflare Tunnel 不需要這些監控
-    const urlsContainer = document.getElementById('tunnel-urls-container');
+    const urlsContainer = document.getElementById(tunnelType === 'btc' ? 'tunnel-urls-container-btc' : 'tunnel-urls-container');
     
     // 檢查狀態是否改變，避免不必要的更新
     const currentStatus = statusElement.getAttribute('data-status');
@@ -869,49 +1087,62 @@ function updateTunnelStatus(statusData) {
     
     // 處理隧道狀態變化
     if (statusData.status === 'checking') {
-        // 清除所有定時器
-        if (window.requestsInterval) {
-            clearInterval(window.requestsInterval);
-            window.requestsInterval = null;
+        // 清除指定類型的定時器
+        const intervalKey = `requestsInterval_${tunnelType}`;
+        if (window[intervalKey]) {
+            clearInterval(window[intervalKey]);
+            window[intervalKey] = null;
         }
     } else if (statusData.status === 'running') {
-        // 更新請求日誌
-        updateRequestsLog();
+        // 更新指定類型的請求日誌
+        updateRequestsLog(tunnelType);
         // 每10秒更新一次請求日誌（與頁面初始化保持一致）
-        if (!window.requestsInterval) {
-            window.requestsInterval = setInterval(updateRequestsLog, 10000);
+        const intervalKey = `requestsInterval_${tunnelType}`;
+        if (!window[intervalKey]) {
+            window[intervalKey] = setInterval(() => updateRequestsLog(tunnelType), 10000);
         }
     } else {
-        // offline 或其他狀態，清除請求日誌更新定時器
-        if (window.requestsInterval) {
-            clearInterval(window.requestsInterval);
-            window.requestsInterval = null;
+        // offline 或其他狀態，清除指定類型的請求日誌更新定時器
+        const intervalKey = `requestsInterval_${tunnelType}`;
+        if (window[intervalKey]) {
+            clearInterval(window[intervalKey]);
+            window[intervalKey] = null;
         }
     }
     
     // 更新URL列表
     urlsContainer.innerHTML = '';
     
-    if (statusData.tunnels && statusData.tunnels.length > 0) {
-        statusData.tunnels.forEach((tunnelInfo, index) => {
-            const urlItem = document.createElement('div');
-            urlItem.className = 'url-item';
-            
-            const urlValue = document.createElement('span');
-            urlValue.className = 'url-value';
-            urlValue.textContent = tunnelInfo.public_url;
-            
-            const copyBtn = document.createElement('button');
-            copyBtn.className = 'url-copy-btn';
-            copyBtn.textContent = '複製';
-            copyBtn.onclick = function() {
-                copyToClipboard(tunnelInfo.public_url, this);
-            };
-            
-            urlItem.appendChild(urlValue);
-            urlItem.appendChild(copyBtn);
-            urlsContainer.appendChild(urlItem);
-        });
+    // 統一處理單個URL格式（優先）
+    let url = null;
+    
+    // 優先檢查單個URL格式（排除'-'值）
+    if ((statusData.public_url && statusData.public_url !== '-') || (statusData.url && statusData.url !== '-')) {
+        url = statusData.public_url || statusData.url;
+    }
+    // 其次檢查tunnels陣列格式（兼容舊格式）
+    else if (statusData.tunnels && statusData.tunnels.length > 0) {
+        url = statusData.tunnels[0].public_url;
+    }
+    
+    if (url) {
+        const urlItem = document.createElement('div');
+        urlItem.className = 'url-item';
+        
+        const urlValue = document.createElement('span');
+        urlValue.className = 'url-value';
+        urlValue.textContent = url;
+        
+        const copyBtn = document.createElement('button');
+        copyBtn.className = 'url-copy-btn';
+        copyBtn.textContent = '複製';
+        copyBtn.onclick = function() {
+            copyToClipboard(url, this);
+        };
+        
+        urlItem.appendChild(urlValue);
+        urlItem.appendChild(copyBtn);
+        urlsContainer.appendChild(urlItem);
     } else {
         const noUrlsMsg = document.createElement('div');
         noUrlsMsg.className = 'url-item';
@@ -921,8 +1152,8 @@ function updateTunnelStatus(statusData) {
         urlsContainer.appendChild(noUrlsMsg);
     }
     
-    // 更新請求日誌
-    updateRequestsLog();
+    // 更新指定類型的請求日誌
+    updateRequestsLog(tunnelType);
 }
 
 // 已移除延遲監控功能 - Cloudflare Tunnel 不需要延遲監控
@@ -958,15 +1189,18 @@ function getStatusText(status) {
         'online': 'online',
         'offline': 'offline'
     };
-    return statusTexts[status] || status;
+    return statusTexts[status] || status.toLowerCase();
 }
 
-function updateRequestsLog() {
-    fetch('/api/ngrok/requests')
+function updateRequestsLog(tunnelType = 'tx') {
+    // 根據隧道類型選擇API端點和DOM元素
+    const apiEndpoint = tunnelType === 'tx' ? '/api/ngrok/requests' : `/api/tunnel/${tunnelType}/requests`;
+    const requestsContainer = document.getElementById(tunnelType === 'btc' ? 'requests-container-btc' : 'requests-container');
+    const requestsCount = document.getElementById(tunnelType === 'btc' ? 'requests-count-btc' : 'requests-count');
+    
+    fetch(apiEndpoint)
     .then(res => res.json())
     .then(data => {
-        const requestsContainer = document.getElementById('requests-container');
-        const requestsCount = document.getElementById('requests-count');
         
         if (data.requests && data.requests.length > 0) {
             // 只顯示 webhook 請求（type=webhook 或 uri=/webhook）
@@ -1073,8 +1307,11 @@ function formatRequestTime(timestamp) {
     }
 }
 
-// 系統日誌相關函數
-let systemLogs = []; // 儲存系統日誌的陣列
+// TX系統日誌相關函數
+let systemLogs = []; // 儲存TX系統日誌的陣列
+
+// BTC系統日誌相關函數
+let btcSystemLogs = []; // 儲存BTC系統日誌的陣列
 
 function addSystemLog(message, type = 'info') {
     const timestamp = new Date().toLocaleTimeString('zh-TW', {
@@ -1090,7 +1327,6 @@ function addSystemLog(message, type = 'info') {
         type: type
     };
     
-    // 添加到日誌陣列
     systemLogs.push(logEntry);
     
     // 限制最多100條記錄
@@ -1103,6 +1339,40 @@ function addSystemLog(message, type = 'info') {
     
     // 發送日誌到後端API（靜默處理，不阻塞前端）
     fetch('/api/system_log', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: message, type: type })
+    }).catch(() => {
+        // 靜默處理錯誤，不影響前端功能
+    });
+}
+
+function addBtcSystemLog(message, type = 'info') {
+    const timestamp = new Date().toLocaleTimeString('zh-TW', {
+        hour12: false,
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit'
+    });
+    
+    const logEntry = {
+        timestamp: timestamp,
+        message: message,
+        type: type
+    };
+    
+    btcSystemLogs.push(logEntry);
+    
+    // 限制最多100條記錄
+    if (btcSystemLogs.length > 100) {
+        btcSystemLogs = btcSystemLogs.slice(-100);
+    }
+    
+    // 更新顯示
+    updateBtcSystemLogsDisplay();
+    
+    // 發送日誌到後端API（靜默處理，不阻塞前端）
+    fetch('/api/btc_system_log', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message: message, type: type })
@@ -1217,8 +1487,17 @@ function updateSystemLogsDisplay() {
     if (!logsContainer) return;
     
     if (systemLogs.length > 0) {
+        // 按照完整時間戳排序（年月日時分秒）- 最新的在下方
+        const sortedLogs = [...systemLogs].sort((a, b) => {
+            // 生成完整時間戳用於排序
+            const today = new Date().toISOString().substring(0, 10); // YYYY-MM-DD
+            const timeA = `${today} ${a.timestamp}`;
+            const timeB = `${today} ${b.timestamp}`;
+            return new Date(timeA) - new Date(timeB);
+        });
+        
         logsContainer.innerHTML = '';
-        systemLogs.forEach((log, index) => {
+        sortedLogs.forEach((log, index) => {
             const logItem = document.createElement('div');
             logItem.className = 'log-item';
             
@@ -1255,6 +1534,71 @@ function updateSystemLogsDisplay() {
         // 自動捲動到最底部顯示最新的記錄
         const systemLogsContainer = logsContainer.parentElement;
         systemLogsContainer.scrollTop = systemLogsContainer.scrollHeight;
+    } else {
+        logsContainer.innerHTML = '';
+        const noLogsMsg = document.createElement('div');
+        noLogsMsg.className = 'log-item';
+        noLogsMsg.style.justifyContent = 'center';
+        noLogsMsg.style.color = '#666';
+        noLogsMsg.style.textAlign = 'center';
+        noLogsMsg.style.width = '100%';
+        noLogsMsg.textContent = '無系統日誌';
+        logsContainer.appendChild(noLogsMsg);
+    }
+}
+
+function updateBtcSystemLogsDisplay() {
+    const logsContainer = document.getElementById('system-logs-content-btc');
+    if (!logsContainer) return;
+    
+    if (btcSystemLogs.length > 0) {
+        // 按照完整時間戳排序（年月日時分秒）- 最新的在下方
+        const sortedLogs = [...btcSystemLogs].sort((a, b) => {
+            // 生成完整時間戳用於排序
+            const today = new Date().toISOString().substring(0, 10); // YYYY-MM-DD
+            const timeA = `${today} ${a.timestamp}`;
+            const timeB = `${today} ${b.timestamp}`;
+            return new Date(timeA) - new Date(timeB);
+        });
+        
+        logsContainer.innerHTML = '';
+        sortedLogs.forEach((log, index) => {
+            const logItem = document.createElement('div');
+            logItem.className = 'log-item';
+            
+            // 根據日誌類型和內容設置顏色
+            let typeClass = '';
+            
+            // 特殊處理API連線異常訊息，顯示為橘色
+            if (log.message && log.message.includes('API連線異常')) {
+                typeClass = 'warning';
+            } else {
+                switch(log.type) {
+                    case 'error':
+                        typeClass = 'error';
+                        break;
+                    case 'warning':
+                        typeClass = 'warning';
+                        break;
+                    case 'success':
+                        typeClass = 'success';
+                        break;
+                    default:
+                        typeClass = 'info';
+                }
+            }
+            
+            logItem.innerHTML = `
+                <span class="log-timestamp">${log.timestamp}</span>
+                <span class="log-message ${typeClass}">${log.message}</span>
+            `;
+            
+            logsContainer.appendChild(logItem);
+        });
+        
+        // 自動捲動到最底部顯示最新的記錄
+        const btcSystemLogsContainer = logsContainer.parentElement;
+        btcSystemLogsContainer.scrollTop = btcSystemLogsContainer.scrollHeight;
     } else {
         logsContainer.innerHTML = '';
         const noLogsMsg = document.createElement('div');
@@ -1378,7 +1722,86 @@ async function updateSinopacApiStatus() {
     }
 }
 
-// 更新連線時長
+// 更新幣安API狀態
+async function updateBinanceApiStatus() {
+    try {
+        console.log('開始檢查BTC API狀態...');
+        const response = await fetch('/api/btc/trading/status');
+        const data = await response.json();
+        console.log('BTC API狀態回應:', data);
+        
+        const statusElement = document.getElementById('binance-api-status');
+        const accountElement = document.getElementById('binance-account-id');
+        const versionElement = document.getElementById('binance-version');
+        
+        if (statusElement && accountElement) {
+            // 更新連線狀態
+            if (data.success && data.status === 'connected') {
+                statusElement.textContent = 'API已連線';
+                statusElement.className = 'status-value running';  // 綠色
+                console.log('BTC API已連線');
+                
+                // 從btc.env獲取幣安用戶ID
+                fetch('/api/load_btc_env')
+                .then(res => res.json())
+                .then(btcEnv => {
+                    const binanceUserId = btcEnv.BINANCE_USER_ID;
+                    if (binanceUserId && binanceUserId.trim()) {
+                        accountElement.textContent = binanceUserId;
+                    } else {
+                        accountElement.textContent = '無幣安帳戶';
+                    }
+                })
+                .catch(() => {
+                    accountElement.textContent = '無幣安帳戶';
+                });
+            } else if (data.status === 'disconnected' || data.status === 'no_account_info') {
+                statusElement.textContent = 'API未連線';
+                statusElement.className = 'status-value stopped';  // 紅色
+                accountElement.textContent = '無幣安帳戶';
+                console.log('BTC API未連線或無帳戶信息:', data.message);
+            } else {
+                statusElement.textContent = 'API連線中';
+                statusElement.className = 'status-value checking';  // 灰色
+                accountElement.textContent = '檢查中...';
+                console.log('BTC API連線中:', data.message);
+            }
+        }
+        
+        // 更新版本信息
+        if (versionElement) {
+            if (data.success && data.status === 'connected') {
+                const versionResponse = await fetch('/api/btc/version');
+                const versionData = await versionResponse.json();
+                if (versionData.success) {
+                    versionElement.textContent = versionData.version;
+                } else {
+                    versionElement.textContent = '-';
+                }
+            } else {
+                versionElement.textContent = '-';
+            }
+        }
+        
+    } catch (error) {
+        // 發生錯誤時顯示未連線
+        const statusElement = document.getElementById('binance-api-status');
+        const accountElement = document.getElementById('binance-account-id');
+        const versionElement = document.getElementById('binance-version');
+        
+        if (statusElement && accountElement) {
+            statusElement.textContent = 'API未連線';
+            statusElement.className = 'status-value stopped';
+            accountElement.textContent = '無幣安帳戶';
+        }
+        
+        if (versionElement) {
+            versionElement.textContent = '-';
+        }
+    }
+}
+
+// 更新連線時長 - TX
 async function updateConnectionDuration() {
     try {
         const response = await fetch('/api/connection/duration');
@@ -1397,8 +1820,14 @@ async function updateConnectionDuration() {
                     return;
                 }
                 
-                // 格式化顯示
-                let durationText = `${durationHours.toFixed(1)}H`;
+                // 格式化顯示 - 與BTC保持一致的格式
+                let durationText;
+                if (durationHours < 1) {
+                    const durationMinutes = Math.floor(durationHours * 60);
+                    durationText = `${durationMinutes}M`;
+                } else {
+                    durationText = `${durationHours.toFixed(1)}H`;
+                }
                 
                 // 如果剩餘時間少於1小時，顯示警告顏色
                 if (remainingHours < 1) {
@@ -1422,6 +1851,37 @@ async function updateConnectionDuration() {
             durationElement.style.color = '#6c757d'; // 正常灰色
         }
         console.error('獲取連線時長失敗:', error);
+    }
+}
+
+// 更新BTC連線時長 - 基於登入時間計算
+function updateBtcConnectionDuration() {
+    const btcDurationElement = document.getElementById('connection-duration-btc');
+    if (!btcDurationElement) return;
+    
+    const btcLoginTime = sessionStorage.getItem('btcLoginTime');
+    const isBtcLoggedIn = sessionStorage.getItem('isBtcLoggedIn');
+    
+    if (isBtcLoggedIn === '1' && btcLoginTime) {
+        const loginTime = new Date(btcLoginTime);
+        const currentTime = new Date();
+        const durationMs = currentTime - loginTime;
+        const durationHours = durationMs / (1000 * 60 * 60);
+        
+        // 格式化顯示
+        let durationText;
+        if (durationHours < 1) {
+            const durationMinutes = Math.floor(durationMs / (1000 * 60));
+            durationText = `${durationMinutes}M`;
+        } else {
+            durationText = `${durationHours.toFixed(1)}H`;
+        }
+        
+        btcDurationElement.textContent = durationText;
+        btcDurationElement.style.color = '#6c757d'; // 正常灰色
+    } else {
+        btcDurationElement.textContent = '-';
+        btcDurationElement.style.color = '#6c757d'; // 正常灰色
     }
 }
 
@@ -1558,34 +2018,47 @@ function checkScheduledUpdate() {
     }
 }
 
-// 更新本地時間顯示
+// 更新本地時間顯示 - TX和BTC共用同一個時間源
 function updateCurrentTime() {
     const datetimeElement = document.getElementById('current-datetime');
+    const btcDatetimeElement = document.getElementById('current-datetime-btc');
     const weekdayElement = document.getElementById('weekday-status');
+    const btcWeekdayElement = document.getElementById('weekday-status-btc');
     
+    // 生成時間字符串 - 只計算一次
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = String(now.getMonth() + 1).padStart(2, '0');
+    const day = String(now.getDate()).padStart(2, '0');
+    const hour = String(now.getHours()).padStart(2, '0');
+    const minute = String(now.getMinutes()).padStart(2, '0');
+    const second = String(now.getSeconds()).padStart(2, '0');
+    const timeString = `${year}/${month}/${day} ${hour}:${minute}:${second}`;
+    
+    // 星期幾字符串 - 只計算一次
+    const weekdays = ['星期日', '星期一', '星期二', '星期三', '星期四', '星期五', '星期六'];
+    const weekday = weekdays[now.getDay()];
+    
+    // 更新TX時間
     if (datetimeElement) {
-        const now = new Date();
-        const year = now.getFullYear();
-        const month = String(now.getMonth() + 1).padStart(2, '0');
-        const day = String(now.getDate()).padStart(2, '0');
-        const hour = String(now.getHours()).padStart(2, '0');
-        const minute = String(now.getMinutes()).padStart(2, '0');
-        const second = String(now.getSeconds()).padStart(2, '0');
-        
-        // 更新時間
-        datetimeElement.textContent = `${year}/${month}/${day} ${hour}:${minute}:${second}`;
-        
-        // 更新星期幾
-        if (weekdayElement) {
-            const weekdays = ['星期日', '星期一', '星期二', '星期三', '星期四', '星期五', '星期六'];
-            const weekday = weekdays[now.getDay()];
-            weekdayElement.textContent = weekday;
-            weekdayElement.className = 'ngrok-latency';
-        }
-        
-        console.log('現在時間:', datetimeElement.textContent);
-    } else {
-        console.log('找不到current-datetime元素');
+        datetimeElement.textContent = timeString;
+    }
+    
+    // 更新BTC時間 - 使用相同的時間源
+    if (btcDatetimeElement) {
+        btcDatetimeElement.textContent = timeString;
+    }
+    
+    // 更新TX星期幾
+    if (weekdayElement) {
+        weekdayElement.textContent = weekday;
+        weekdayElement.className = 'ngrok-latency';
+    }
+    
+    // 更新BTC星期幾
+    if (btcWeekdayElement) {
+        btcWeekdayElement.textContent = weekday;
+        btcWeekdayElement.className = 'ngrok-latency';
     }
 }
 
@@ -1697,6 +2170,7 @@ document.addEventListener('DOMContentLoaded', () => {
     
     // 定期檢查登入按鈕狀態
     setInterval(checkLoginButton, 1000);
+    setInterval(checkBtcLoginButton, 1000);
     
     // 載入已上傳的檔案狀態
     loadUploadedFiles();
@@ -1704,11 +2178,22 @@ document.addEventListener('DOMContentLoaded', () => {
     // 初始化token管理狀態
     initializeTokenManagement();
     
-    // 開始定期更新 ngrok 狀態和請求日誌
-    refreshNgrokStatus();
-    setInterval(refreshNgrokStatus, 30000); // 改為每30秒更新一次
-    updateRequestsLog();
-    setInterval(updateRequestsLog, 10000); // 改為每10秒更新一次
+    // 開始定期更新隧道狀態和請求日誌
+    // TX隧道狀態檢查
+    refreshTunnelStatus('tx');
+    setInterval(() => refreshTunnelStatus('tx'), 30000);
+    
+    // BTC隧道狀態檢查
+    refreshTunnelStatus('btc');
+    setInterval(() => refreshTunnelStatus('btc'), 30000);
+    
+    // 請求日誌更新 - 為TX和BTC分別更新
+    updateRequestsLog('tx');
+    updateRequestsLog('btc');
+    setInterval(() => {
+        updateRequestsLog('tx');
+        updateRequestsLog('btc');
+    }, 10000);
     // 已移除延遲和TTL監控的初始化 - Cloudflare Tunnel 不需要這些功能
     
     // 初始化系統資訊
@@ -1717,13 +2202,41 @@ document.addEventListener('DOMContentLoaded', () => {
     
     // 初始化永豐API狀態和期貨合約資訊
     updateSinopacApiStatus();
+    updateBinanceApiStatus();
     updateFuturesContracts(); // 頁面載入時更新期貨合約資訊
     getSinopacVersion(); // 頁面載入時獲取shioaji版本
     updateCurrentTime(); // 頁面載入時立即顯示本地時間
     updateTradingStatus(); // 頁面載入時更新交易狀態
     setInterval(updateSinopacApiStatus, 5000); // 每5秒更新一次永豐API狀態
+    setInterval(updateBinanceApiStatus, 300000); // 每5分鐘更新一次幣安API狀態
+    
+    // BTC帳戶資訊和持倉狀態定期更新 - 與TX相同的5分鐘間隔
+    setInterval(() => {
+        if (sessionStorage.getItem('isBtcLoggedIn') === '1') {
+            refreshBtcAccountInfo();
+            refreshBtcPositionInfo();
+        }
+    }, 300000); // 每5分鐘更新一次
     setInterval(updateCurrentTime, 1000); // 每秒更新一次本地時間
     setInterval(updateTradingStatus, 30000); // 每30秒更新一次交易狀態
+    
+    // BTC連線時長更新
+    updateBtcConnectionDuration(); // 立即更新一次
+    setInterval(updateBtcConnectionDuration, 60000); // 每分鐘更新一次
+    
+    // BTC實時數據更新
+    setInterval(() => {
+        if (sessionStorage.getItem('isBtcLoggedIn') === '1') {
+            updateBtcRealtimeData();
+        }
+    }, 5000); // 每5秒更新一次實時數據
+    
+    // BTC風險監控更新
+    setInterval(() => {
+        if (sessionStorage.getItem('isBtcLoggedIn') === '1') {
+            updateBtcRiskStatus();
+        }
+    }, 30000); // 每30秒檢查一次風險狀態
     
     
     // 設置定時更新（每分鐘檢查一次是否需要定時更新）
@@ -1737,6 +2250,7 @@ document.addEventListener('DOMContentLoaded', () => {
     
     // 初始化系統日誌
     updateSystemLogsDisplay();
+    updateBtcSystemLogsDisplay();
     
     // 啟動系統日誌同步（從後端拉取）
     updateSystemLogsFromBackend();
@@ -1896,22 +2410,8 @@ function updateAccountStatus() {
                     element.className = 'account-value';
                 }
                 
-                // 如果當前處於隱藏狀態，保存真實值但顯示隱藏符號
-                if (accountAmountHidden && ['account-equity', 'account-equity-amount', 'account-today-balance', 'account-yesterday-balance', 'account-available-margin', 'account-initial-margin', 'account-maintenance-margin', 'account-risk-indicator', 'account-fee', 'account-tax', 'account-settle-profit'].includes(id)) {
-                    // 檢查是否有實際數值（不是空值）
-                    if (displayValue && displayValue !== '-') {
-                        element.dataset.originalValue = displayValue;
-                        element.dataset.originalClass = element.className;
-                        element.className = 'account-value'; // 隱藏時只保留基本樣式
-                        element.textContent = '●●●●●';
-                    } else {
-                        element.textContent = displayValue;
-                        element.dataset.originalValue = displayValue;
-                    }
-                } else {
-                    element.textContent = displayValue;
-                    element.dataset.originalValue = displayValue; // 同時保存原始值
-                }
+                // 直接更新數值，隱藏效果由CSS blur處理
+                element.textContent = displayValue;
             };
             
             updateField('account-equity', accountData['權益總值']);
@@ -1925,6 +2425,11 @@ function updateAccountStatus() {
             updateField('account-fee', accountData['手續費']);
             updateField('account-tax', accountData['期交稅']);
             
+            // 處理未實現盈虧
+            if (accountData['未實現盈虧'] !== undefined) {
+                updateField('account-unrealized-pnl', accountData['未實現盈虧']);
+            }
+            
             // 本日平倉損益 - 根據數值設置顏色，可隱藏
             const profitElement = document.getElementById('account-settle-profit');
             const profitValue = parseFloat(accountData['本日平倉損益']);
@@ -1933,19 +2438,14 @@ function updateAccountStatus() {
             profitElement.className = 'account-value';
             profitElement.dataset.originalValue = profitDisplay;
             
-            if (accountAmountHidden && profitDisplay !== '-') {
-                profitElement.dataset.originalClass = profitElement.className;
-                profitElement.className = 'account-value'; // 隱藏時只保留基本樣式
-                profitElement.textContent = '●●●●●';
+            // 直接更新數值，隱藏效果由CSS blur處理
+            profitElement.textContent = profitDisplay;
+            if (profitValue > 0) {
+                profitElement.classList.add('positive');
+            } else if (profitValue < 0) {
+                profitElement.classList.add('negative');
             } else {
-                profitElement.textContent = profitDisplay;
-                if (profitValue > 0) {
-                    profitElement.classList.add('positive');
-                } else if (profitValue < 0) {
-                    profitElement.classList.add('negative');
-                } else {
-                    profitElement.classList.add('neutral');
-                }
+                profitElement.classList.add('neutral');
             }
             
             // 更新固定顯示項目
@@ -1959,7 +2459,7 @@ function updateAccountStatus() {
                 'account-equity', 'account-equity-amount', 'account-today-balance',
                 'account-yesterday-balance', 'account-available-margin', 'account-initial-margin',
                 'account-maintenance-margin', 'account-risk-indicator', 'account-fee',
-                'account-tax', 'account-settle-profit'
+                'account-tax', 'account-settle-profit', 'account-unrealized-pnl'
             ];
             
             elements.forEach(id => {
@@ -2056,37 +2556,22 @@ function updatePositionStatus() {
                 const quantityElement = document.getElementById(`position-${contractName}-quantity`);
                 const quantityValue = contractData['數量'];
                 quantityElement.dataset.originalValue = quantityValue;
-                if (positionAmountHidden && quantityValue !== '-') {
-                    quantityElement.dataset.originalClass = quantityElement.className;
-                    quantityElement.className = 'position-table-value';
-                    quantityElement.textContent = '●●●●●';
-                } else {
-                    quantityElement.textContent = quantityValue;
-                }
+                // 直接更新數值，隱藏效果由CSS blur處理
+                quantityElement.textContent = quantityValue;
                 
                 // 均價 - 可隱藏
                 const avgPriceElement = document.getElementById(`position-${contractName}-avg-price`);
                 const avgPriceValue = contractData['均價'];
                 avgPriceElement.dataset.originalValue = avgPriceValue;
-                if (positionAmountHidden && avgPriceValue !== '-') {
-                    avgPriceElement.dataset.originalClass = avgPriceElement.className;
-                    avgPriceElement.className = 'position-table-value';
-                    avgPriceElement.textContent = '●●●●●';
-                } else {
-                    avgPriceElement.textContent = avgPriceValue;
-                }
+                // 直接更新數值，隱藏效果由CSS blur處理
+                avgPriceElement.textContent = avgPriceValue;
                 
                 // 市價 - 可隱藏
                 const lastPriceElement = document.getElementById(`position-${contractName}-last-price`);
                 const lastPriceValue = contractData['市價'];
                 lastPriceElement.dataset.originalValue = lastPriceValue;
-                if (positionAmountHidden && lastPriceValue !== '-') {
-                    lastPriceElement.dataset.originalClass = lastPriceElement.className;
-                    lastPriceElement.className = 'position-table-value';
-                    lastPriceElement.textContent = '●●●●●';
-                } else {
-                    lastPriceElement.textContent = lastPriceValue;
-                }
+                // 直接更新數值，隱藏效果由CSS blur處理
+                lastPriceElement.textContent = lastPriceValue;
                 
                 // 未實現盈虧 - 可隱藏
                 const pnlElement = document.getElementById(`position-${contractName}-unrealized-pnl`);
@@ -2099,19 +2584,14 @@ function updatePositionStatus() {
                     pnlElement.dataset.originalValue = pnlDisplay;
                     pnlElement.className = 'position-table-value';
                     
-                    if (positionAmountHidden) {
-                        pnlElement.dataset.originalClass = pnlElement.className;
-                        pnlElement.className = 'position-table-value';
-                        pnlElement.textContent = '●●●●●';
-                    } else {
-                        pnlElement.textContent = pnlDisplay;
-                        if (pnlValue > 0) {
-                            pnlElement.classList.add('positive');
-                        } else if (pnlValue < 0) {
-                            pnlElement.classList.add('negative');
-                        } else if (pnlValue === 0) {
-                            pnlElement.classList.add('neutral');
-                        }
+                    // 直接更新數值，隱藏效果由CSS blur處理
+                    pnlElement.textContent = pnlDisplay;
+                    if (pnlValue > 0) {
+                        pnlElement.classList.add('positive');
+                    } else if (pnlValue < 0) {
+                        pnlElement.classList.add('negative');
+                    } else if (pnlValue === 0) {
+                        pnlElement.classList.add('neutral');
                     }
                 } else {
                     pnlElement.textContent = '-';
@@ -2224,70 +2704,32 @@ function toggleAccountStatus() {
     updatePinnedItemsBorder();
 }
 
-// 帳戶狀態金額隱藏狀態
-let accountAmountHidden = false;
+// 帳戶狀態金額隱藏功能（使用CSS blur效果）
 
-// 切換帳戶狀態金額顯示/隱藏
+// 切換帳戶狀態金額顯示/隱藏 - 使用模糊效果
 function toggleAccountAmountVisibility() {
-    accountAmountHidden = !accountAmountHidden;
-    
     const hideBtn = document.getElementById('hide-account-btn');
     const eyeOpen = hideBtn.querySelector('.eye-open');
     const eyeClosed = hideBtn.querySelector('.eye-closed');
+    const accountValues = document.querySelectorAll('#account-info-container .account-value');
     
-    // 切換眼睛圖標
-    if (accountAmountHidden) {
-        eyeOpen.style.display = 'none';
-        eyeClosed.style.display = 'block';
-    } else {
-        eyeOpen.style.display = 'block';
+    const isHidden = eyeOpen.style.display === 'none';
+    
+    if (isHidden) {
+        // 顯示數值
+        eyeOpen.style.display = '';
         eyeClosed.style.display = 'none';
+        accountValues.forEach(element => {
+            element.style.filter = '';
+        });
+    } else {
+        // 隱藏數值（使用模糊效果）
+        eyeOpen.style.display = 'none';
+        eyeClosed.style.display = '';
+        accountValues.forEach(element => {
+            element.style.filter = 'blur(4px)';
+        });
     }
-    
-    // 需要隱藏的帳戶狀態欄位（包含本日平倉損益）
-    const accountFieldsToHide = [
-        'account-equity',
-        'account-equity-amount', 
-        'account-today-balance',
-        'account-yesterday-balance',
-        'account-available-margin',
-        'account-initial-margin',
-        'account-maintenance-margin',
-        'account-risk-indicator',
-        'account-fee',
-        'account-tax',
-        'account-settle-profit'
-    ];
-    
-    accountFieldsToHide.forEach(fieldId => {
-        const element = document.getElementById(fieldId);
-        if (element) {
-            if (accountAmountHidden) {
-                // 只隱藏有數值的欄位，空值"-"不隱藏
-                const currentText = element.textContent.trim();
-                if (currentText && currentText !== '-') {
-                    // 保存原始值並隱藏
-                    if (!element.dataset.originalValue) {
-                        element.dataset.originalValue = currentText;
-                    }
-                    if (!element.dataset.originalClass) {
-                        element.dataset.originalClass = element.className;
-                    }
-                    // 隱藏時移除所有顏色樣式，只保留基本樣式
-                    element.className = 'account-value';
-                    element.textContent = '●●●●●';
-                }
-            } else {
-                // 恢復原始值和樣式
-                if (element.dataset.originalValue) {
-                    element.textContent = element.dataset.originalValue;
-                }
-                if (element.dataset.originalClass) {
-                    element.className = element.dataset.originalClass;
-                }
-            }
-        }
-    });
 }
 
 // 處理帳戶項目勾選邏輯
@@ -2324,27 +2766,16 @@ function updatePinnedItemsBorder() {
     }
 }
 
-// 持倉狀態金額隱藏狀態
-let positionAmountHidden = false;
+// 持倉狀態金額隱藏功能（使用CSS blur效果）
 
-// 切換持倉狀態金額顯示/隱藏
+// 切換持倉狀態金額顯示/隱藏 - 使用模糊效果
 function togglePositionAmountVisibility() {
-    positionAmountHidden = !positionAmountHidden;
-    
     const hideBtn = document.getElementById('hide-position-btn');
     const eyeOpen = hideBtn.querySelector('.eye-open');
     const eyeClosed = hideBtn.querySelector('.eye-closed');
     
-    // 切換眼睛圖標
-    if (positionAmountHidden) {
-        eyeOpen.style.display = 'none';
-        eyeClosed.style.display = 'block';
-    } else {
-        eyeOpen.style.display = 'block';
-        eyeClosed.style.display = 'none';
-    }
-    
-    // 需要隱藏的持倉狀態欄位（排除未實現總損益）
+    // 獲取所有持倉數值元素（排除未實現總損益）
+    const positionValues = [];
     const contractNames = ['txf', 'mxf', 'tmf'];
     const fieldsToHide = ['quantity', 'avg-price', 'last-price', 'unrealized-pnl'];
     
@@ -2352,35 +2783,28 @@ function togglePositionAmountVisibility() {
         fieldsToHide.forEach(field => {
             const element = document.getElementById(`position-${contractName}-${field}`);
             if (element) {
-                if (positionAmountHidden) {
-                    // 只隱藏有數值的欄位，空值"-"不隱藏
-                    const currentText = element.textContent.trim();
-                    if (currentText && currentText !== '-') {
-                        // 保存原始值並隱藏
-                        if (!element.dataset.originalValue) {
-                            element.dataset.originalValue = currentText;
-                        }
-                        if (!element.dataset.originalClass) {
-                            element.dataset.originalClass = element.className;
-                        }
-                        // 隱藏時移除所有顏色樣式，只保留基本樣式
-                        element.className = 'position-table-value';
-                        element.textContent = '●●●●●';
-                    }
-                } else {
-                    // 恢復原始值和樣式
-                    if (element.dataset.originalValue) {
-                        element.textContent = element.dataset.originalValue;
-                    }
-                    if (element.dataset.originalClass) {
-                        element.className = element.dataset.originalClass;
-                    }
-                }
+                positionValues.push(element);
             }
         });
     });
     
-    // 注意：未實現總損益不隱藏，所以不處理 position-total-pnl
+    const isHidden = eyeOpen.style.display === 'none';
+    
+    if (isHidden) {
+        // 顯示數值
+        eyeOpen.style.display = '';
+        eyeClosed.style.display = 'none';
+        positionValues.forEach(element => {
+            element.style.filter = '';
+        });
+    } else {
+        // 隱藏數值（使用模糊效果）
+        eyeOpen.style.display = 'none';
+        eyeClosed.style.display = '';
+        positionValues.forEach(element => {
+            element.style.filter = 'blur(4px)';
+        });
+    }
 }
 
 // shioaji 更新相關函數
@@ -2753,6 +3177,9 @@ function setupTunnel() {
     const setupBtn = document.getElementById('setup-tunnel-btn');
     const statusDiv = document.getElementById('setup-status');
     
+    // 獲取當前隧道類型，默認為 tx
+    const tunnelType = window.currentTunnelType || 'tx';
+    
     let token = 'temporary-mode'; // 預設值
     
     if (selectedDomainMode === 'custom') {
@@ -2774,8 +3201,9 @@ function setupTunnel() {
     
     setupBtn.disabled = true;
     setupBtn.textContent = '設置中...';
-    statusDiv.innerHTML = '<div style="color: blue;">正在設置隧道服務，請稍候...</div>';
+    statusDiv.innerHTML = `<div style="color: blue;">正在設置${tunnelType.toUpperCase()}隧道服務，請稍候...</div>`;
     
+    // 先設置隧道配置，再啟動
     fetch('/api/ngrok/setup', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -2787,14 +3215,27 @@ function setupTunnel() {
     .then(res => res.json())
     .then(data => {
         if (data.status === 'success') {
-            statusDiv.innerHTML = '<div style="color: green;">設置成功！隧道正在啟動中...</div>';
+            statusDiv.innerHTML = `<div style="color: blue;">設置成功！正在啟動${tunnelType.toUpperCase()}隧道...</div>`;
+            
+            // 啟動指定類型的隧道
+            return fetch(`/api/tunnel/${tunnelType}/start`, {
+                method: 'POST'
+            });
+        } else {
+            throw new Error(data.message);
+        }
+    })
+    .then(res => res.json())
+    .then(data => {
+        if (data.success) {
+            statusDiv.innerHTML = `<div style="color: green;">${tunnelType.toUpperCase()}隧道啟動成功！</div>`;
             
             // 延遲關閉模態窗口
             setTimeout(() => {
                 closeTunnelSetupModal();
             }, 2000);
         } else {
-            statusDiv.innerHTML = `<div style="color: red;">設置失敗：${data.message}</div>`;
+            statusDiv.innerHTML = `<div style="color: red;">隧道啟動失敗：${data.error || '未知錯誤'}</div>`;
         }
     })
     .catch(error => {
@@ -2832,3 +3273,703 @@ function toggleTokenVisibility(inputId) {
         eyeClosed.style.display = 'none';
     }
 }
+
+// ========================== BTC 相關函數 ==========================
+
+function saveBtcEnv(e) {
+    if (e) e.preventDefault();
+    
+    const form = document.getElementById('btcEnvForm');
+    
+    // 獲取API Key的原始值（未遮蔽的）
+    const getBtcValue = (id) => {
+        const sessionValue = sessionStorage.getItem(`${id}_raw`);
+        if (sessionValue !== null) {
+            return sessionValue; // 包括空字串
+        }
+        return document.getElementById(id).dataset.raw || '';
+    };
+    
+    const data = {
+        CHAT_ID_BTC: form.chat_id_btc.value,
+        BINANCE_API_KEY: getBtcValue('binance_api_key'),
+        BINANCE_SECRET_KEY: getBtcValue('binance_secret_key'),
+        BINANCE_USER_ID: form.binance_user_id.value,
+        TRADING_PAIR: form.trading_pair.value,
+        LEVERAGE: form.leverage.value,
+        CONTRACT_TYPE: form.contract_type.value
+    };
+    
+    // 顯示儲存中狀態
+    const saveBtn = document.getElementById('save-btn-btc');
+    const originalText = saveBtn.textContent;
+    saveBtn.textContent = '儲存中...';
+    saveBtn.disabled = true;
+    
+    fetch('/api/save_btc_env', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data)
+    })
+    .then(res => res.json())
+    .then(data => {
+        document.getElementById('save-status-btc').innerText = '儲存成功！';
+        setTimeout(() => document.getElementById('save-status-btc').innerText = '', 2000);
+        
+        // 儲存後，將sessionStorage的值同步到dataset.raw
+        const btcApiKey = document.getElementById('binance_api_key');
+        const btcSecretKey = document.getElementById('binance_secret_key');
+        btcApiKey.dataset.raw = sessionStorage.getItem('binance_api_key_raw') || '';
+        btcSecretKey.dataset.raw = sessionStorage.getItem('binance_secret_key_raw') || '';
+        ['binance_api_key', 'binance_secret_key'].forEach(id => {
+            const input = document.getElementById(id);
+            input.dataset.saved = 'true';
+        });
+        setBtcMaskedFields();
+        
+        // 調用檢查登入按鈕狀態
+        checkBtcLoginButton();
+        
+        // 檢查是否有空值被儲存
+        if (data.has_empty_fields) {
+            // 自動登出BTC
+            sessionStorage.removeItem('isBtcLoggedIn');
+            window.isBtcLoggedIn = false;
+            showPanel('settings');
+            alert('檢測到有欄位為空！請填寫完所有資料後才能登入。');
+        } else {
+            alert('儲存成功！！！');
+        }
+    })
+    .catch(() => {
+        document.getElementById('save-status-btc').innerText = '儲存失敗';
+    })
+    .finally(() => {
+        // 恢復按鈕狀態
+        saveBtn.textContent = originalText;
+        saveBtn.disabled = false;
+    });
+}
+
+function loginBtc() {
+    const loginBtn = document.getElementById('login-btn-btc');
+    const originalText = loginBtn.innerHTML;
+    
+    // 禁用按鈕並顯示載入狀態
+    loginBtn.disabled = true;
+    loginBtn.innerHTML = '登入中...';
+    
+    fetch('/api/btc/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({})
+    })
+    .then(res => res.json())
+    .then(data => {
+        if (data.success) {
+            sessionStorage.setItem('isBtcLoggedIn', '1');
+            sessionStorage.setItem('btcLoginTime', new Date().toISOString());
+            console.log('BTC帳戶登入成功！');
+            
+            // 刷新帳戶和持倉信息
+            refreshBtcAccountInfo();
+            refreshBtcPositionInfo();
+            
+            // 立即更新API狀態和交易對顯示
+            setTimeout(() => {
+                updateBinanceApiStatus();
+                fetch('/api/load_btc_env')
+                .then(res => res.json())
+                .then(config => {
+                    updateBtcTradingPairDisplay(config);
+                })
+                .catch(err => console.error('載入BTC配置失敗:', err));
+            }, 1000);
+            
+            // 延遲啟動BTC隧道（避免與TX隧道同時啟動導致429錯誤）
+            setTimeout(() => {
+                fetch('/api/tunnel/btc/start', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        mode: 'temporary',
+                        token: ''
+                    })
+                })
+                .then(res => res.json())
+                .then(tunnelData => {
+                    console.log('BTC隧道啟動結果:', tunnelData);
+                })
+                .catch(error => {
+                    console.error('BTC隧道啟動失敗:', error);
+                });
+            }, 3000);
+            
+            showPanel('btc-trade');
+        } else {
+            alert('BTC登入失敗：' + data.message);
+        }
+    })
+    .catch(error => {
+        console.error('BTC登入請求失敗：', error);
+        alert('BTC登入請求失敗，請檢查網路連線');
+    })
+    .finally(() => {
+        // 恢復按鈕狀態
+        loginBtn.disabled = false;
+        loginBtn.innerHTML = originalText;
+    });
+}
+
+function logoutBtc() {
+    fetch('/api/btc/logout', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({})
+    })
+    .then(res => res.json())
+    .then(data => {
+        sessionStorage.removeItem('isBtcLoggedIn');
+        sessionStorage.removeItem('btcLoginTime');
+        showPanel('settings');
+        alert('已登出BTC帳戶');
+        
+        // 重置連線時長顯示
+        updateBtcConnectionDuration();
+    })
+    .catch(error => {
+        console.error('BTC登出請求失敗：', error);
+        sessionStorage.removeItem('isBtcLoggedIn');
+        showPanel('settings');
+        alert('已登出BTC帳戶');
+    });
+}
+
+function copyUsernameBtc() {
+    const username = document.getElementById('bot-username-btc').value;
+    navigator.clipboard.writeText(username).then(() => {
+        alert('已複製 Bot ID ！！！\n請至Telegram 加入好友，並向它發起訊息：/start');
+    });
+}
+
+function refreshBotUsernameBtc() {
+    const botUsernameInput = document.getElementById('bot-username-btc');
+    
+    // 顯示載入狀態
+    botUsernameInput.value = '查詢中...';
+    
+    // 直接從後端獲取token，不需要前端輸入
+    fetch('/api/btc_bot_username', {
+        method: 'GET',
+        headers: { 'Content-Type': 'application/json' }
+    })
+    .then(res => res.json())
+    .then(data => {
+        if (data.username) {
+            botUsernameInput.value = data.username;
+        } else if (data.error) {
+            botUsernameInput.value = '查詢失敗';
+        } else {
+            botUsernameInput.value = '查無 Bot ID';
+        }
+    })
+    .catch(() => {
+        botUsernameInput.value = '查詢失敗';
+    });
+}
+
+// 載入BTC環境配置
+function loadBtcConfig() {
+    fetch('/api/btc/get_config')
+    .then(res => res.json())
+    .then(data => {
+        if (data.success && data.config) {
+            const config = data.config;
+            
+            // 填充基本配置欄位
+            const fields = {
+                'chat_id_btc': config.CHAT_ID_BTC || '',
+                'binance_api_key': config.BINANCE_API_KEY || '',
+                'binance_secret_key': config.BINANCE_SECRET_KEY || '',
+                'binance_user_id': config.BINANCE_USER_ID || '',
+                'trading_pair': config.TRADING_PAIR || 'BTCUSDT',
+                'leverage': config.LEVERAGE || '5',
+                'contract_type': config.CONTRACT_TYPE || 'PERPETUAL'
+            };
+            
+            Object.entries(fields).forEach(([id, value]) => {
+                const element = document.getElementById(id);
+                if (element) {
+                    element.value = value;
+                }
+            });
+            
+            // 更新登入按鈕狀態
+            const loginBtn = document.getElementById('login-btn-btc');
+            if (loginBtn) {
+                if (config.BINANCE_API_KEY && config.BINANCE_SECRET_KEY) {
+                    loginBtn.disabled = false;
+                } else {
+                    loginBtn.disabled = true;
+                }
+            }
+            
+            // 檢查登入狀態
+            if (config.LOGIN_BTC === '1') {
+                sessionStorage.setItem('isBtcLoggedIn', '1');
+            } else {
+                sessionStorage.removeItem('isBtcLoggedIn');
+            }
+            
+            // 更新交易對資訊顯示
+            updateBtcTradingPairDisplay(config);
+            
+            console.log('BTC配置載入成功');
+        } else {
+            console.error('載入BTC配置失敗：', data.error);
+        }
+    })
+    .catch(error => {
+        console.error('載入BTC配置請求失敗：', error);
+    });
+}
+
+// 更新BTC交易對資訊顯示
+function updateBtcTradingPairDisplay(config) {
+    const elements = {
+        'btc-trading-pair': config.TRADING_PAIR || '-',
+        'btc-leverage': config.LEVERAGE ? `${config.LEVERAGE}x` : '-',
+        'btc-contract-type': config.CONTRACT_TYPE || '-'
+    };
+    
+    Object.entries(elements).forEach(([id, value]) => {
+        const element = document.getElementById(id);
+        if (element) {
+            element.textContent = value;
+        }
+    });
+}
+
+// BTC實時數據更新函數
+function updateBtcRealtimeData() {
+    fetch('/api/btc/realtime')
+    .then(res => res.json())
+    .then(data => {
+        if (data.success && data.data) {
+            const realtimeData = data.data;
+            
+            // 更新實時價格顯示
+            const priceElement = document.getElementById('btc-current-price');
+            if (priceElement && realtimeData.price) {
+                const price = realtimeData.price;
+                const priceChange = realtimeData.price_change || 0;
+                
+                priceElement.textContent = `$${price.toFixed(2)}`;
+                
+                // 根據漲跌設置顏色
+                if (priceChange > 0) {
+                    priceElement.style.color = '#27ae60'; // 綠色
+                } else if (priceChange < 0) {
+                    priceElement.style.color = '#e74c3c'; // 紅色
+                } else {
+                    priceElement.style.color = '#6c757d'; // 灰色
+                }
+            }
+            
+            // 更新24小時變化
+            const changeElement = document.getElementById('btc-price-change');
+            if (changeElement && realtimeData.price_change !== undefined) {
+                const change = realtimeData.price_change;
+                changeElement.textContent = `${change > 0 ? '+' : ''}${change.toFixed(2)}%`;
+                changeElement.style.color = change > 0 ? '#27ae60' : (change < 0 ? '#e74c3c' : '#6c757d');
+            }
+            
+            // 更新其他實時數據
+            updateElementIfExists('btc-high-price', realtimeData.high_price, price => `$${price.toFixed(2)}`);
+            updateElementIfExists('btc-low-price', realtimeData.low_price, price => `$${price.toFixed(2)}`);
+            updateElementIfExists('btc-volume', realtimeData.volume, vol => `${(vol/1000).toFixed(1)}K`);
+        }
+    })
+    .catch(error => {
+        console.error('更新BTC實時數據失敗:', error);
+    });
+}
+
+// BTC風險狀態更新函數
+function updateBtcRiskStatus() {
+    fetch('/api/btc/risk/status')
+    .then(res => res.json())
+    .then(data => {
+        if (data.success && data.risk_metrics) {
+            const risk = data.risk_metrics;
+            
+            // 更新風險等級顯示
+            const riskElement = document.getElementById('btc-risk-level');
+            if (riskElement) {
+                let riskText = '';
+                let riskColor = '';
+                
+                switch(risk.risk_level) {
+                    case 'SAFE':
+                        riskText = '安全';
+                        riskColor = '#27ae60';
+                        break;
+                    case 'MEDIUM':
+                        riskText = '中等';
+                        riskColor = '#f39c12';
+                        break;
+                    case 'HIGH':
+                        riskText = '高風險';
+                        riskColor = '#e74c3c';
+                        break;
+                    default:
+                        riskText = '未知';
+                        riskColor = '#6c757d';
+                }
+                
+                riskElement.textContent = riskText;
+                riskElement.style.color = riskColor;
+            }
+            
+            // 更新保證金比率
+            updateElementIfExists('btc-margin-ratio', risk.margin_ratio, ratio => 
+                ratio > 0 ? `${ratio.toFixed(1)}%` : '-'
+            );
+            
+            // 更新槓桿使用率
+            updateElementIfExists('btc-leverage-usage', risk.leverage_usage, usage => 
+                `${usage.toFixed(1)}%`
+            );
+            
+            // 檢查是否需要顯示風險警告
+            if (risk.risk_level === 'HIGH') {
+                showBtcRiskWarning(risk);
+            }
+        }
+    })
+    .catch(error => {
+        console.error('更新BTC風險狀態失敗:', error);
+    });
+}
+
+// 輔助函數：更新元素內容
+function updateElementIfExists(elementId, value, formatter) {
+    const element = document.getElementById(elementId);
+    if (element && value !== undefined && value !== null) {
+        element.textContent = formatter ? formatter(value) : value;
+    }
+}
+
+// 顯示BTC風險警告
+function showBtcRiskWarning(riskMetrics) {
+    const warningShown = sessionStorage.getItem('btcRiskWarningShown');
+    const currentTime = new Date().getTime();
+    
+    // 每10分鐘最多顯示一次警告
+    if (warningShown && (currentTime - parseInt(warningShown)) < 600000) {
+        return;
+    }
+    
+    let warningMessage = '⚠️ BTC交易風險警告\n\n';
+    
+    if (riskMetrics.margin_ratio > 0 && riskMetrics.margin_ratio < 120) {
+        warningMessage += `強制平倉風險：保證金比率僅 ${riskMetrics.margin_ratio.toFixed(1)}%\n`;
+    }
+    
+    if (riskMetrics.leverage_usage > 90) {
+        warningMessage += `槓桿使用率過高：${riskMetrics.leverage_usage.toFixed(1)}%\n`;
+    }
+    
+    if (riskMetrics.total_unrealized_pnl < -1000) {
+        warningMessage += `大額未實現虧損：${riskMetrics.total_unrealized_pnl.toFixed(2)} USDT\n`;
+    }
+    
+    warningMessage += '\n建議立即檢查持倉並考慮風險控制措施！';
+    
+    if (confirm(warningMessage)) {
+        // 用戶確認後，記錄警告已顯示
+        sessionStorage.setItem('btcRiskWarningShown', currentTime.toString());
+        
+        // 可以在這裡添加跳轉到風險管理頁面的邏輯
+        showPanel('btc-trade');
+    }
+}
+
+// BTC帳戶資訊函數
+function refreshBtcAccountInfo() {
+    if (sessionStorage.getItem('isBtcLoggedIn') !== '1') {
+        return;
+    }
+    
+    fetch('/api/btc/account_info')
+    .then(res => res.json())
+    .then(data => {
+        if (data.success && data.account) {
+            const account = data.account;
+            
+            // 更新帳戶資訊顯示
+            const accountElements = {
+                'btc-wallet-balance': formatCurrency(account.totalWalletBalance || 0, 'USDT'),
+                'btc-margin-balance': formatCurrency(account.totalMarginBalance || 0, 'USDT'),
+                'btc-available-balance': formatCurrency(account.availableBalance || 0, 'USDT'),
+                'btc-unrealized-pnl': formatPnL(account.totalUnrealizedProfit || 0),
+                'btc-total-margin': formatCurrency(account.totalInitialMargin || 0, 'USDT'),
+                'btc-maintenance-margin': formatCurrency(account.totalMaintMargin || 0, 'USDT'),
+                'btc-margin-ratio': account.totalMarginBalance > 0 
+                    ? `${((account.totalMaintMargin / account.totalMarginBalance) * 100).toFixed(2)}%` 
+                    : '0.00%'
+            };
+            
+            Object.entries(accountElements).forEach(([id, value]) => {
+                const element = document.getElementById(id);
+                if (element) {
+                    element.textContent = value;
+                    
+                    // 損益顏色
+                    if (id === 'btc-unrealized-pnl') {
+                        const numValue = parseFloat(account.totalUnrealizedProfit || 0);
+                        element.className = element.className.replace(/(\\s|^)(profit|loss)(\\s|$)/, '');
+                        if (numValue > 0) {
+                            element.classList.add('profit');
+                        } else if (numValue < 0) {
+                            element.classList.add('loss');
+                        }
+                    }
+                }
+            });
+            
+            console.log('BTC帳戶資訊更新成功');
+        } else {
+            console.error('獲取BTC帳戶資訊失敗：', data.error);
+        }
+    })
+    .catch(error => {
+        console.error('BTC帳戶資訊請求失敗：', error);
+    });
+}
+
+function toggleBtcAccountInfo() {
+    const containerDiv = document.getElementById('btc-account-info-container');
+    const toggleIcon = document.getElementById('toggle-account-btc');
+    
+    if (containerDiv.classList.contains('collapsed')) {
+        // 展開：顯示所有項目
+        containerDiv.classList.remove('collapsed');
+        toggleIcon.classList.remove('collapsed');
+    } else {
+        // 收起：隱藏未勾選的項目，勾選的項目會在固定顯示區域顯示
+        containerDiv.classList.add('collapsed');
+        toggleIcon.classList.add('collapsed');
+    }
+    
+    // 更新收起狀態下最後一個項目的樣式
+    updateBtcPinnedItemsBorder();
+}
+
+function toggleBtcAccountAmountVisibility() {
+    const hideBtn = document.getElementById('hide-account-btn-btc');
+    const eyeOpen = hideBtn.querySelector('.eye-open');
+    const eyeClosed = hideBtn.querySelector('.eye-closed');
+    const accountValues = document.querySelectorAll('#btc-account-info-container .account-value');
+    
+    const isHidden = eyeOpen.style.display === 'none';
+    
+    if (isHidden) {
+        eyeOpen.style.display = '';
+        eyeClosed.style.display = 'none';
+        accountValues.forEach(element => {
+            element.style.filter = '';
+        });
+    } else {
+        eyeOpen.style.display = 'none';
+        eyeClosed.style.display = '';
+        accountValues.forEach(element => {
+            element.style.filter = 'blur(4px)';
+        });
+    }
+}
+
+function toggleBtcAccountItemVisibility(checkbox) {
+    const accountItem = checkbox.closest('.account-item');
+    const isChecked = checkbox.checked;
+    
+    if (isChecked) {
+        // 勾選：標記為固定顯示
+        accountItem.classList.add('pinned');
+    } else {
+        // 取消勾選：移除固定顯示標記
+        accountItem.classList.remove('pinned');
+    }
+    
+    // 更新收起狀態下最後一個項目的樣式
+    updateBtcPinnedItemsBorder();
+}
+
+// 更新BTC收起狀態下最後一個勾選項目的邊框樣式
+function updateBtcPinnedItemsBorder() {
+    const accountContainer = document.getElementById('btc-account-info-container');
+    const pinnedItems = accountContainer.querySelectorAll('.account-item.pinned');
+    
+    // 重置所有勾選項目的邊框
+    pinnedItems.forEach(item => {
+        item.style.borderBottom = '1px solid #e9ecef';
+    });
+    
+    // 如果容器處於收起狀態且有勾選項目，移除最後一個的邊框
+    if (accountContainer.classList.contains('collapsed') && pinnedItems.length > 0) {
+        const lastPinnedItem = pinnedItems[pinnedItems.length - 1];
+        lastPinnedItem.style.borderBottom = 'none';
+    }
+}
+
+// BTC持倉資訊函數
+function refreshBtcPositionInfo() {
+    if (sessionStorage.getItem('isBtcLoggedIn') !== '1') {
+        return;
+    }
+    
+    fetch('/api/btc/positions')
+    .then(res => res.json())
+    .then(data => {
+        if (data.success && data.positions) {
+            const positions = data.positions;
+            let totalPnL = 0;
+            
+            if (positions.length > 0) {
+                const position = positions[0];
+                
+                const positionElements = {
+                    'position-btc-symbol': position.symbol || '-',
+                    'position-btc-side': position.positionSide === 'LONG' ? '做多' : 
+                                         position.positionSide === 'SHORT' ? '做空' : '-',
+                    'position-btc-size': Math.abs(parseFloat(position.positionAmt || 0)).toFixed(4),
+                    'position-btc-entry-price': formatCurrency(position.entryPrice || 0, 'USDT'),
+                    'position-btc-mark-price': formatCurrency(position.markPrice || 0, 'USDT'),
+                    'position-btc-pnl': formatPnL(position.unRealizedProfit || 0),
+                    'position-btc-roe': position.percentage ? `${parseFloat(position.percentage).toFixed(2)}%` : '0.00%'
+                };
+                
+                Object.entries(positionElements).forEach(([id, value]) => {
+                    const element = document.getElementById(id);
+                    if (element) {
+                        element.textContent = value;
+                        
+                        if (id === 'position-btc-pnl' || id === 'position-btc-roe') {
+                            const numValue = parseFloat(position.unRealizedProfit || 0);
+                            element.className = element.className.replace(/(\\s|^)(profit|loss)(\\s|$)/, '');
+                            if (numValue > 0) {
+                                element.classList.add('profit');
+                            } else if (numValue < 0) {
+                                element.classList.add('loss');
+                            }
+                        }
+                    }
+                });
+                
+                totalPnL = parseFloat(position.unRealizedProfit || 0);
+            } else {
+                const positionElements = {
+                    'position-btc-symbol': '-',
+                    'position-btc-side': '-',
+                    'position-btc-size': '-',
+                    'position-btc-entry-price': '-',
+                    'position-btc-mark-price': '-',
+                    'position-btc-pnl': '-',
+                    'position-btc-roe': '-'
+                };
+                
+                Object.entries(positionElements).forEach(([id, value]) => {
+                    const element = document.getElementById(id);
+                    if (element) {
+                        element.textContent = value;
+                        element.className = element.className.replace(/(\\s|^)(profit|loss)(\\s|$)/, '');
+                    }
+                });
+            }
+            
+            const totalPnLElement = document.getElementById('position-total-pnl-btc');
+            if (totalPnLElement) {
+                totalPnLElement.textContent = formatPnL(totalPnL);
+                totalPnLElement.className = totalPnLElement.className.replace(/(\\s|^)(profit|loss)(\\s|$)/, '');
+                if (totalPnL > 0) {
+                    totalPnLElement.classList.add('profit');
+                } else if (totalPnL < 0) {
+                    totalPnLElement.classList.add('loss');
+                }
+            }
+            
+            console.log('BTC持倉資訊更新成功');
+        } else {
+            console.error('獲取BTC持倉資訊失敗：', data.error);
+        }
+    })
+    .catch(error => {
+        console.error('BTC持倉資訊請求失敗：', error);
+    });
+}
+
+function toggleBtcPositionInfo() {
+    const container = document.getElementById('position-info-container-btc');
+    const toggle = document.getElementById('toggle-position-btc');
+    
+    if (container && toggle) {
+        const isVisible = container.style.display !== 'none';
+        container.style.display = isVisible ? 'none' : '';
+        toggle.classList.toggle('collapsed', isVisible);
+    }
+}
+
+function toggleBtcPositionAmountVisibility() {
+    const hideBtn = document.getElementById('hide-position-btn-btc');
+    const eyeOpen = hideBtn.querySelector('.eye-open');
+    const eyeClosed = hideBtn.querySelector('.eye-closed');
+    const positionValues = document.querySelectorAll('#position-info-container-btc .position-table-value');
+    const totalPnL = document.getElementById('position-total-pnl-btc');
+    
+    const isHidden = eyeOpen.style.display === 'none';
+    
+    if (isHidden) {
+        eyeOpen.style.display = '';
+        eyeClosed.style.display = 'none';
+        positionValues.forEach(element => {
+            element.style.filter = '';
+        });
+        if (totalPnL) totalPnL.style.filter = '';
+    } else {
+        eyeOpen.style.display = 'none';
+        eyeClosed.style.display = '';
+        positionValues.forEach(element => {
+            element.style.filter = 'blur(4px)';
+        });
+        if (totalPnL) totalPnL.style.filter = 'blur(4px)';
+    }
+}
+
+function toggleAvailablePairs() {
+    const container = document.getElementById('available-contracts-btc');
+    const toggle = document.getElementById('toggle-available-btc');
+    
+    if (container && toggle) {
+        const isVisible = container.style.display !== 'none';
+        container.style.display = isVisible ? 'none' : '';
+        toggle.classList.toggle('collapsed', isVisible);
+    }
+}
+
+function toggleAccountInfo() {
+    toggleBtcAccountInfo();
+}
+
+// 格式化貨幣顯示
+function formatCurrency(amount, currency = 'USDT') {
+    const num = parseFloat(amount || 0);
+    return `${num.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${currency}`;
+}
+
+// 格式化損益顯示
+function formatPnL(amount) {
+    const num = parseFloat(amount || 0);
+    const sign = num >= 0 ? '+' : '';
+    return `${sign}${num.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USDT`;
+}
+

@@ -1,0 +1,33 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3:*)",
+      "Bash(rm:*)",
+      "Bash(python:*)",
+      "Bash(find:*)",
+      "Bash(ls:*)",
+      "Bash(./cloudflared.exe --version)",
+      "Bash(./cloudflared.exe tunnel:*)",
+      "Bash(mv:*)",
+      "Bash(grep:*)",
+      "Bash(sed:*)",
+      "Bash(git add:*)",
+      "Bash(git rm:*)",
+      "Bash(git config:*)",
+      "Bash(git log:*)",
+      "Bash(git tag:*)",
+      "Bash(git push:*)",
+      "Bash(mkdir:*)",
+      "Bash(cp:*)",
+      "Bash(rg:*)",
+      "Bash(curl:*)",
+      "WebFetch(domain:developers.binance.com)",
+      "Bash(pip install:*)",
+      "Bash(pip3 install:*)",
+      "Bash(apt:*)",
+      "Bash(apt install:*)",
+      "Bash(gh pr:*)"
+    ],
+    "deny": []
+  }
+}

@@ -1,6 +1,276 @@
 # 開發者指南
 
-## 最新更新 (v1.3.11 - 2025-07-12)
+## 最新重大更新 (v1.4.0 - 2025-07-14)
+
+### BTC加密貨幣交易系統重大整合
+
+#### 雙系統架構開發
+
+**核心架構設計**：
+```python
+# main.py - 統一入口點
+from btcmain import *  # BTC系統模組
+
+# 檢查BTC模組可用性
+try:
+    import btcmain
+    BTC_MODULE_AVAILABLE = True
+except ImportError:
+    BTC_MODULE_AVAILABLE = False
+    print("BTC模組不可用")
+
+# 雙系統配置管理
+def load_configurations():
+    tx_config = load_env_file('config/tx.env')  # TX系統配置
+    btc_config = load_env_file('config/btc.env')  # BTC系統配置
+    return tx_config, btc_config
+```
+
+#### 統一Webhook路由系統
+
+**多路徑路由設計**：
+```python
+@app.route('/webhook', methods=['POST'], defaults={'system': 'auto'})
+@app.route('/webhook/<system>', methods=['POST'])
+def unified_webhook(system):
+    """統一webhook處理器，支持TX和BTC系統"""
+    try:
+        data = json.loads(request.data.decode('utf-8'))
+        
+        if system == 'btc':
+            if BTC_MODULE_AVAILABLE:
+                return btcmain.btc_webhook()
+            else:
+                return jsonify({'error': 'BTC模組不可用'}), 503
+        elif system == 'tx':
+            return tradingview_webhook_tx()
+        elif system == 'auto':
+            # 自動識別訊號類型
+            if is_btc_signal(data):
+                if BTC_MODULE_AVAILABLE:
+                    return btcmain.btc_webhook()
+                else:
+                    return jsonify({'error': 'BTC模組不可用'}), 503
+            else:
+                return tradingview_webhook_tx()
+        
+        return jsonify({'error': '未知系統類型'}), 400
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+def is_btc_signal(data):
+    """識別是否為BTC訊號"""
+    btc_indicators = ['symbol', 'action', 'position_size']
+    tx_indicators = ['tradeId', 'contract', 'direction']
+    
+    btc_score = sum(1 for key in btc_indicators if key in data)
+    tx_score = sum(1 for key in tx_indicators if key in data)
+    
+    return btc_score > tx_score
+```
+
+#### BTC系統API端點設計
+
+**模組化API架構**：
+```python
+# BTC系統管理端點
+@app.route('/api/btc/login', methods=['POST'])
+def btc_login():
+    if BTC_MODULE_AVAILABLE:
+        return btcmain.login_btc_api()
+    return jsonify({'error': 'BTC模組不可用'}), 503
+
+@app.route('/api/btc/status', methods=['GET'])
+def btc_status():
+    if BTC_MODULE_AVAILABLE:
+        return btcmain.get_btc_status()
+    return jsonify({'status': 'unavailable', 'message': 'BTC模組不可用'})
+
+@app.route('/api/btc/account/balance', methods=['GET'])
+def btc_account_balance():
+    if BTC_MODULE_AVAILABLE:
+        return btcmain.get_account_balance()
+    return jsonify({'error': 'BTC模組不可用'}), 503
+
+@app.route('/api/btc/position', methods=['GET'])
+def btc_position():
+    if BTC_MODULE_AVAILABLE:
+        return btcmain.get_position_info()
+    return jsonify({'error': 'BTC模組不可用'}), 503
+```
+
+#### 分離的數據存儲系統
+
+**TX和BTC數據分離**：
+```python
+# 數據存儲路徑設計
+TX_DATA_DIR = 'TXtransdata'
+BTC_DATA_DIR = 'BTCtransdata'
+
+def get_data_directory(system='tx'):
+    """獲取對應系統的數據目錄"""
+    if system.lower() == 'btc':
+        return BTC_DATA_DIR
+    return TX_DATA_DIR
+
+def save_trade_record(trade_data, system='tx'):
+    """保存交易記錄到對應系統目錄"""
+    data_dir = get_data_directory(system)
+    os.makedirs(data_dir, exist_ok=True)
+    
+    today = datetime.now().strftime('%Y%m%d')
+    prefix = 'BTC' if system.lower() == 'btc' else 'TX'
+    filename = f'{prefix}trades_{today}.json'
+    filepath = os.path.join(data_dir, filename)
+    
+    # 保存邏輯...
+```
+
+#### 前端三面板架構
+
+**JavaScript模組化設計**：
+```javascript
+// 系統日誌分離管理
+let systemLogs = [];     // TX系統日誌
+let btcSystemLogs = [];  // BTC系統日誌
+let requestsLog = [];    // TX請求日誌
+let btcRequestsLog = []; // BTC請求日誌
+
+// 統一日誌更新函數
+function updateSystemLogs(system = 'tx') {
+    const targetLogs = system === 'btc' ? btcSystemLogs : systemLogs;
+    const logContainer = system === 'btc' ? 
+        document.getElementById('btc-system-logs') : 
+        document.getElementById('system-logs');
+    
+    fetch(`/api/system_log?system=${system}`)
+        .then(response => response.json())
+        .then(data => {
+            if (data.logs) {
+                targetLogs.length = 0;
+                targetLogs.push(...data.logs);
+                displayLogs(targetLogs, logContainer);
+            }
+        })
+        .catch(error => console.error(`${system}系統日誌更新失敗:`, error));
+}
+
+// 分離的帳戶狀態管理
+function updateAccountStatus(system = 'tx') {
+    const endpoint = system === 'btc' ? '/api/btc/account/balance' : '/api/account/status';
+    
+    fetch(endpoint)
+        .then(response => response.json())
+        .then(data => {
+            if (system === 'btc') {
+                updateBTCAccountDisplay(data);
+            } else {
+                updateTXAccountDisplay(data);
+            }
+        })
+        .catch(error => console.error(`${system}帳戶狀態更新失敗:`, error));
+}
+```
+
+#### 配置管理系統
+
+**分離的環境配置**：
+```python
+# config/tx.env - TX系統配置
+API_KEY_TX=your_sinopac_api_key
+SECRET_KEY_TX=your_sinopac_secret
+PERSON_ID_TX=your_person_id
+CERT_PATH_TX=path/to/cert.pfx
+CERT_PASSWORD_TX=cert_password
+BOT_TOKEN_TX=telegram_bot_token
+CHAT_ID_TX=telegram_chat_id
+LOGIN_TX=1
+
+# config/btc.env - BTC系統配置
+BOT_TOKEN_BTC=btc_telegram_bot_token
+CHAT_ID_BTC=btc_telegram_chat_id
+BINANCE_API_KEY=binance_api_key
+BINANCE_SECRET_KEY=binance_secret_key
+BINANCE_USER_ID=binance_user_id
+TRADING_PAIR=BTCUSDT
+LEVERAGE=5
+CONTRACT_TYPE=PERPETUAL
+LOGIN_BTC=1
+
+def load_system_config(system='tx'):
+    """載入指定系統配置"""
+    config_file = f'config/{system.lower()}.env'
+    if os.path.exists(config_file):
+        return load_env_file(config_file)
+    return {}
+```
+
+#### 代碼清理與優化
+
+**移除ngrok遺留代碼**：
+```python
+# 清理前 - 錯誤的ngrok變數引用
+# ngrok_url = "error"  # 已移除
+# ngrok_tunnel_info = get_tunnel_info()  # 已修正
+
+# 清理後 - 正確的Cloudflare Tunnel實現
+def get_tunnel_info():
+    """獲取隧道信息"""
+    try:
+        if tunnel_manager and tunnel_manager.is_running():
+            return {
+                'url': tunnel_manager.get_tunnel_url(),
+                'status': 'running',
+                'type': 'cloudflare'
+            }
+    except Exception as e:
+        print(f"獲取隧道信息失敗: {e}")
+    
+    return {'status': 'stopped', 'type': 'unknown'}
+```
+
+**統一import管理**：
+```python
+# btcmain.py - 清理後的imports
+import hashlib
+import hmac
+import json
+import os
+import time
+from datetime import datetime, timedelta
+from binance.client import Client
+from binance.exceptions import BinanceAPIException
+
+# 移除重複和無用的imports
+# import json  # 重複 - 已移除
+# import requests  # 未使用 - 已移除
+```
+
+#### 開發規範與最佳實踐
+
+**雙系統開發規範**：
+1. **模組隔離**：TX和BTC系統功能完全獨立，避免相互依賴
+2. **配置分離**：使用獨立的.env文件管理各系統配置
+3. **數據分離**：使用不同目錄和文件前綴管理交易數據
+4. **日誌分離**：前端和後端日誌都按系統分類
+5. **錯誤隔離**：單一系統故障不影響另一系統運行
+
+**API設計原則**：
+1. **統一前綴**：BTC系統API統一使用 `/api/btc/` 前綴
+2. **狀態一致**：兩個系統返回相似格式的狀態信息
+3. **錯誤處理**：統一的錯誤返回格式
+4. **可用性檢查**：所有BTC API都檢查模組可用性
+
+**Webhook路由原則**：
+1. **自動識別**：支援自動識別訊號類型
+2. **明確路由**：支援明確指定系統路由
+3. **向後兼容**：保持對舊版本URL的支援
+4. **錯誤回退**：識別失敗時使用預設處理
+
+---
+
+## 歷史更新 (v1.3.11 - 2025-07-12)
 
 ### 隧道服務架構重構
 

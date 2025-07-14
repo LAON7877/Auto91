@@ -16,6 +16,68 @@ import zipfile
 import shutil
 from datetime import datetime
 
+
+class TunnelManager:
+    """多隧道管理器"""
+    def __init__(self):
+        self.tunnels = {}  # 隧道實例字典 {tunnel_type: CloudflareTunnel}
+        self.ports = {
+            'tx': 5000,     # TX使用5000端口
+            'btc': 5000     # BTC也使用5000端口（同一Flask應用，不同隧道域名）
+        }
+    
+    def create_tunnel(self, tunnel_type='tx', mode="temporary"):
+        """創建新隧道"""
+        if tunnel_type not in self.ports:
+            raise ValueError(f"不支持的隧道類型: {tunnel_type}")
+        
+        port = self.ports[tunnel_type]
+        tunnel = CloudflareTunnel(port=port, mode=mode)
+        self.tunnels[tunnel_type] = tunnel
+        return tunnel
+    
+    def get_tunnel(self, tunnel_type='tx'):
+        """獲取隧道實例"""
+        return self.tunnels.get(tunnel_type)
+    
+    def start_tunnel(self, tunnel_type='tx'):
+        """啟動指定類型的隧道"""
+        tunnel = self.get_tunnel(tunnel_type)
+        if not tunnel:
+            tunnel = self.create_tunnel(tunnel_type)
+        return tunnel.start_tunnel()
+    
+    def stop_tunnel(self, tunnel_type='tx'):
+        """停止指定類型的隧道"""
+        tunnel = self.get_tunnel(tunnel_type)
+        if tunnel:
+            return tunnel.stop_tunnel()
+        return False
+    
+    def get_tunnel_status(self, tunnel_type='tx'):
+        """獲取指定隧道狀態"""
+        tunnel = self.get_tunnel(tunnel_type)
+        if tunnel:
+            return tunnel.get_status()
+        return {
+            'status': 'stopped',
+            'url': None,
+            'port': self.ports.get(tunnel_type, 5000)
+        }
+    
+    def stop_all_tunnels(self):
+        """停止所有隧道"""
+        for tunnel_type, tunnel in self.tunnels.items():
+            if tunnel:
+                tunnel.stop_tunnel()
+    
+    def get_all_status(self):
+        """獲取所有隧道狀態"""
+        status = {}
+        for tunnel_type in self.ports.keys():
+            status[tunnel_type] = self.get_tunnel_status(tunnel_type)
+        return status
+
 class CloudflareTunnel:
     def __init__(self, port=5000, mode="temporary"):
         self.port = port
@@ -189,14 +251,14 @@ ingress:
             print(f"建立配置檔案失敗: {e}")
             raise
     
-    def start_tunnel(self):
+    def start_tunnel(self, retry_count=0, max_retries=2):
         """啟動隧道"""
         try:
             if self.status == "running":
                 print("隧道已經在運行中")
                 return True
             
-            print("正在啟動 Cloudflare Tunnel...")
+            print(f"正在啟動 Cloudflare Tunnel... (嘗試 {retry_count + 1}/{max_retries + 1})")
             self.status = "starting"
             
             # 根據模式選擇啟動方式
@@ -259,9 +321,15 @@ ingress:
                         )
                         break
                     else:
-                        print("進程結束但未找到URL")
-                        self.status = "error"
-                        return False
+                        # 檢查是否是429錯誤，如果是則嘗試重試
+                        if "429 Too Many Requests" in full_output and retry_count < max_retries:
+                            print(f"檢測到429錯誤，等待 {(retry_count + 1) * 5} 秒後重試...")
+                            time.sleep((retry_count + 1) * 5)  # 遞增延遲
+                            return self.start_tunnel(retry_count + 1, max_retries)
+                        else:
+                            print("進程結束但未找到URL")
+                            self.status = "error"
+                            return False
                 
                 # 讀取輸出
                 try:
