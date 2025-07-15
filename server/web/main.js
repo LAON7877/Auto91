@@ -1389,19 +1389,27 @@ function updateSystemLogsFromBackend() {
             if (data.requests && data.requests.length > 0) {
                 // 過濾 type=custom 的日誌（後端送來的系統日誌）
                 const customLogs = data.requests
-                    .filter(log => log.type === 'custom' || log.type === 'webhook')
+                    .filter(log => {
+                        const isSystemLog = (log.type === 'custom' || log.type === 'webhook') || 
+                                          (log.uri === '/api/system_log') || 
+                                          (log.extra_info && log.extra_info.message);
+                        return isSystemLog;
+                    })
                     .map(log => {
                         // 解析後端日誌格式
                         let message = '';
                         let type = 'info';
                         
-                        // 檢查 extra_info 中的 message 和 type
+                        // 優先檢查 extra_info 中的 message 和 type（系統日誌的正確格式）
                         if (log.extra_info && log.extra_info.message) {
                             message = log.extra_info.message;
                             type = log.extra_info.type || 'info';
                         } else if (log.message) {
                             message = log.message;
                             type = 'info';
+                        } else if (log.uri === '/api/system_log') {
+                            // 如果是系統日誌API但沒有message，跳過
+                            return null;
                         } else {
                             message = log.uri || '';
                             type = log.status >= 400 ? 'error' : (log.status >= 300 ? 'warning' : 'info');
@@ -1447,7 +1455,8 @@ function updateSystemLogsFromBackend() {
                             message: message,
                             type: type
                         };
-                    });
+                    })
+                    .filter(log => log !== null); // 過濾掉null值
                 
                 // 合併本地和後端日誌，保留最新的100條
                 if (customLogs.length > 0) {
@@ -1472,13 +1481,12 @@ function updateSystemLogsFromBackend() {
                         // 保留最新的100條記錄
                         systemLogs = allLogs.slice(-100);
                         updateSystemLogsDisplay();
-                        console.log('同步後端系統日誌成功，新增', newLogs.length, '條日誌');
                     }
                 }
             }
         })
         .catch(error => {
-            console.error('同步後端系統日誌失敗：', error);
+            // 靜默處理錯誤，不影響前端功能
         });
 }
 
@@ -2255,6 +2263,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // 啟動系統日誌同步（從後端拉取）
     updateSystemLogsFromBackend();
     setInterval(updateSystemLogsFromBackend, 5000); // 每5秒同步一次後端系統日誌
+    
     
     // 移除了不必要的系統啟動日誌
     

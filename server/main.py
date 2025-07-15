@@ -22,13 +22,57 @@ import openpyxl
 from openpyxl.styles import Alignment, PatternFill, Font
 from openpyxl.utils import get_column_letter
 
+# ========================== 美化輸出系統 ==========================
+
+def format_console_output(category, status, message, detail=None):
+    """
+    統一的後端輸出格式化函數
+    category: 分類 (SYSTEM, API, TRADE, TG, TUNNEL 等)
+    status: 狀態 (SUCCESS, ERROR, WARNING, INFO, START, STOP)
+    message: 主要訊息
+    detail: 詳細信息 (可選)
+    """
+    # 狀態圖標和顏色
+    status_icons = {
+        'SUCCESS': '',
+        'ERROR': '', 
+        'WARNING': '',
+        'INFO': '',
+        'START': '',
+        'STOP': '',
+        'LOADING': '',
+        'TRADE': '',
+        'MONEY': ''
+    }
+    
+    # 格式化分類 (8個字符寬度，左對齊)
+    formatted_category = f"[{category:<7}]"
+    
+    # 格式化狀態 (8個字符寬度)
+    icon = status_icons.get(status, '')
+    formatted_status = f"{status:<8}"
+    
+    # 主要輸出
+    output = f"{formatted_category} {formatted_status} │ {message}"
+    
+    # 如果有詳細信息，添加第二行
+    if detail:
+        padding = " " * (len(formatted_category) + len(formatted_status) + 3)
+        output += f"\n{padding}│ {detail}"
+    
+    return output
+
+def print_console(category, status, message, detail=None):
+    """便捷的格式化輸出函數"""
+    print(format_console_output(category, status, message, detail))
+
 # 導入 Tunnel
 try:
     from tunnel import CloudflareTunnel, TunnelManager
     CLOUDFLARE_TUNNEL_AVAILABLE = True
 except ImportError:
     CLOUDFLARE_TUNNEL_AVAILABLE = False
-    print("警告: Tunnel 模組未找到")
+    print_console("SYSTEM", "WARNING", "Tunnel 模組未找到")
 
 # 導入 BTC 模組
 try:
@@ -36,7 +80,7 @@ try:
     BTC_MODULE_AVAILABLE = True
 except ImportError:
     BTC_MODULE_AVAILABLE = False
-    print("警告: BTC 模組未找到")
+    print_console("SYSTEM", "WARNING", "BTC 模組未找到")
 
 # 永豐API相關
 try:
@@ -47,10 +91,10 @@ try:
 except ImportError as e:
     if 'shioaji' in str(e):
         SHIOAJI_AVAILABLE = False
-        print("警告: shioaji 模組未安裝，永豐API功能將無法使用")
+        print_console("SYSTEM", "WARNING", "shioaji 模組未安裝，永豐API功能將無法使用")
     if 'dotenv' in str(e):
         DOTENV_AVAILABLE = False
-        print("警告: python-dotenv 模組未安裝")
+        print_console("SYSTEM", "WARNING", "python-dotenv 模組未安裝")
     try:
         import shioaji as sj
         SHIOAJI_AVAILABLE = True
@@ -199,7 +243,7 @@ def log_request():
         request.tunnel_type = identify_tunnel_type(host)
         
     except Exception as e:
-        print(f"記錄請求開始時間失敗: {e}")
+        print_console("SYSTEM", "ERROR", "記錄請求開始時間失敗", str(e))
 
 @app.after_request
 def log_response(response):
@@ -236,7 +280,7 @@ def log_response(response):
             )
         
     except Exception as e:
-        print(f"記錄請求響應失敗: {e}")
+        print_console("SYSTEM", "ERROR", "記錄請求響應失敗", str(e))
     
     return response
 
@@ -415,11 +459,11 @@ def init_tunnel_service(mode="temporary"):
             tunnel_manager = TunnelManager()
             # 為保持向後兼容，創建TX隧道作為默認隧道服務
             tunnel_service = tunnel_manager.create_tunnel('tx', mode)
-            print(f"已初始化隧道管理器 (模式: {mode})")
+            print_console("TUNNEL", "SUCCESS", f"已初始化隧道管理器 (模式: {mode})")
         else:
-            print("警告: Cloudflare Tunnel 不可用，請檢查模組")
+            print_console("TUNNEL", "WARNING", "Cloudflare Tunnel 不可用，請檢查模組")
     except Exception as e:
-        print(f"初始化隧道管理器失敗: {e}")
+        print_console("TUNNEL", "ERROR", "初始化隧道管理器失敗", str(e))
         tunnel_manager = None
         tunnel_service = None
 
@@ -434,7 +478,7 @@ def start_cloudflare_tunnel():
     
     try:
         if not tunnel_service:
-            print("Cloudflare Tunnel 服務未初始化")
+            print_console("TUNNEL", "WARNING", "Cloudflare Tunnel 服務未初始化")
             tunnel_status = "error"
             return False
         
@@ -444,13 +488,13 @@ def start_cloudflare_tunnel():
         # 根據模式決定啟動方式
         if tunnel_service.mode == 'temporary':
             # 臨時模式：直接啟動，無需token
-            print("使用臨時域名模式，無需token")
+            print_console("TUNNEL", "INFO", "使用臨時域名模式，無需token")
             success = tunnel_service.start_tunnel()
         else:
             # 其他模式：需要token
             token_file = os.path.join(os.path.dirname(__file__), 'config', 'cloudflare_token.txt')
             if not os.path.exists(token_file):
-                print("未找到 Cloudflare Token，請先設定")
+                print_console("TUNNEL", "WARNING", "未找到 Cloudflare Token，請先設定")
                 tunnel_status = "error"
                 return False
             
@@ -458,7 +502,7 @@ def start_cloudflare_tunnel():
                 token = f.read().strip()
             
             if not token:
-                print("Cloudflare Token 為空，請先設定")
+                print_console("TUNNEL", "WARNING", "Cloudflare Token 為空，請先設定")
                 tunnel_status = "error"
                 return False
                 
@@ -467,15 +511,15 @@ def start_cloudflare_tunnel():
         
         if success:
             tunnel_status = "running"
-            print("Cloudflare Tunnel 啟動成功!")
+            print_console("TUNNEL", "SUCCESS", "Cloudflare Tunnel 啟動成功!")
         else:
             tunnel_status = "error"
-            print("Cloudflare Tunnel 啟動失敗!")
+            print_console("TUNNEL", "ERROR", "Cloudflare Tunnel 啟動失敗!")
         
         return success
         
     except Exception as e:
-        print(f"啟動 Cloudflare Tunnel 失敗: {e}")
+        print_console("TUNNEL", "ERROR", "啟動 Cloudflare Tunnel 失敗", str(e))
         tunnel_status = "error"
         return False
 
@@ -500,7 +544,7 @@ def stop_cloudflare_tunnel():
         tunnel_status = "stopped"
         return True
     except Exception as e:
-        print(f"停止 Cloudflare Tunnel 失敗: {e}")
+        print_console("TUNNEL", "ERROR", "停止 Cloudflare Tunnel 失敗", str(e))
         return False
 
 def get_tunnel_status():
@@ -693,7 +737,7 @@ def get_tunnel_requests():
                         }
                     })
         except Exception as e:
-            print(f"獲取 Cloudflare Tunnel 記錄失敗: {e}")
+            print_console("TUNNEL", "ERROR", "獲取 Cloudflare Tunnel 記錄失敗", str(e))
     
     # 為自定義記錄添加來源標識
     for log in custom_logs:
@@ -704,15 +748,42 @@ def get_tunnel_requests():
     
     # 按時間戳排序（最新的在前）
     try:
-        all_logs.sort(key=lambda x: x.get('timestamp', ''), reverse=True)
+        def parse_timestamp_for_sort(timestamp_str):
+            """解析時間戳用於排序"""
+            if not timestamp_str:
+                return datetime.min
+            try:
+                # 移除 CST 後綴
+                clean_timestamp = timestamp_str.replace(' CST', '')
+                # 嘗試解析完整時間戳
+                if len(clean_timestamp) > 10:  # 有日期部分
+                    return datetime.strptime(clean_timestamp, '%Y-%m-%d %H:%M:%S.%f')
+                else:  # 只有時分秒，使用今天的日期
+                    today = datetime.now().date()
+                    time_part = datetime.strptime(clean_timestamp, '%H:%M:%S.%f').time()
+                    return datetime.combine(today, time_part)
+            except:
+                return datetime.min
+        
+        all_logs.sort(key=lambda x: parse_timestamp_for_sort(x.get('timestamp', '')), reverse=True)
     except:
         # 如果排序失敗，保持原順序
         pass
     
-    # 限制總記錄數
+    # 優先保留系統日誌，然後限制總記錄數
     max_logs = 100
     if len(all_logs) > max_logs:
-        all_logs = all_logs[:max_logs]
+        # 分別提取系統日誌和其他日誌
+        system_logs = [log for log in all_logs if log.get('uri') == '/api/system_log']
+        other_logs = [log for log in all_logs if log.get('uri') != '/api/system_log']
+        
+        # 限制其他日誌數量，優先保留系統日誌
+        max_other_logs = max_logs - len(system_logs)
+        if max_other_logs > 0:
+            other_logs = other_logs[:max_other_logs]
+        
+        # 重新合併，系統日誌在前
+        all_logs = system_logs + other_logs
     
     return all_logs
 
@@ -1047,7 +1118,7 @@ def api_tunnel_requests_by_type(tunnel_type):
         else:
             return jsonify([])
     except Exception as e:
-        print(f"獲取{tunnel_type}隧道請求日誌失敗: {e}")
+        print_console("TUNNEL", "ERROR", f"獲取{tunnel_type}隧道請求日誌失敗", str(e))
         return jsonify([])
 
 @app.route('/api/tunnel/<tunnel_type>/status', methods=['GET'])
@@ -1183,13 +1254,13 @@ def unified_webhook(system):
             
             # 自動識別訊號類型
             if is_btc_signal(data):
-                print("自動識別為BTC訊號")
+                print_console("WEBHOOK", "INFO", "自動識別為BTC訊號")
                 if BTC_MODULE_AVAILABLE:
                     return btcmain.btc_webhook()
                 else:
                     return jsonify({'success': False, 'message': 'BTC模組不可用'})
             else:
-                print("自動識別為TX訊號")
+                print_console("WEBHOOK", "INFO", "自動識別為TX訊號")
                 return tradingview_webhook_tx()
                 
         except json.JSONDecodeError:
@@ -1225,17 +1296,17 @@ def tradingview_webhook_tx():
     
     client_ip = request.remote_addr
     # 暫時不進行IP限制，但記錄來源IP
-    print(f"客戶端IP: {client_ip}")
+    print_console("WEBHOOK", "INFO", f"客戶端IP: {client_ip}")
     
     try:
         raw = request.data.decode('utf-8')
         current_time = datetime.now().strftime('%Y/%m/%d %H:%M:%S')
-        print(f"=== [{current_time}] 收到TradingView Webhook請求 (TX) ===")
-        print(f"原始數據: {raw}")
+        print_console("WEBHOOK", "INFO", f"[{current_time}] 收到TradingView Webhook請求 (TX)")
+        print_console("WEBHOOK", "INFO", "原始數據", raw)
         
         # 檢查無效訊號
         if '{{strategy.order.alert_message}}' in raw or not raw.strip():
-            print("警告: 無效訊號")
+            print_console("WEBHOOK", "WARNING", "無效訊號")
             # 記錄失敗的請求
             add_custom_request_log('POST', '/webhook', 400, {
                 'reason': '無效訊號',
@@ -1251,7 +1322,7 @@ def tradingview_webhook_tx():
         
         # 重複訊號檢查（優化功能）
         if is_duplicate_signal(signal_id, action, contract_code):
-            print(f"忽略重複訊號: {signal_id}")
+            print_console("WEBHOOK", "WARNING", f"忽略重複訊號: {signal_id}")
             add_custom_request_log('POST', '/webhook', 200, {
                 'reason': '重複訊號已忽略',
                 'signal_id': signal_id,
@@ -1262,15 +1333,15 @@ def tradingview_webhook_tx():
         
         # 轉倉邏輯檢查
         if process_rollover_signal(data):
-            print(f"轉倉模式: 處理訊號 {signal_id}")
+            print_console("TRADE", "INFO", f"轉倉模式: 處理訊號 {signal_id}")
             # 在轉倉模式下，強制使用次月合約
             data['rollover_mode'] = True
         
         # 重複訊號檢查
         with global_lock:
-            print(f"檢查重複訊號: recent_signals={recent_signals}")
+            print_console("WEBHOOK", "INFO", f"檢查重複訊號: recent_signals={recent_signals}")
             if signal_id in recent_signals:
-                print(f"警告: 重複訊號 {signal_id}，忽略")
+                print_console("WEBHOOK", "WARNING", f"重複訊號 {signal_id}，忽略")
                 # 記錄重複訊號
                 add_custom_request_log('POST', '/webhook', 400, {
                     'reason': '重複訊號',
@@ -1320,7 +1391,7 @@ def tradingview_webhook_tx():
         
     except Exception as e:
         error_msg = str(e)
-        print(f"TX Webhook 處理錯誤：{error_msg}")
+        print_console("WEBHOOK", "ERROR", "TX Webhook 處理錯誤", error_msg)
         import traceback
         traceback.print_exc()
         
@@ -1463,6 +1534,54 @@ def api_generate_btc_monthly_report():
     else:
         return jsonify({'success': False, 'message': 'BTC模組不可用'})
 
+@app.route('/api/btc/manual/order', methods=['POST'])
+def api_btc_manual_order():
+    """BTC手動下單API"""
+    if BTC_MODULE_AVAILABLE:
+        try:
+            data = request.get_json()
+            if not data:
+                return jsonify({'success': False, 'message': '無效的請求數據'})
+            
+            # 解析下單參數
+            symbol = data.get('symbol', 'BTCUSDT')
+            side = data.get('side', 'BUY')  # BUY 或 SELL
+            quantity = float(data.get('quantity', 0.001))
+            order_type = data.get('order_type', 'MARKET')  # MARKET 或 LIMIT
+            price = float(data.get('price', 0)) if data.get('price') else None
+            reduce_only = data.get('reduce_only', False)  # True為平倉，False為開倉
+            
+            # 執行手動下單
+            order_result = btcmain.place_btc_futures_order(
+                symbol=symbol,
+                side=side,
+                quantity=quantity,
+                price=price,
+                order_type=order_type,
+                reduce_only=reduce_only,
+                is_manual=True  # 標記為手動交易
+            )
+            
+            if order_result and order_result.get('success'):
+                return jsonify({
+                    'success': True,
+                    'message': 'BTC手動下單成功',
+                    'order': order_result
+                })
+            else:
+                return jsonify({
+                    'success': False,
+                    'message': order_result.get('message', 'BTC手動下單失敗')
+                })
+                
+        except Exception as e:
+            return jsonify({
+                'success': False,
+                'message': f'BTC手動下單失敗: {str(e)}'
+            })
+    else:
+        return jsonify({'success': False, 'message': 'BTC模組不可用'})
+
 @app.route('/api/ngrok/status', methods=['GET'])
 def api_ngrok_status():
     """獲取ngrok狀態 API (保持兼容性)"""
@@ -1482,6 +1601,7 @@ def api_ngrok_requests():
                 latency_info = tunnel_service.get_latency()
             except Exception as e:
                 print(f"獲取延遲信息失敗: {e}")
+        
         
         return jsonify({
             'requests': requests_data,
@@ -1864,7 +1984,7 @@ def api_sinopac_auto_update():
         import os
         
         # 執行pip更新
-        print("開始自動更新shioaji...")
+        print_console("SYSTEM", "LOADING", "開始自動更新shioaji...")
         result = subprocess.run(
             [sys.executable, '-m', 'pip', 'install', '--upgrade', 'shioaji'],
             capture_output=True,
@@ -1948,9 +2068,25 @@ def api_futures_contracts():
                     
                     available_contracts[code] = available_list
                     
-                    # 選用合約（第一個，即最近交割日）
+                    # 選用合約：轉倉模式下使用次月合約，否則使用最近交割日合約
                     if sorted_contracts:
-                        selected_contract = sorted_contracts[0]
+                        # 調試信息：顯示轉倉模式狀態
+                        print_console("DEBUG", "INFO", f"=== API {code}合約選擇 ===")
+                        print_console("DEBUG", "INFO", f"rollover_mode={rollover_mode}")
+                        print_console("DEBUG", "INFO", f"next_month_contracts中有{code}={bool(next_month_contracts.get(code))}")
+                        if next_month_contracts.get(code):
+                            print_console("DEBUG", "INFO", f"次月{code}合約: {next_month_contracts[code].code}")
+                        print_console("DEBUG", "INFO", f"當月{code}合約: {sorted_contracts[0].code}")
+                        
+                        # 在轉倉模式下，優先使用次月合約
+                        if rollover_mode and next_month_contracts.get(code):
+                            selected_contract = next_month_contracts[code]
+                            print_console("DEBUG", "SUCCESS", f"API選擇: {code} 使用次月合約 {selected_contract.code}")
+                        else:
+                            selected_contract = sorted_contracts[0]
+                            reason = "非轉倉模式" if not rollover_mode else "無次月合約"
+                            print_console("DEBUG", "INFO", f"API選擇: {code} 使用當月合約 {selected_contract.code} ({reason})")
+                        
                         contract_name = '大台' if code == 'TXF' else '小台' if code == 'MXF' else '微台'
                         margin = margin_requirements.get(contract_name, 0)
                         
@@ -1964,7 +2100,7 @@ def api_futures_contracts():
                     selected_contracts[code] = '-'
                     
             except Exception as e:
-                print(f"獲取{code}合約失敗: {e}")
+                print_console("API", "ERROR", f"獲取{code}合約失敗", str(e))
                 available_contracts[code] = []
                 selected_contracts[code] = '-'
         
@@ -1975,7 +2111,7 @@ def api_futures_contracts():
         })
         
     except Exception as e:
-        print(f"獲取期貨合約資訊失敗: {e}")
+        print_console("API", "ERROR", "獲取期貨合約資訊失敗", str(e))
         return jsonify({
             'status': 'error',
             'selected_contracts': {
@@ -2109,7 +2245,7 @@ def api_trading_status():
                         if check_date in holidays:
                             return holidays[check_date]
             except Exception as e:
-                print(f"讀取假期檔案失敗: {e}")
+                print_console("SYSTEM", "ERROR", "讀取假期檔案失敗", str(e))
                 pass
             
             # 未在假期表中的工作日視為交易日
@@ -2158,12 +2294,12 @@ def api_trading_status():
                                 except ValueError:
                                     continue
                     except Exception as e:
-                        print(f"檢查{code}合約交割日失敗: {e}")
+                        print_console("TRADE", "ERROR", f"檢查{code}合約交割日失敗", str(e))
                         continue
                 
                 return False
             except Exception as e:
-                print(f"檢查交割日失敗: {e}")
+                print_console("TRADE", "ERROR", "檢查交割日失敗", str(e))
                 return False
         
         # 執行判斷
@@ -2347,7 +2483,7 @@ def api_btc_system_log():
             btcmain.log_btc_system_message(message, log_type)
         
         # 後端日誌記錄
-        print(f"前端BTC系統日誌 [{log_type.upper()}]: {message}")
+        print_console("BTC", log_type.upper(), message)
         
         return jsonify({'status': 'success'})
     except Exception as e:
@@ -2519,7 +2655,7 @@ def get_port():
             
             return port, log_console
     except Exception as e:
-        print(f"讀取設置失敗: {e}，使用預設設置")
+        print_console("SYSTEM", "WARNING", "讀取設置失敗，使用預設設置", str(e))
         return 5000, 0
 
 # 獲取當前端口和日誌設置
@@ -2546,9 +2682,9 @@ def start_webview():
             if hwnd:
                 # 隱藏命令行視窗
                 ctypes.windll.user32.ShowWindow(hwnd, 0)  # SW_HIDE = 0
-                print("已隱藏命令行視窗，程式在背景執行")
+                print_console("SYSTEM", "INFO", "已隱藏命令行視窗，程式在背景執行")
         except Exception as e:
-            print(f"隱藏命令行視窗失敗: {e}")
+            print_console("SYSTEM", "ERROR", "隱藏命令行視窗失敗", str(e))
     
     # 創建webview視窗
     window = webview.create_window(
@@ -2562,7 +2698,7 @@ def start_webview():
     
     # 綁定視窗關閉事件
     def on_window_closing():
-        print("視窗關閉中，正在清理資源...")
+        print_console("SYSTEM", "INFO", "視窗關閉中，正在清理資源...")
         cleanup_on_exit()
         # 確保程式完全退出
         os._exit(0)
@@ -2582,14 +2718,14 @@ def init_sinopac_api():
     global sinopac_api
     try:
         if not SHIOAJI_AVAILABLE:
-            print("shioaji模組未安裝，無法初始化永豐API")
+            print_console("API", "WARNING", "shioaji模組未安裝，無法初始化永豐API")
             return False
             
         sinopac_api = sj.Shioaji()
-        print("永豐API對象創建成功")
+        print_console("API", "SUCCESS", "永豐API對象創建成功")
         return True
     except Exception as e:
-        print(f"初始化永豐API失敗: {e}")
+        print_console("API", "ERROR", "初始化永豐API失敗", str(e))
         sinopac_api = None
         return False
 
@@ -2605,13 +2741,18 @@ def update_futures_contracts():
         for code in ['TXF', 'MXF', 'TMF']:
             contracts = sinopac_api.Contracts.Futures.get(code)
             if contracts:
-                # 選擇最近的交割日期合約
+                # 根據轉倉模式選擇合約
                 sorted_contracts = sorted(contracts, key=lambda x: x.delivery_date)
-                futures_contracts[code] = sorted_contracts[0]
+                if rollover_mode and next_month_contracts.get(code):
+                    futures_contracts[code] = next_month_contracts[code]
+                    print_console("DEBUG", "SUCCESS", f"更新{code}期貨合約: 使用次月合約 {futures_contracts[code].code}")
+                else:
+                    futures_contracts[code] = sorted_contracts[0]
+                    print_console("DEBUG", "INFO", f"更新{code}期貨合約: 使用當月合約 {futures_contracts[code].code}")
         
         return True
     except Exception as e:
-        print(f"更新期貨合約失敗: {e}")
+        print_console("API", "ERROR", "更新期貨合約失敗", str(e))
         return False
 
 def update_margin_requirements_from_api():
@@ -2644,7 +2785,7 @@ def update_margin_requirements_from_api():
         
         return False
     except Exception as e:
-        print(f"更新保證金失敗: {e}")
+        print_console("API", "ERROR", "更新保證金失敗", str(e))
         return False
 
 def order_callback(state, deal, order=None):
@@ -2664,13 +2805,6 @@ def order_callback(state, deal, order=None):
             order_id = deal.get('order', {}).get('id', '未知').strip()
             contract_code = deal.get('contract', {}).get('code', '')
         
-        # 調試信息
-        print(f"=== order_callback 調試 ===")
-        print(f"state: {state}")
-        print(f"order_id: '{order_id}'")
-        print(f"contract_code: '{contract_code}'")
-        print(f"order_octype_map keys: {list(order_octype_map.keys())}")
-        print(f"order_octype_map: {order_octype_map}")
         
         # 取得合約名稱
         contract_name = get_contract_name_from_code(contract_code)
@@ -2766,13 +2900,6 @@ def order_callback(state, deal, order=None):
         price_type = octype_info['price_type']
         is_manual = octype_info.get('is_manual', False)
         
-        # 調試信息
-        print(f"=== order_callback 調試 ===")
-        print(f"octype: '{octype}'")
-        print(f"direction: '{direction}'")
-        print(f"order_type: '{order_type}'")
-        print(f"price_type: '{price_type}'")
-        print(f"is_manual: {is_manual}")
         
         # 獲取訂單數量和操作信息
         qty = deal.get('order', {}).get('quantity', 0)
@@ -2912,7 +3039,9 @@ def order_callback(state, deal, order=None):
                     if delivery_month and len(delivery_month) == 6:
                         year = int(delivery_month[:4])
                         month = int(delivery_month[4:6])
-                        delivery_date = f"{year}/{month:02d}/16"
+                        # 計算該月的第三個星期三（台指期貨交割日）
+                        third_wednesday = get_third_wednesday(year, month)
+                        delivery_date = f"{year}/{month:02d}/{third_wednesday:02d}"
                     else:
                         # 如果沒有delivery_month，從全域合約對象獲取
                         if contract_code.startswith('TXF') and contract_txf:
@@ -2972,7 +3101,7 @@ def order_callback(state, deal, order=None):
                 except:
                     pass
                 
-                # 發送提交成功通知
+                # 發送提交成功通知（延遲2秒，避免與上一筆成交通知重疊）
                 msg = get_formatted_order_message(
                     is_success=True,
                     order_id=order_id,
@@ -2987,7 +3116,13 @@ def order_callback(state, deal, order=None):
                     contract_code=full_contract_code or contract_code,
                     delivery_date=delivery_date
                 )
-                send_telegram_message(msg)
+                
+                # 延遲2秒發送提交成功通知，避免與其他通知重疊
+                def delayed_submit_notification():
+                    time.sleep(2)
+                    send_telegram_message(msg)
+                
+                threading.Thread(target=delayed_submit_notification, daemon=True).start()
         
     except Exception as e:
         print(f"回調函數處理失敗: {e}")
@@ -3007,12 +3142,33 @@ def handle_futures_deal_callback(deal, octype_info):
         current_time = datetime.now().strftime('%Y/%m/%d %H:%M')
         
         # 修正：確保使用正確的訂單資訊
-        # 如果octype_info中有完整的訂單資訊，優先使用
+        # 優先使用實際成交的訂單資訊，回退到映射中的資訊
         octype = octype_info.get('octype', 'New')
         direction = octype_info.get('direction', 'Sell')
-        order_type = octype_info.get('order_type', 'IOC')
-        price_type = octype_info.get('price_type', 'MKT')
+        
+        # 成交通知應該顯示實際成交的訂單類型
+        # 檢查deal對象中是否有實際的訂單類型資訊
+        if hasattr(deal, 'order') and deal.order:
+            # 使用實際成交的訂單資訊
+            actual_order = deal.order
+            if hasattr(actual_order, 'order_type'):
+                order_type = str(actual_order.order_type)
+            else:
+                order_type = octype_info.get('order_type', 'IOC')
+            
+            if hasattr(actual_order, 'price_type'):
+                price_type = str(actual_order.price_type)
+            else:
+                price_type = octype_info.get('price_type', 'MKT')
+        else:
+            # 回退到映射中的資訊
+            order_type = octype_info.get('order_type', 'IOC')
+            price_type = octype_info.get('price_type', 'MKT')
+        
         is_manual = octype_info.get('is_manual', False)
+        
+        # 調試信息：顯示成交通知使用的訂單資訊
+        print_console("DEBUG", "INFO", f"成交通知資訊: 合約={contract_name}, 方向={direction}, 價格類型={price_type}, 訂單類型={order_type}, 手動={is_manual}")
         
         # 獲取完整合約代碼和交割日期用於成交通知
         full_contract_code = None
@@ -3022,28 +3178,31 @@ def handle_futures_deal_callback(deal, octype_info):
             if contract_code.startswith('TXF') and contract_txf:
                 full_contract_code = contract_txf.code
                 if hasattr(contract_txf, 'delivery_date'):
-                    if hasattr(contract_txf.delivery_date, 'strftime'):
-                        delivery_date_for_deal = contract_txf.delivery_date.strftime('%Y/%m/%d')
-                    else:
-                        delivery_date_for_deal = str(contract_txf.delivery_date)
+                    delivery_date_for_deal = format_delivery_date(contract_txf.delivery_date)
             elif contract_code.startswith('MXF') and contract_mxf:
                 full_contract_code = contract_mxf.code
                 if hasattr(contract_mxf, 'delivery_date'):
-                    if hasattr(contract_mxf.delivery_date, 'strftime'):
-                        delivery_date_for_deal = contract_mxf.delivery_date.strftime('%Y/%m/%d')
-                    else:
-                        delivery_date_for_deal = str(contract_mxf.delivery_date)
+                    delivery_date_for_deal = format_delivery_date(contract_mxf.delivery_date)
             elif contract_code.startswith('TMF') and contract_tmf:
                 full_contract_code = contract_tmf.code
                 if hasattr(contract_tmf, 'delivery_date'):
-                    if hasattr(contract_tmf.delivery_date, 'strftime'):
-                        delivery_date_for_deal = contract_tmf.delivery_date.strftime('%Y/%m/%d')
-                    else:
-                        delivery_date_for_deal = str(contract_tmf.delivery_date)
+                    delivery_date_for_deal = format_delivery_date(contract_tmf.delivery_date)
+            
+            # 如果無法獲取交割日期，嘗試從 delivery_month 計算
+            if not delivery_date_for_deal:
+                # 從其他來源獲取 delivery_month 或其他交割日期信息
+                if hasattr(deal, 'contract') and hasattr(deal.contract, 'delivery_month'):
+                    delivery_month = deal.contract.delivery_month
+                    if delivery_month and len(delivery_month) == 6:
+                        year = int(delivery_month[:4])
+                        month = int(delivery_month[4:6])
+                        # 計算該月的第三個星期三（台指期貨交割日）
+                        third_wednesday = get_third_wednesday(year, month)
+                        delivery_date_for_deal = f"{year}/{month:02d}/{third_wednesday:02d}"
         except:
             pass
         
-        # 記錄成交成功日誌
+        # 記錄成交成功日誌（延遲5秒，與TG通知同步）
         log_message = get_simple_order_log_message(
             contract_name=contract_name,
             direction=direction,
@@ -3056,14 +3215,19 @@ def handle_futures_deal_callback(deal, octype_info):
             order_type=order_type,
             price_type=price_type
         )
-        try:
-            requests.post(
-                f'http://127.0.0.1:{CURRENT_PORT}/api/system_log',
-                json={'message': log_message, 'type': 'success'},
-                timeout=5
-            )
-        except:
-            pass
+        
+        def delayed_log():
+            time.sleep(5)
+            try:
+                requests.post(
+                    f'http://127.0.0.1:{CURRENT_PORT}/api/system_log',
+                    json={'message': log_message, 'type': 'success'},
+                    timeout=5
+                )
+            except:
+                pass
+        
+        threading.Thread(target=delayed_log, daemon=True).start()
         
         # 發送成交通知 - 使用正確的訂單資訊，延遲5秒發送
         msg = get_formatted_trade_message(
@@ -3534,7 +3698,7 @@ def login_sinopac():
         # 初始化TXserver風格的合約對象
         init_contracts()
         
-        print("永豐API 登入成功！！！")
+        print_console("API", "SUCCESS", "永豐API 登入成功!!!")
         return True
         
     except Exception as e:
@@ -3542,7 +3706,7 @@ def login_sinopac():
         sinopac_login_status = False
         sinopac_account = None
         sinopac_login_time = None
-        print(f"永豐API 登入失敗！！！ 錯誤：{str(e)}")
+        print_console("API", "ERROR", "永豐API 登入失敗!!!", str(e))
         return False
 
 def check_api_health():
@@ -3556,13 +3720,13 @@ def check_api_health():
         # 嘗試獲取帳戶餘額來測試API連接性
         balance = sinopac_api.account_balance()
         if balance is not None:
-            print(f"API健康檢查正常 - 餘額: {balance}")
+            print_console("API", "SUCCESS", f"API健康檢查正常 - 餘額: {balance}")
             return True
         else:
-            print("API健康檢查失敗 - 無法獲取帳戶餘額")
+            print_console("API", "WARNING", "API健康檢查失敗 - 無法獲取帳戶餘額")
             return False
     except Exception as e:
-        print(f"API健康檢查失敗 - 錯誤: {str(e)}")
+        print_console("API", "ERROR", "API健康檢查失敗", str(e))
         return False
 
 def save_order_mapping():
@@ -3639,11 +3803,11 @@ def logout_sinopac():
         with global_lock:
             order_octype_map.clear()
         
-        print("永豐API登出成功！！！")
+        print_console("API", "SUCCESS", "永豐API登出成功!!!")
         return True
         
     except Exception as e:
-        print(f"永豐API登出失敗: {e}")
+        print_console("API", "ERROR", "永豐API登出失敗", str(e))
         sinopac_connected = False
         sinopac_login_status = False
         sinopac_account = None
@@ -3670,7 +3834,7 @@ def start_auto_logout_timer():
         global sinopac_connected, sinopac_login_status, is_reconnecting
         
         if sinopac_connected and sinopac_login_status:
-            print(f"目前連線已滿{AUTO_LOGOUT_HOURS}個小時，將自動登出並重新登入！")
+            print_console("API", "WARNING", f"目前連線已滿{AUTO_LOGOUT_HOURS}個小時，將自動登出並重新登入!")
             
             # 發送前端系統日誌
             try:
@@ -3690,7 +3854,7 @@ def start_auto_logout_timer():
             
             # 重新登入
             if login_sinopac():
-                print("12小時自動重新登入成功！")
+                print_console("API", "SUCCESS", "12小時自動重新登入成功!")
                 # 發送前端系統日誌
                 try:
                     requests.post(
@@ -3701,7 +3865,7 @@ def start_auto_logout_timer():
                 except:
                     pass
             else:
-                print("12小時自動重新登入失敗！")
+                print_console("API", "ERROR", "12小時自動重新登入失敗!")
                 # 發送前端系統日誌
                 try:
                     requests.post(
@@ -3720,7 +3884,7 @@ def start_auto_logout_timer():
     auto_logout_timer.daemon = True
     auto_logout_timer.start()
     
-    print(f"已啟動{AUTO_LOGOUT_HOURS}小時自動登出定時器，將於 {logout_time.strftime('%Y-%m-%d %H:%M:%S')} 自動登出")
+    print_console("SYSTEM", "INFO", f"已啟動{AUTO_LOGOUT_HOURS}小時自動登出定時器，將於 {logout_time.strftime('%Y-%m-%d %H:%M:%S')} 自動登出")
 
 def stop_auto_logout_timer():
     """停止自動登出定時器"""
@@ -3729,7 +3893,7 @@ def stop_auto_logout_timer():
     if auto_logout_timer and auto_logout_timer.is_alive():
         auto_logout_timer.cancel()
         auto_logout_timer = None
-        print("已停止自動登出定時器")
+        print_console("SYSTEM", "INFO", "已停止自動登出定時器")
 
 def get_connection_duration():
     """獲取當前連線時長（小時）"""
@@ -3788,11 +3952,11 @@ def cleanup_on_exit():
         # 關閉隧道服務
         try:
             if tunnel_service:
-                print("正在關閉隧道服務...")
+                print_console("TUNNEL", "STOP", "正在關閉隧道服務...")
                 tunnel_service.stop_tunnel()
-                print("隧道服務已關閉")
+                print_console("TUNNEL", "SUCCESS", "隧道服務已關閉")
         except Exception as e:
-            print(f"關閉隧道服務時發生錯誤: {e}")
+            print_console("TUNNEL", "ERROR", "關閉隧道服務時發生錯誤", str(e))
         
         # 永豐API登出（靜默）
         if sinopac_api and sinopac_connected:
@@ -3822,7 +3986,7 @@ def cleanup_on_exit():
         except Exception as e:
             pass  # 靜默處理錯誤
     
-    print("清理工作完成")
+    print_console("SYSTEM", "SUCCESS", "清理工作完成")
 
 def signal_handler(signum, frame):
     """信號處理函數"""
@@ -3889,9 +4053,9 @@ def schedule_next_check():
         # 設定BTC每日交易統計 23:59 (24/7無交易日限制，統計後會自動延遲生成日報和月報)
         schedule.every().day.at("23:59").do(lambda: btcmain.check_btc_daily_trading_statistics())
         
-        print("已設定BTC定時任務：")
-        print("  - 08:00: BTC每日啟動通知")
-        print("  - 23:59: BTC每日交易統計 (統計後延遲30秒生成日報，月末再延遲30秒生成月報)")
+        print_console("SYSTEM", "SUCCESS", "已設定BTC定時任務")
+        print_console("SYSTEM", "INFO", "  - 08:00: BTC每日啟動通知")
+        print_console("SYSTEM", "INFO", "  - 23:59: BTC每日交易統計 (統計後延遲30秒生成日報，月末再延遲30秒生成月報)")
     
     # 設定今天下午 14:50 的夜盤檢查
     schedule.every().day.at("14:50").do(check_night_session_notification)
@@ -3902,10 +4066,10 @@ def schedule_next_check():
     # 設定星期六早上 05:00 的交易統計檢查（週六夜盤統計）
     schedule.every().saturday.at("05:00").do(check_saturday_trading_statistics)
     
-    print(f"已排程下一次啟動通知檢查：{tomorrow.strftime('%Y-%m-%d')} 08:45")
-    print(f"已排程下一次夜盤通知檢查：{datetime.now().strftime('%Y-%m-%d')} 14:50")
-    print(f"已排程下一次交易統計檢查：{datetime.now().strftime('%Y-%m-%d')} 23:59")
-    print(f"已排程週六交易統計檢查：每週六 05:00")
+    print_console("SYSTEM", "INFO", f"已排程下一次啟動通知檢查：{tomorrow.strftime('%Y-%m-%d')} 08:45")
+    print_console("SYSTEM", "INFO", f"已排程下一次夜盤通知檢查：{datetime.now().strftime('%Y-%m-%d')} 14:50")
+    print_console("SYSTEM", "INFO", f"已排程下一次交易統計檢查：{datetime.now().strftime('%Y-%m-%d')} 23:59")
+    print_console("SYSTEM", "INFO", "已排程週六交易統計檢查：每週六 05:00")
 
 def start_notification_checker():
     """啟動通知檢查器"""
@@ -3991,15 +4155,25 @@ def send_daily_startup_notification():
         ]
         
         for code, contract_name in contract_order:
-            contract_info = selected_contracts.get(code, '-')
-            if contract_info != '-':
-                # 解析合約資訊
-                parts = contract_info.split('　')
-                code_part = parts[0]
-                delivery_part = parts[1].replace('交割日：', '')
-                margin_part = parts[2].replace('保證金 $', '').replace(',', '')
-                
-                message += f"{contract_name} {code_part} ({delivery_part}) ${int(margin_part):,}\n"
+            # 在轉倉模式下，優先使用次月合約資訊
+            if rollover_mode and next_month_contracts.get(code):
+                next_contract = next_month_contracts[code]
+                code_part = next_contract.code
+                delivery_part = format_delivery_date(next_contract.delivery_date)
+                # 獲取次月合約的保證金
+                margin = margin_requirements.get(contract_name.replace('指', ''), 0)
+                message += f"{contract_name} {code_part} ({delivery_part}) ${margin:,}\n"
+            else:
+                # 使用常規選用合約
+                contract_info = selected_contracts.get(code, '-')
+                if contract_info != '-':
+                    # 解析合約資訊
+                    parts = contract_info.split('　')
+                    code_part = parts[0]
+                    delivery_part = parts[1].replace('交割日：', '')
+                    margin_part = parts[2].replace('保證金 $', '').replace(',', '')
+                    
+                    message += f"{contract_name} {code_part} ({delivery_part}) ${int(margin_part):,}\n"
         
         message += "═════ 帳戶狀態 ═════\n"
         message += f"權益總值：{format_number_for_notification(account_data.get('權益總值', 0))}\n"
@@ -4050,8 +4224,27 @@ def send_daily_startup_notification():
         response = requests.post(url, json=payload, timeout=10)
         response.raise_for_status()
         
+        # 記錄系統日誌
+        try:
+            requests.post(
+                f'http://127.0.0.1:{CURRENT_PORT}/api/system_log',
+                json={'message': '每日啟動通知發送成功', 'type': 'success'},
+                timeout=5
+            )
+        except:
+            pass
+        
     except Exception as e:
         print(f"發送每日啟動通知失敗: {e}")
+        # 記錄錯誤日誌
+        try:
+            requests.post(
+                f'http://127.0.0.1:{CURRENT_PORT}/api/system_log',
+                json={'message': f'每日啟動通知發送失敗: {str(e)[:50]}', 'type': 'error'},
+                timeout=5
+            )
+        except:
+            pass
 
 def check_margin_changes():
     """檢查保證金是否有變更"""
@@ -4098,13 +4291,14 @@ def generate_trading_report(trades, account_data, position_data, cover_trades, t
         for col in range(1, 12):
             ws.column_dimensions[get_column_letter(col)].width = 19
             
-        # 設置灰色背景和置中對齊
+        # 設置藍色和灰色背景、置中對齊
+        blue_fill = PatternFill(start_color='B8CCE4', end_color='B8CCE4', fill_type='solid')
         gray_fill = PatternFill(start_color='D9D9D9', end_color='D9D9D9', fill_type='solid')
         center_alignment = Alignment(horizontal='center', vertical='center')
         
-        # 交易總覽區塊
+        # 交易總覽區塊（四大區塊用藍色）
         ws['A1'] = '交易總覽'
-        ws['A1'].fill = gray_fill
+        ws['A1'].fill = blue_fill
         ws['A1'].alignment = center_alignment
         
         # 交易總覽標題（橫向）
@@ -4124,10 +4318,10 @@ def generate_trading_report(trades, account_data, position_data, cover_trades, t
         ws['F3'] = f"＄{format_number_for_notification(contract_pnl['MXF'])} TWD"
         ws['G3'] = f"＄{format_number_for_notification(contract_pnl['TMF'])} TWD"
         
-        # 帳戶狀態區塊
+        # 帳戶狀態區塊（四大區塊用藍色）
         current_row = 5
         ws[f'A{current_row}'] = '帳戶狀態'
-        ws[f'A{current_row}'].fill = gray_fill
+        ws[f'A{current_row}'].fill = blue_fill
         ws[f'A{current_row}'].alignment = center_alignment
         
         # 帳戶狀態標題（橫向）
@@ -4150,7 +4344,7 @@ def generate_trading_report(trades, account_data, position_data, cover_trades, t
             else:
                 ws[f'{col}{current_row + 2}'] = format_number_for_notification(value)
         
-        # 交易明細區塊
+        # 交易明細區塊（四大區塊用藍色）
         current_row += 4
         ws[f'A{current_row}'] = '交易明細'
         ws[f'A{current_row}'].fill = blue_fill
@@ -4207,7 +4401,7 @@ def generate_trading_report(trades, account_data, position_data, cover_trades, t
                 ws[f'J{row}'] = trade['cover_price']
                 ws[f'K{row}'] = f"＄{trade['pnl']:,} TWD" if trade['pnl'] != 0 else ''
         
-        # 持倉狀態區塊
+        # 持倉狀態區塊（四大區塊用藍色）
         current_row = current_row + (len(cover_trades) if cover_trades else 0) + 3
         ws[f'A{current_row}'] = '持倉狀態'
         ws[f'A{current_row}'].fill = blue_fill
@@ -4290,6 +4484,19 @@ def generate_trading_report(trades, account_data, position_data, cover_trades, t
         
     except Exception as e:
         print(f"生成交易日報失敗: {e}")
+        import traceback
+        traceback.print_exc()
+        
+        # 記錄錯誤到系統日誌
+        try:
+            requests.post(
+                f'http://127.0.0.1:{CURRENT_PORT}/api/system_log',
+                json={'message': f"交易日報生成失敗：{str(e)[:100]}", 'type': 'error'},
+                timeout=5
+            )
+        except:
+            pass
+        
         return False
 
 def send_margin_change_notification(changes):
@@ -4538,8 +4745,9 @@ def generate_monthly_trading_report():
         for col in range(1, 12):
             ws.column_dimensions[get_column_letter(col)].width = 19
         
-        # 設置藍色背景和置中對齊
+        # 設置藍色和灰色背景、置中對齊
         blue_fill = PatternFill(start_color='B8CCE4', end_color='B8CCE4', fill_type='solid')
+        gray_fill = PatternFill(start_color='D9D9D9', end_color='D9D9D9', fill_type='solid')
         center_alignment = Alignment(horizontal='center', vertical='center')
         
         # 交易總覽區塊
@@ -4562,6 +4770,7 @@ def generate_monthly_trading_report():
         for i, (title, value) in enumerate(zip(titles, values), 2):
             ws[f'A{i}'] = title
             ws[f'A{i}'].alignment = center_alignment
+            ws[f'A{i}'].fill = gray_fill  # 標題使用灰色背景
             ws[f'B{i}'] = value
         
         # 帳戶狀態區塊
@@ -4576,6 +4785,7 @@ def generate_monthly_trading_report():
             row = current_row + i + 1
             ws[f'A{row}'] = title
             ws[f'A{row}'].alignment = center_alignment
+            ws[f'A{row}'].fill = gray_fill  # 標題使用灰色背景
             
             value = monthly_data['account_data'][title]
             if title == '風險指標':
@@ -4598,6 +4808,7 @@ def generate_monthly_trading_report():
             col = get_column_letter(i + 1)
             ws[f'{col}{current_row + 1}'] = title
             ws[f'{col}{current_row + 1}'].alignment = center_alignment
+            ws[f'{col}{current_row + 1}'].fill = gray_fill  # 標題使用灰色背景
         
         # 收集所有平倉交易
         all_cover_trades = []
@@ -4670,6 +4881,7 @@ def generate_monthly_trading_report():
             col = get_column_letter(i + 1)
             ws[f'{col}{current_row + 1}'] = title
             ws[f'{col}{current_row + 1}'].alignment = center_alignment
+            ws[f'{col}{current_row + 1}'].fill = gray_fill  # 標題使用灰色背景
         
         # 讀取最後一天的持倉狀態
         latest_position_data = None
@@ -4958,7 +5170,6 @@ def send_daily_trading_statistics():
     except Exception as e:
         print(f"發送每日交易統計失敗: {e}")
 
-# 測試功能已移除
 
 @app.route('/api/manual/order', methods=['POST'])
 def manual_order():
@@ -4990,14 +5201,6 @@ def manual_order():
         action_param = data.get('action', None)  # Buy或Sell（永豐官方參數）
         octype_param = data.get('octype', None)  # New或Cover（永豐官方參數）
         
-        # 調試信息
-        print(f"=== 手動下單參數調試 ===")
-        print(f"原始數據: {data}")
-        print(f"所有參數:")
-        for key, value in data.items():
-            print(f"  {key}: '{value}'")
-        print(f"is_manual: True")
-        print(f"永豐官方參數: action='{action_param}', octype='{octype_param}'")
         
         # 驗證必要欄位
         if not action_param or not octype_param:
@@ -5212,17 +5415,29 @@ def process_signal(data):
         if not contract_txf:
             txf_contracts = sinopac_api.Contracts.Futures.get("TXF")
             if txf_contracts:
-                contract_txf = sorted(txf_contracts, key=lambda x: x.delivery_date)[0]
+                sorted_contracts = sorted(txf_contracts, key=lambda x: x.delivery_date)
+                if rollover_mode and next_month_contracts.get('TXF'):
+                    contract_txf = next_month_contracts['TXF']
+                else:
+                    contract_txf = sorted_contracts[0]
                 
         if not contract_mxf:
             mxf_contracts = sinopac_api.Contracts.Futures.get("MXF")
             if mxf_contracts:
-                contract_mxf = sorted(mxf_contracts, key=lambda x: x.delivery_date)[0]
+                sorted_contracts = sorted(mxf_contracts, key=lambda x: x.delivery_date)
+                if rollover_mode and next_month_contracts.get('MXF'):
+                    contract_mxf = next_month_contracts['MXF']
+                else:
+                    contract_mxf = sorted_contracts[0]
                 
         if not contract_tmf:
             tmf_contracts = sinopac_api.Contracts.Futures.get("TMF")
             if tmf_contracts:
-                contract_tmf = sorted(tmf_contracts, key=lambda x: x.delivery_date)[0]
+                sorted_contracts = sorted(tmf_contracts, key=lambda x: x.delivery_date)
+                if rollover_mode and next_month_contracts.get('TMF'):
+                    contract_tmf = next_month_contracts['TMF']
+                else:
+                    contract_tmf = sorted_contracts[0]
         
         print(f"當前合約: TXF={contract_txf.code if contract_txf else None}, "
               f"MXF={contract_mxf.code if contract_mxf else None}, "
@@ -5584,15 +5799,15 @@ def place_futures_order_tx_style(contract, quantity, direction, price, order_typ
             order_type=order_type,
             price_type=price_type
         )
-        # 前端系統日誌（已移除顯示）
-        # try:
-        #     requests.post(
-        #         f'http://127.0.0.1:{CURRENT_PORT}/api/system_log',
-        #         json={'message': log_message, 'type': 'success'},
-        #         timeout=5
-        #     )
-        # except:
-        #     pass
+        # 前端系統日誌
+        try:
+            requests.post(
+                f'http://127.0.0.1:{CURRENT_PORT}/api/system_log',
+                json={'message': log_message, 'type': 'success'},
+                timeout=5
+            )
+        except:
+            pass
         
         # 訂單提交成功 - 不需要立即發送通知，等callback處理
         print(f"訂單提交成功: {order_id} - {contract_name} {quantity}口 {direction}")
@@ -5697,6 +5912,14 @@ def init_contracts():
             
         print("[init_contracts] 合約對象初始化完成")
         
+        # 合約對象初始化完成後，立即執行轉倉狀態檢查
+        print_console("SYSTEM", "INFO", "合約對象初始化完成，執行轉倉狀態檢查...")
+        try:
+            check_rollover_mode()
+            print_console("SYSTEM", "SUCCESS", "轉倉狀態檢查完成")
+        except Exception as check_error:
+            print_console("SYSTEM", "ERROR", "轉倉狀態檢查失敗", str(check_error))
+        
     except Exception as e:
         print(f"[init_contracts] 初始化合約對象失敗: {e}")
         contract_txf = None
@@ -5717,35 +5940,20 @@ def place_futures_order(contract_code, quantity, direction, price=0, is_manual=F
     order_type: 單別 (ROD/IOC/FOK)
     """
     try:
-        # 調試信息
-        print(f"=== place_futures_order 調試 ===")
-        print(f"contract_code: '{contract_code}'")
-        print(f"quantity: {quantity}")
-        print(f"direction: '{direction}'")
-        print(f"price: {price}")
-        print(f"is_manual: {is_manual}")
-        print(f"position_type: '{position_type}'")
-        print(f"price_type: '{price_type}'")
-        print(f"order_type: '{order_type}'")
         # 獲取合約資訊
         contracts = sinopac_api.Contracts.Futures.get(contract_code)
         if not contracts:
             raise Exception(f'無法獲取{contract_code}合約資訊')
         
-        # 選擇最近月份的合約（按到期日排序）
-        target_contract = sorted(contracts, key=lambda x: x.delivery_date)[0]  # 使用最近月合約
+        # 根據轉倉模式選擇合約
+        if rollover_mode and next_month_contracts.get(contract_code):
+            target_contract = next_month_contracts[contract_code]
+            print_console("DEBUG", "SUCCESS", f"轉倉模式: 使用次月{contract_code}合約 {target_contract.code}")
+        else:
+            # 使用最近月份的合約（按到期日排序）
+            target_contract = sorted(contracts, key=lambda x: x.delivery_date)[0]
+            print_console("DEBUG", "INFO", f"一般模式: 使用當月{contract_code}合約 {target_contract.code}")
         
-        # 判斷交易動作 - 修正邏輯
-        print(f"=== 動作判斷調試 ===")
-        print(f"direction: '{direction}'")
-        print(f"position_type: '{position_type}'")
-        print(f"is_manual: {is_manual}")
-        
-        # 參數處理邏輯
-        print(f"=== 參數處理調試 ===")
-        print(f"direction: '{direction}'")
-        print(f"position_type: '{position_type}'")
-        print(f"is_manual: {is_manual}")
         
         # 永豐手動下單：使用永豐官方參數格式
         if is_manual:
@@ -5897,9 +6105,6 @@ def place_futures_order(contract_code, quantity, direction, price=0, is_manual=F
         
         # 建立訂單映射資訊（關鍵：參考TXserver.py架構）
         # 使用已確定的final_action和final_octype
-        print(f"=== 訂單映射調試 ===")
-        print(f"使用 final_action: {final_action}")
-        print(f"使用 final_octype: {final_octype}")
         
         # 修正：將永豐API常數轉換為字符串
         direction_str = 'Buy' if final_action == sj.constant.Action.Buy else 'Sell'
@@ -6019,6 +6224,12 @@ def send_telegram_message(message, log_type="info"):
                 log_message = "Telegram ［API連線異常］訊息發送成功！！！"
             elif "API連線成功" in message or "API重新連線成功" in message:
                 log_message = "Telegram ［API連線成功］訊息發送成功！！！"
+            elif "交易統計" in message:
+                log_message = "Telegram ［交易統計］訊息發送成功！！！"
+            elif "交易日報" in message or "交易月報" in message:
+                log_message = "Telegram ［報表通知］訊息發送成功！！！"
+            elif "保證金" in message or "轉倉" in message:
+                log_message = "Telegram ［系統通知］訊息發送成功！！！"
             else:
                 log_message = "Telegram 訊息發送成功！！！"
             
@@ -6037,6 +6248,17 @@ def send_telegram_message(message, log_type="info"):
             return True
         else:
             print(f"Telegram API 錯誤: {response.text}")
+            # 發送失敗也要記錄日誌
+            try:
+                error_log_message = f"Telegram 訊息發送失敗！錯誤代碼：{response.status_code}"
+                requests.post(
+                    f'http://127.0.0.1:{CURRENT_PORT}/api/system_log',
+                    json={'message': error_log_message, 'type': 'error'},
+                    timeout=5
+                )
+                print(f"TX系統錯誤日誌已發送: {error_log_message}")
+            except Exception as e:
+                print(f"發送TX系統錯誤日誌失敗: {e}")
             return False
             
     except Exception as e:
@@ -6129,13 +6351,36 @@ def get_sort_date(contract):
             return date_str.replace('-', '')
     return str(date_str)
 
+def get_third_wednesday(year, month):
+    """計算該月的第三個星期三（台指期貨交割日）"""
+    import calendar
+    
+    # 找到該月第一天是星期幾 (0=星期一, 6=星期日)
+    first_day = datetime(year, month, 1)
+    first_weekday = first_day.weekday()  # 0=星期一, 6=星期日
+    
+    # 找到第一個星期三 (星期三是weekday=2)
+    if first_weekday <= 2:  # 星期一、星期二、星期三
+        first_wednesday = 3 - first_weekday
+    else:  # 星期四到星期日
+        first_wednesday = 10 - first_weekday
+    
+    # 第三個星期三 = 第一個星期三 + 14天
+    third_wednesday = first_wednesday + 14
+    
+    return third_wednesday
+
 def format_delivery_date(delivery_date):
-    """格式化交割日期的公共函數"""
+    """格式化交割日期的公共函數，統一格式為 YYYY/MM/DD"""
     if isinstance(delivery_date, str):
         if len(delivery_date) == 8:  # YYYYMMDD
             return f"{delivery_date[:4]}/{delivery_date[4:6]}/{delivery_date[6:8]}"
         elif '-' in delivery_date:  # YYYY-MM-DD
             return delivery_date.replace('-', '/')
+        elif '/' in delivery_date:  # 已經是正確格式
+            return delivery_date
+    elif hasattr(delivery_date, 'strftime'):  # datetime 對象
+        return delivery_date.strftime('%Y/%m/%d')
     return str(delivery_date)
 
 # 轉倉相關函數
@@ -6156,15 +6401,38 @@ def get_next_month_contracts():
                     # 按交割日期排序
                     sorted_contracts = sorted(contracts, key=get_sort_date)
                     
-                    # 獲取第二個合約（次月合約）
-                    if len(sorted_contracts) >= 2:
-                        next_month_contracts[code] = sorted_contracts[1]
-                        print(f"次月{code}合約: {sorted_contracts[1].code}")
+                    # 調試信息：顯示所有合約及其交割日期
+                    print_console("DEBUG", "INFO", f"=== {code} 所有合約 ===")
+                    for i, contract in enumerate(sorted_contracts):
+                        delivery_date = format_delivery_date(contract.delivery_date)
+                        # 檢查合約代碼是否包含R1, R2等標識
+                        contract_suffix = contract.code[-2:] if len(contract.code) >= 2 else "??"
+                        print_console("DEBUG", "INFO", f"  [{i}] {contract.code} (後綴:{contract_suffix}) 交割日: {delivery_date}")
+                    
+                    # 優先使用R2合約作為次月合約，如果沒有R2則使用第二個合約
+                    next_month_contract = None
+                    
+                    # 方法1: 尋找R2合約
+                    for contract in sorted_contracts:
+                        if contract.code.endswith('R2'):
+                            next_month_contract = contract
+                            print_console("DEBUG", "SUCCESS", f"找到R2合約: {contract.code}")
+                            break
+                    
+                    # 方法2: 如果沒有R2合約，使用第二個合約
+                    if not next_month_contract and len(sorted_contracts) >= 2:
+                        next_month_contract = sorted_contracts[1]
+                        print_console("DEBUG", "INFO", f"使用第二個合約作為次月合約: {next_month_contract.code}")
+                    
+                    if next_month_contract:
+                        next_month_contracts[code] = next_month_contract
+                        selected_delivery = format_delivery_date(next_month_contract.delivery_date)
+                        print_console("DEBUG", "SUCCESS", f"次月{code}合約: {next_month_contract.code} 交割日: {selected_delivery}")
                     else:
-                        print(f"警告: {code}只有一個合約可用")
+                        print_console("DEBUG", "WARNING", f"{code}沒有可用的次月合約")
                         
             except Exception as e:
-                print(f"獲取{code}次月合約失敗: {e}")
+                print_console("DEBUG", "ERROR", f"獲取{code}次月合約失敗", str(e))
                 
         return next_month_contracts
         
@@ -6178,14 +6446,22 @@ def check_rollover_mode():
     
     try:
         today = datetime.now().date()
+        print_console("DEBUG", "INFO", f"=== 轉倉檢查開始 ===")
+        print_console("DEBUG", "INFO", f"當前日期: {today}")
+        print_console("DEBUG", "INFO", f"當前轉倉模式: {rollover_mode}")
         
         # 檢查當前合約的交割日
         current_contracts = [contract_txf, contract_mxf, contract_tmf]
         delivery_dates = []
         
+        print_console("DEBUG", "INFO", f"當前合約狀態: TXF={bool(contract_txf)}, MXF={bool(contract_mxf)}, TMF={bool(contract_tmf)}")
+        
         for contract in current_contracts:
             if contract and hasattr(contract, 'delivery_date'):
                 delivery_date_str = contract.delivery_date
+                contract_code = getattr(contract, 'code', 'Unknown')
+                print_console("DEBUG", "INFO", f"合約 {contract_code} 交割日字符串: {delivery_date_str}")
+                
                 if isinstance(delivery_date_str, str):
                     if len(delivery_date_str) == 8:  # YYYYMMDD
                         delivery_date = datetime.strptime(delivery_date_str, '%Y%m%d').date()
@@ -6196,6 +6472,8 @@ def check_rollover_mode():
                     else:
                         continue
                     delivery_dates.append(delivery_date)
+                    formatted_date = format_delivery_date(delivery_date_str)
+                    print_console("DEBUG", "INFO", f"合約 {contract_code} 解析後交割日: {formatted_date}")
         
         if delivery_dates:
             # 找到最近的交割日
@@ -6203,45 +6481,92 @@ def check_rollover_mode():
             # 轉倉開始日期 = 交割日前一天
             rollover_start = nearest_delivery - timedelta(days=1)
             
+            formatted_nearest = format_delivery_date(str(nearest_delivery))
+            formatted_rollover = format_delivery_date(str(rollover_start))
+            print_console("DEBUG", "INFO", f"最近交割日: {formatted_nearest}")
+            print_console("DEBUG", "INFO", f"轉倉開始日: {formatted_rollover}")
+            print_console("DEBUG", "INFO", f"比較: {today} >= {rollover_start} = {today >= rollover_start}")
+            
             # 檢查是否應該進入轉倉模式
             if today >= rollover_start:
                 if not rollover_mode:
                     rollover_mode = True
                     rollover_start_date = rollover_start
-                    print(f"進入轉倉模式，交割日: {nearest_delivery}")
+                    print_console("TRADE", "INFO", f"進入轉倉模式，交割日: {formatted_nearest}")
+                    print_console("DEBUG", "SUCCESS", f"轉倉模式已設置: rollover_mode={rollover_mode}")
                     
                     # 獲取次月合約
+                    print_console("DEBUG", "INFO", "開始獲取次月合約...")
                     get_next_month_contracts()
+                    print_console("DEBUG", "INFO", f"次月合約獲取完成，數量: {len(next_month_contracts)}")
                     
-                    # 發送轉倉通知
-                    rollover_message = f"交易系統將自動轉倉\n交割日: {nearest_delivery}\n下次開倉將使用次月合約！！！"
-                    send_telegram_message(rollover_message)
+                    # 顯示次月合約內容
+                    for code, contract in next_month_contracts.items():
+                        if contract:
+                            delivery_date = format_delivery_date(contract.delivery_date)
+                            print_console("DEBUG", "INFO", f"次月合約 {code}: {contract.code} (交割日: {delivery_date})")
+                else:
+                    print_console("DEBUG", "INFO", "已經處於轉倉模式，無需重複設置")
                     
-                    # 記錄轉倉通知到前端日誌
-                    try:
-                        requests.post(
-                            f'http://127.0.0.1:{CURRENT_PORT}/api/system_log',
-                            json={'message': f'自動轉倉交割日: {nearest_delivery}，下次開倉將使用次月合約！！！', 'type': 'warning'},
-                            timeout=5
-                        )
-                    except:
-                        pass
+                    # 系統重啟後的轉倉檢查，不發送通知（避免重複發送）
+                    # 因為轉倉通知應該只在定時檢查（00:05）時發送一次
+                    should_send_notification = False
+                    
+                    # 發送轉倉通知（僅在首次進入轉倉模式時）
+                    if should_send_notification:
+                        # 獲取次月合約的交割日期
+                        next_month_delivery = None
+                        if next_month_contracts:
+                            # 獲取任一次月合約的交割日期（所有合約交割日相同）
+                            for contract in next_month_contracts.values():
+                                if contract and hasattr(contract, 'delivery_date'):
+                                    next_month_delivery = format_delivery_date(contract.delivery_date)
+                                    break
+                        
+                        rollover_message = f"🔄 自動轉倉已啟動！！！\n本月合約交割日: {formatted_nearest}\n下次開倉將使用次月合約"
+                        if next_month_delivery:
+                            rollover_message += f"\n次月合約交割日：{next_month_delivery}"
+                        
+                        send_telegram_message(rollover_message)
+                        
+                        # 記錄轉倉通知到前端日誌
+                        try:
+                            log_message = f'［自動轉倉］本月合約: {formatted_nearest}，下次開倉將使用'
+                            if next_month_delivery:
+                                log_message += f'，次月合約：{next_month_delivery}'
+                            
+                            requests.post(
+                                f'http://127.0.0.1:{CURRENT_PORT}/api/system_log',
+                                json={'message': log_message, 'type': 'warning'},
+                                timeout=5
+                            )
+                        except:
+                            pass
+                    else:
+                        # 系統重啟後的轉倉檢查，不發送通知
+                        print_console("SYSTEM", "INFO", f"系統重啟後檢測到轉倉模式，交割日: {formatted_nearest}，不重複發送通知")
+                    
+                    # 通知前端更新選用合約顯示為次月合約
+                    print_console("SYSTEM", "INFO", "轉倉模式已啟動，前端合約顯示將切換至次月合約")
                     
                 return True
             else:
+                formatted_today = format_delivery_date(str(today))
+                print_console("DEBUG", "INFO", f"尚未到達轉倉時間 ({formatted_today} < {formatted_rollover})")
                 if rollover_mode:
                     rollover_mode = False
                     rollover_start_date = None
                     next_month_contracts.clear()
                     rollover_processed_signals.clear()
-                    print("退出轉倉模式")
+                    print_console("DEBUG", "INFO", "退出轉倉模式")
                     
                 return False
-                
-        return False
+        else:
+            print_console("DEBUG", "WARNING", "無可用的交割日期，無法進行轉倉檢查")
+            return False
         
     except Exception as e:
-        print(f"檢查轉倉模式失敗: {e}")
+        print_console("DEBUG", "ERROR", "檢查轉倉模式失敗", str(e))
         return False
 
 def get_contract_for_rollover(contract_type):
@@ -6322,7 +6647,7 @@ def start_rollover_checker():
     
     rollover_thread = threading.Thread(target=rollover_check_loop, daemon=True)
     rollover_thread.start()
-    print("轉倉檢查器已啟動（每天凌晨00:05檢查）")
+    print_console("SYSTEM", "SUCCESS", "轉倉檢查器已啟動（每天凌晨00:05檢查）")
 
 # 斷線重連相關函數
 def check_api_connection():
@@ -6428,7 +6753,7 @@ def start_connection_monitor():
     
     connection_thread = threading.Thread(target=connection_monitor_loop, daemon=True)
     connection_thread.start()
-    print("智能連線監控器已啟動（交易時間每1分鐘，非交易時間每10分鐘）")
+    print_console("SYSTEM", "SUCCESS", "智能連線監控器已啟動（交易時間每1分鐘，非交易時間每10分鐘）")
 
 def reconnect_api():
     """重連API"""
@@ -6896,11 +7221,11 @@ def start_tx_service():
     notification_sent_date = None
     
     # 顯示啟動設定
-    print(f"=== TX 期貨交易系統啟動 ===")
-    print(f"版本資訊: v1.3.11 (2025-07-12)")
-    print(f"端口設定: {CURRENT_PORT}")
-    print(f"日誌模式: {'背景執行' if LOG_CONSOLE == 0 else '正常顯示'}")
-    print(f"================================")
+    print_console("SYSTEM", "START", "=== TX 期貨交易系統啟動 ===")
+    print_console("SYSTEM", "INFO", "版本資訊: v1.3.11 (2025-07-12)")
+    print_console("SYSTEM", "INFO", f"端口設定: {CURRENT_PORT}")
+    print_console("SYSTEM", "INFO", f"日誌模式: {'背景執行' if LOG_CONSOLE == 0 else '正常顯示'}")
+    print_console("SYSTEM", "INFO", "================================")
     
     # 啟動時清理舊的交易記錄檔案
     cleanup_old_trade_files()
@@ -6908,6 +7233,7 @@ def start_tx_service():
     # 啟動時清理舊的BTC交易記錄檔案
     if BTC_MODULE_AVAILABLE:
         btcmain.cleanup_old_btc_trade_files()
+    
     
     # 加載訂單映射
     load_order_mapping()
@@ -6924,9 +7250,9 @@ def start_tx_service():
             with open(ENV_PATH, 'r', encoding='utf-8') as f:
                 content = f.read()
                 if 'LOGIN=0' not in content:
-                    print("LOGIN狀態重置失敗")
+                    print_console("SYSTEM", "ERROR", "LOGIN狀態重置失敗")
     except Exception as e:
-        print(f"重置LOGIN狀態時發生錯誤: {e}")
+        print_console("SYSTEM", "ERROR", "重置LOGIN狀態時發生錯誤", str(e))
     
     # 初始化永豐API
     init_sinopac_api()
@@ -6937,6 +7263,10 @@ def start_tx_service():
     # 啟動轉倉檢查器
     start_rollover_checker()
     
+    # 延遲執行轉倉檢查，等待合約對象初始化
+    # 在登入後會自動執行轉倉檢查，此處暫時移除
+    # print_console("SYSTEM", "INFO", "轉倉狀態檢查將在登入後自動執行")
+    
     # 啟動連線監控器
     start_connection_monitor()
     
@@ -6944,7 +7274,7 @@ def start_tx_service():
     # signal.signal(signal.SIGINT, signal_handler)
     # signal.signal(signal.SIGTERM, signal_handler)
     
-    print("TX交易服務初始化完成")
+    print_console("SYSTEM", "SUCCESS", "TX交易服務初始化完成")
 
 if __name__ == '__main__':
     try:

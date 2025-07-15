@@ -1,6 +1,93 @@
 # 開發者指南
 
-## 最新重大更新 (v1.4.0 - 2025-07-14)
+## 最新重大更新 (v1.4.1 - 2025-07-15)
+
+### 轉倉系統完整重構與代碼優化
+
+#### 轉倉邏輯核心架構
+
+**動態交割日計算**：
+```python
+def get_third_wednesday(year, month):
+    """動態計算每月第三個星期三（台灣期貨交割日）"""
+    first_day = datetime(year, month, 1)
+    first_weekday = first_day.weekday()
+    
+    if first_weekday <= 2:
+        first_wednesday = 3 - first_weekday
+    else:
+        first_wednesday = 10 - first_weekday
+    
+    third_wednesday = first_wednesday + 14
+    return third_wednesday
+```
+
+**智能R2合約檢測**：
+```python
+def get_next_month_contracts():
+    """優先尋找R2後綴合約，回退使用第二個合約"""
+    for code in ['TXF', 'MXF', 'TMF']:
+        contracts = sinopac_api.Contracts.Futures.get(code)
+        sorted_contracts = sorted(contracts, key=get_sort_date)
+        
+        # 方法1: 尋找R2合約
+        next_month_contract = None
+        for contract in sorted_contracts:
+            if contract.code.endswith('R2'):
+                next_month_contract = contract
+                break
+        
+        # 方法2: 如果沒有R2，使用第二個合約
+        if not next_month_contract and len(sorted_contracts) >= 2:
+            next_month_contract = sorted_contracts[1]
+```
+
+**統一合約選擇邏輯**：
+```python
+def get_contract_for_rollover(contract_type):
+    """所有交易函數的統一合約選擇邏輯"""
+    if not rollover_mode:
+        # 非轉倉模式：使用當前合約 (R1)
+        return current_contracts[contract_type]
+    
+    # 轉倉模式：使用次月合約 (R2)
+    next_month_contract = next_month_contracts.get(contract_type)
+    if next_month_contract:
+        return next_month_contract
+    else:
+        # 回退機制：使用當前合約
+        return current_contracts[contract_type]
+```
+
+#### 轉倉狀態管理系統
+
+**轉倉模式觸發機制**：
+```python
+def check_rollover_mode():
+    """檢查是否應該進入轉倉模式"""
+    today = datetime.now().date()
+    
+    # 計算當前合約交割日
+    delivery_date = 當月第三個星期三
+    rollover_start = delivery_date - timedelta(days=1)  # 交割前一天
+    
+    if today >= rollover_start:
+        if not rollover_mode:
+            rollover_mode = True
+            # 發送轉倉通知，獲取次月合約
+            send_rollover_notification()
+            get_next_month_contracts()
+```
+
+**統一函數更新範圍**：
+- `place_futures_order`：下單函數
+- `update_futures_contracts`：合約更新
+- `api_futures_contracts`：前端API
+- `process_entry_signal`：進場訊號處理
+- `process_exit_signal`：出場訊號處理
+- Webhook合約初始化邏輯
+
+## 前一版本更新 (v1.4.0 - 2025-07-14)
 
 ### BTC加密貨幣交易系統重大整合
 

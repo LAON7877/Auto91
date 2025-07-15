@@ -1,6 +1,17 @@
 # 文檔導航索引
 
-**最新版本：v1.4.0** - BTC加密貨幣交易系統重大整合 (2025-07-14)
+**最新版本：v1.4.1** - 轉倉系統完整重構與代碼優化 (2025-07-15)
+
+### 2025-07-15 重大更新內容
+- **轉倉系統完整重構**：移除所有硬編碼，實現完全動態的轉倉系統
+- **智能R2合約檢測**：優先使用R2後綴檢測，確保轉倉期間正確選擇次月合約
+- **統一合約選擇邏輯**：所有交易函數統一使用rollover_mode狀態進行合約選擇
+- **動態交割日計算**：基於台灣期貨第三個星期三交割規則，完全動態計算
+- **轉倉期間自動下單**：進場和出場訊號在轉倉期間自動使用次月R2合約
+- **代碼清理優化**：移除約50行測試和調試代碼，保持代碼簡潔高效
+- **轉倉通知時序**：分離Telegram通知發送時間，避免消息聚集問題
+
+**歷史版本：v1.4.0** - BTC加密貨幣交易系統重大整合 (2025-07-14)
 
 ### 2025-07-14 重大更新內容
 - **雙系統架構**：同時支援TX（永豐期貨）和BTC（幣安期貨）自動交易
@@ -49,14 +60,14 @@
 
 - 2025-07-06：轉倉/保證金前端日誌、日誌格式優化、顏色說明、細節修正。
 
-- [README.md](README.md) 系統概況與功能 **[v1.4.0 已更新]**
-- [QUICK_START.md](QUICK_START.md) 5 分鐘快速上手 **[v1.4.0 已更新]**
-- [API_REFERENCE.md](API_REFERENCE.md) API 技術參考 **[v1.4.0 已更新]**
-- [CHANGELOG.md](CHANGELOG.md) 版本變更紀錄 **[v1.4.0 已更新]**
-- [TROUBLESHOOTING.md](TROUBLESHOOTING.md) 故障排除 **[v1.4.0 已更新]**
-- [DEPLOYMENT.md](DEPLOYMENT.md) 生產部署指南 **[v1.4.0 已更新]**
-- [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md) 開發者指南 **[v1.4.0 已更新]**
-- [MAINTENANCE.md](MAINTENANCE.md) 維護運營指南 **[v1.4.0 已更新]**
+- [README.md](README.md) 系統概況與功能 **[v1.4.1 已更新]**
+- [QUICK_START.md](QUICK_START.md) 5 分鐘快速上手 **[v1.4.1 已更新]**
+- [API_REFERENCE.md](API_REFERENCE.md) API 技術參考 **[v1.4.1 已更新]**
+- [CHANGELOG.md](CHANGELOG.md) 版本變更紀錄 **[v1.4.1 已更新]**
+- [TROUBLESHOOTING.md](TROUBLESHOOTING.md) 故障排除 **[v1.4.1 已更新]**
+- [DEPLOYMENT.md](DEPLOYMENT.md) 生產部署指南 **[v1.4.1 已更新]**
+- [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md) 開發者指南 **[v1.4.1 已更新]**
+- [MAINTENANCE.md](MAINTENANCE.md) 維護運營指南 **[v1.4.1 已更新]**
 
 ## 重點功能文檔
 

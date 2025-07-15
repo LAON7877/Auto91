@@ -1,6 +1,98 @@
 # API 參考文檔
 
-## 最新更新 (v1.4.0 - 2025-07-14)
+## 最新更新 (v1.4.1 - 2025-07-15)
+
+### 轉倉系統完整重構與合約選擇優化
+
+#### 轉倉系統重構 API 端點
+**新增轉倉邏輯相關 API**
+```
+GET  /api/futures/contracts       - 取得當前合約資訊（支援轉倉邏輯）
+POST /api/futures/rollover_check  - 手動檢查轉倉狀態
+GET  /api/futures/rollover_status - 獲取轉倉狀態資訊
+```
+
+#### 動態交割日計算 API
+**交割日計算邏輯**
+```python
+def get_third_wednesday(year, month):
+    """計算指定年月的第三個星期三（台灣期貨交割日）"""
+    # 找到該月第一天是星期幾
+    first_day = datetime(year, month, 1)
+    # 計算第一個星期三
+    first_wednesday = first_day + timedelta(days=(2 - first_day.weekday()) % 7)
+    # 第三個星期三
+    third_wednesday = first_wednesday + timedelta(days=14)
+    return third_wednesday
+```
+
+#### 智能 R2 合約檢測 API
+**合約選擇優化邏輯**
+```python
+def get_next_month_contracts():
+    """取得次月合約，優先使用R2後綴檢測"""
+    # 方法1: 尋找R2合約
+    for contract in sorted_contracts:
+        if contract.code.endswith('R2'):
+            next_month_contract = contract
+            break
+    
+    # 方法2: 回退使用第二個合約
+    if not next_month_contract and len(sorted_contracts) >= 2:
+        next_month_contract = sorted_contracts[1]
+    
+    return next_month_contract
+```
+
+#### 統一轉倉選擇邏輯
+**所有交易函數統一使用 rollover_mode 判斷**
+```python
+# 函數更新範圍：
+- place_futures_order()        # 下單函數
+- update_futures_contracts()   # 合約更新
+- api_futures_contracts()      # API端點
+- process_entry_signal()       # 進場訊號
+- process_exit_signal()        # 出場訊號
+- webhook 合約初始化邏輯        # Webhook處理
+```
+
+#### 轉倉模式觸發機制
+**自動轉倉檢查**
+```python
+def check_rollover_mode():
+    """檢查並設置轉倉模式"""
+    # 觸發條件：當前日期 >= 交割日前一天
+    if current_date >= rollover_start_date:
+        if not rollover_mode:
+            rollover_mode = True
+            # 發送轉倉通知（避免重複）
+            if not rollover_notified:
+                send_rollover_notification()
+                rollover_notified = True
+```
+
+#### 轉倉期間 API 行為變更
+**合約選擇 API 回應格式**
+```json
+{
+  "status": "success",
+  "rollover_mode": true,
+  "current_contract": {
+    "code": "TXFR2",
+    "delivery_date": "2025/08/20",
+    "margin": 150000
+  },
+  "rollover_info": {
+    "is_rollover_period": true,
+    "rollover_start_date": "2025/08/19",
+    "next_month_contract": "TXFR2"
+  }
+}
+```
+
+---
+
+## 歷史更新 (v1.4.0 - 2025-07-14)
 
 ### BTC加密貨幣交易系統重大整合
 

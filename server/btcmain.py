@@ -547,7 +547,7 @@ def calculate_btc_quantity(signal_data, account_balance):
         print(f"計算BTC數量失敗: {e}")
         return 0.001  # 返回最小單位
 
-def place_btc_futures_order(symbol, side, quantity, price=None, order_type="MARKET"):
+def place_btc_futures_order(symbol, side, quantity, price=None, order_type="MARKET", reduce_only=False, is_manual=False):
     """BTC期貨下單"""
     global binance_client, btc_active_trades
     
@@ -555,9 +555,13 @@ def place_btc_futures_order(symbol, side, quantity, price=None, order_type="MARK
         if not binance_client:
             raise ValueError("BTC客戶端未初始化")
         
-        print(f"準備下BTC單: symbol={symbol}, side={side}, quantity={quantity}, type={order_type}")
+        # 判斷是開倉還是平倉
+        action_type = '平倉' if reduce_only else '開倉'
+        manual_type = '手動' if is_manual else '自動'
+        
+        print(f"準備下BTC單: symbol={symbol}, side={side}, quantity={quantity}, type={order_type}, action={action_type}")
         # 記錄到系統日誌
-        log_btc_system_message(f"準備下BTC單: {symbol} {side} {quantity} {order_type}", "info")
+        log_btc_system_message(f"準備{manual_type}{action_type}: {symbol} {side} {quantity} {order_type}", "info")
         
         # 執行下單
         result = binance_client.place_order(
@@ -573,8 +577,19 @@ def place_btc_futures_order(symbol, side, quantity, price=None, order_type="MARK
             client_order_id = result.get('clientOrderId')
             
             print(f"BTC訂單提交成功: OrderID={order_id}, ClientOrderID={client_order_id}")
-            # 記錄到系統日誌
-            log_btc_system_message(f"BTC訂單提交成功: OrderID={order_id}", "info")
+            
+            # 記錄詳細的訂單提交日誌（參考TX格式）
+            detailed_log = get_btc_order_log_message(
+                symbol=symbol,
+                side=side,
+                quantity=quantity,
+                price=price if order_type == 'LIMIT' else 0,
+                order_id=order_id,
+                order_type=order_type,
+                is_manual=is_manual,
+                action_type=action_type
+            )
+            log_btc_system_message(detailed_log, "info")
             
             # 記錄到活躍交易
             trade_record = {
@@ -584,6 +599,9 @@ def place_btc_futures_order(symbol, side, quantity, price=None, order_type="MARK
                 'side': side,
                 'quantity': quantity,
                 'order_type': order_type,
+                'is_manual': is_manual,
+                'action_type': action_type,
+                'reduce_only': reduce_only,
                 'status': result.get('status', 'NEW'),
                 'timestamp': datetime.now().isoformat()
             }
@@ -600,14 +618,22 @@ def place_btc_futures_order(symbol, side, quantity, price=None, order_type="MARK
             
             threading.Thread(target=check_fill_status, daemon=True).start()
             
-            return result
+            return {
+                'success': True,
+                'message': f'{manual_type}{action_type}成功',
+                'order_id': order_id,
+                'symbol': symbol,
+                'side': side,
+                'quantity': quantity,
+                'result': result
+            }
         else:
             raise Exception("下單返回空結果")
             
     except Exception as e:
         print(f"BTC下單失敗: {e}")
         # 記錄到系統日誌
-        log_btc_system_message(f"BTC下單失敗: {e}", "error")
+        log_btc_system_message(f"下單失敗: {e}", "error")
         # 發送提交失敗通知
         error_record = {
             'symbol': symbol,
@@ -616,7 +642,13 @@ def place_btc_futures_order(symbol, side, quantity, price=None, order_type="MARK
             'error': str(e)
         }
         send_btc_order_submit_notification(error_record, False)
-        return None
+        return {
+            'success': False,
+            'message': f'下單失敗: {str(e)}',
+            'symbol': symbol,
+            'side': side,
+            'quantity': quantity
+        }
 
 def check_btc_order_fill(order_id, symbol):
     """檢查BTC訂單成交狀態"""
@@ -644,6 +676,27 @@ def check_btc_order_fill(order_id, symbol):
                 
                 print(f"BTC訂單成交: OrderID={order_id}, 成交價={trade_record.get('fill_price')}")
                 
+                # 記錄成交日誌到系統日誌（參考TX格式）
+                fill_price = float(trade_record.get('fill_price', '0'))
+                fill_quantity = trade_record.get('fill_quantity', '0')
+                symbol = trade_record.get('symbol', 'BTCUSDT')
+                side = trade_record.get('side', 'BUY')
+                
+                # 生成詳細的成交日誌（使用保存的訂單信息）
+                detailed_fill_log = get_btc_order_log_message(
+                    symbol=symbol,
+                    side=side,
+                    quantity=fill_quantity,
+                    price=fill_price,
+                    order_id=order_id,
+                    order_type=trade_record.get('order_type', 'MARKET'),
+                    is_manual=trade_record.get('is_manual', False),
+                    action_type=trade_record.get('action_type', '開倉'),
+                    is_success=True  # 成交時使用成功格式
+                )
+                log_message = detailed_fill_log
+                log_btc_system_message(log_message, "success")
+                
                 # 發送成交通知
                 send_btc_trade_notification(trade_record)
                 
@@ -655,6 +708,14 @@ def check_btc_order_fill(order_id, symbol):
                 trade_record = btc_active_trades.get(order_id, {})
                 trade_record.update({'status': status})
                 print(f"BTC訂單失效: OrderID={order_id}, 狀態={status}")
+                
+                # 記錄失效日誌到系統日誌
+                symbol = trade_record.get('symbol', 'BTCUSDT')
+                side = trade_record.get('side', '未知')
+                quantity = trade_record.get('quantity', '0')
+                
+                log_message = f"BTC訂單失效：{symbol}｜{side}｜{quantity}｜狀態：{status}"
+                log_btc_system_message(log_message, "warning")
                 
         # 從活躍交易中移除已完成的訂單
         if order_id in btc_active_trades:
@@ -698,12 +759,14 @@ def process_btc_entry_signal(signal_data):
         # 計算交易數量
         quantity = calculate_btc_quantity(signal_data, usdt_balance)
         
-        # 執行下單
+        # 執行下單（webhook為自動交易，預設為開倉）
         order_result = place_btc_futures_order(
             symbol=symbol,
             side=side,
             quantity=quantity,
-            order_type='MARKET'
+            order_type='MARKET',
+            reduce_only=False,  # 開倉
+            is_manual=False     # 自動交易
         )
         
         return order_result
@@ -758,7 +821,9 @@ def process_btc_exit_signal(signal_data):
             symbol=symbol,
             side=side,
             quantity=quantity,
-            order_type='MARKET'
+            order_type='MARKET',
+            reduce_only=True,   # 平倉
+            is_manual=False     # 自動交易
         )
         
         return order_result
@@ -842,8 +907,11 @@ def cleanup_old_btc_trade_files():
         print(f"清理舊BTC交易記錄檔案失敗：{e}")
 
 def send_btc_telegram_message(message, chat_id=None, bot_token=None):
-    """發送BTC Telegram訊息"""
+    """發送BTC Telegram訊息（參考TX系統格式）"""
     try:
+        print(f"=== 準備發送BTC Telegram訊息 ===")
+        print(f"訊息內容:\n{message}")
+        
         # 載入BTC配置
         env_data = load_btc_env_data()
         
@@ -854,40 +922,153 @@ def send_btc_telegram_message(message, chat_id=None, bot_token=None):
         
         if not chat_id or not bot_token:
             print("BTC Telegram配置不完整，跳過通知")
+            log_btc_system_message("Telegram配置不完整", "error")
             return False
+        
+        print(f"BTC BOT_TOKEN: {bot_token[:10]}...")
+        print(f"BTC CHAT_ID: {chat_id}")
         
         url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
         payload = {
             'chat_id': chat_id,
             'text': message,
-            'parse_mode': 'Markdown'
+            'parse_mode': 'HTML'
         }
         
+        print(f"發送請求到 BTC Telegram API...")
         response = requests.post(url, json=payload, timeout=10)
         
+        print(f"BTC Telegram API 回應: {response.status_code}")
+        
         if response.status_code == 200:
-            print(f"BTC Telegram訊息發送成功")
-            # 記錄到系統日誌
-            log_btc_system_message(f"BTC Telegram訊息發送成功: {message[:50]}...", "info")
+            print("BTC Telegram 訊息發送成功！")
+            
+            # 根據訊息內容判斷發送狀態類型（參考TX系統）
+            if "訂單提交成功" in message or "提交成功" in message:
+                log_message = "Telegram ［提交成功］訊息發送成功！！！"
+            elif "訂單提交失敗" in message or "提交失敗" in message:
+                log_message = "Telegram ［提交失敗］訊息發送成功！！！"
+            elif "成交通知" in message or "訂單成交" in message:
+                log_message = "Telegram ［成交通知］訊息發送成功！！！"
+            elif "API連線異常" in message or "連線失敗" in message:
+                log_message = "Telegram ［API連線異常］訊息發送成功！！！"
+            elif "API連線成功" in message or "連線成功" in message:
+                log_message = "Telegram ［API連線成功］訊息發送成功！！！"
+            elif "交易統計" in message or "統計報告" in message:
+                log_message = "Telegram ［交易統計］訊息發送成功！！！"
+            elif "日報" in message or "月報" in message or "報表" in message:
+                log_message = "Telegram ［報表通知］訊息發送成功！！！"
+            elif "系統啟動" in message or "啟動通知" in message:
+                log_message = "Telegram ［系統通知］訊息發送成功！！！"
+            else:
+                log_message = "Telegram 訊息發送成功！！！"
+            
+            # 記錄到BTC系統日誌
+            log_type = 'warning' if 'API連線異常' in log_message else 'success'
+            log_btc_system_message(log_message, log_type)
+            print(f"BTC系統日誌已發送: {log_message}")
+            
             return True
         else:
-            print(f"BTC Telegram訊息發送失敗: {response.status_code} - {response.text}")
-            # 記錄到系統日誌
-            log_btc_system_message(f"BTC Telegram訊息發送失敗: {response.status_code}", "error")
+            print(f"BTC Telegram API 錯誤: {response.text}")
+            # 發送失敗也要記錄日誌
+            error_log_message = f"Telegram 訊息發送失敗！錯誤代碼：{response.status_code}"
+            log_btc_system_message(error_log_message, "error")
+            print(f"BTC系統錯誤日誌已發送: {error_log_message}")
             return False
             
     except Exception as e:
         print(f"發送BTC Telegram訊息失敗: {e}")
-        # 記錄到系統日誌
-        log_btc_system_message(f"發送BTC Telegram訊息異常: {e}", "error")
+        print(f"錯誤類型: {str(e.__class__.__name__)}")
+        if hasattr(e, 'response'):
+            print(f"回應內容: {e.response.text}")
+        import traceback
+        traceback.print_exc()
+        
+        # 記錄異常到系統日誌
+        error_log_message = f"Telegram 訊息發送異常：{str(e)[:100]}"
+        log_btc_system_message(error_log_message, "error")
         return False
+
+def get_btc_order_log_message(symbol, side, quantity, price, order_id, order_type, is_manual, action_type, is_success=False):
+    """生成BTC訂單日誌訊息（完全參考TX邏輯）"""
+    try:
+        # 簡化交易對名稱（對應TX的合約名稱）
+        if 'BTCUSDT' in symbol:
+            simple_symbol = 'BTC'
+        elif 'ETHUSDT' in symbol:
+            simple_symbol = 'ETH'
+        else:
+            simple_symbol = symbol.replace('USDT', '')
+        
+        # 判斷手動/自動（與TX一致）
+        manual_type = '手動' if is_manual else '自動'
+        
+        # 格式化價格（與TX邏輯一致）
+        if price == 0 or order_type == 'MARKET':
+            price_display = '市價'
+        else:
+            price_display = f'{price:,.1f}'
+        
+        # 格式化方向 - 完全遵循TX邏輯
+        if action_type == '開倉':
+            # 開倉：BUY=多單, SELL=空單（與TX NEW邏輯一致）
+            if str(side).upper() == 'BUY':
+                direction_display = '多單'
+            else:
+                direction_display = '空單'
+        elif action_type == '平倉':
+            # 平倉：BUY=平空單, SELL=平多單（與TX COVER邏輯一致）
+            if str(side).upper() == 'BUY':
+                direction_display = '空單'  # 平空單
+            else:
+                direction_display = '多單'  # 平多單
+        else:
+            # 備援邏輯（與TX一致）
+            if str(side).upper() == 'BUY':
+                direction_display = '多單'
+            else:
+                direction_display = '空單'
+        
+        # 格式化訂單類型和價格類型（與TX一致）
+        order_type_display = order_type or 'MARKET'
+        
+        # 組合訂單類型顯示（與TX邏輯一致）
+        if order_type_display.upper() == 'MARKET':
+            order_info = f"市價 ({order_type_display})"
+        else:
+            order_info = f"限價 ({order_type_display})"
+        
+        # 返回格式（與TX格式完全一致）
+        if is_success:
+            # 成交成功格式
+            return f"{action_type}成功：{simple_symbol}｜{direction_display}｜{quantity}｜＄{price_display}｜{order_info}"
+        else:
+            # 掛單格式
+            return f"{manual_type}{action_type}：{simple_symbol}｜{direction_display}｜{quantity}｜＄{price_display}｜{order_info}"
+            
+    except Exception as e:
+        print(f"生成BTC日誌訊息失敗: {e}")
+        return f"日誌生成失敗: {order_id}"
 
 def log_btc_system_message(message, log_type="info"):
     """記錄BTC系統日誌到前端"""
     try:
+        # 動態獲取當前端口
+        import os
+        current_port = 5000  # 預設端口
+        try:
+            # 嘗試從主模組獲取當前端口
+            import main
+            if hasattr(main, 'CURRENT_PORT'):
+                current_port = main.CURRENT_PORT
+        except:
+            pass
+            
+        # 使用BTC專用的日誌端點，避免混淆TX系統日誌
         requests.post(
-            'http://127.0.0.1:5000/api/system_log',
-            json={'message': f"[BTC] {message}", 'type': log_type},
+            f'http://127.0.0.1:{current_port}/api/btc_system_log',
+            json={'message': message, 'type': log_type},
             timeout=5
         )
     except:
@@ -1352,9 +1533,26 @@ def get_btc_trading_status():
             can_withdraw = account_info.get('canWithdraw', False)
             can_deposit = account_info.get('canDeposit', False)
             
+            # 獲取交易平台信息
+            exchange_name = "未知"
+            try:
+                exchange_info = binance_client.get_exchange_info()
+                if exchange_info and isinstance(exchange_info, dict):
+                    # 檢查回應是否包含正確的交易所信息
+                    if 'timezone' in exchange_info and 'serverTime' in exchange_info:
+                        exchange_name = "Binance Futures"
+                    elif exchange_info.get('symbols'):  # 或者檢查是否有symbols列表
+                        exchange_name = "Binance Futures"
+                    else:
+                        exchange_name = "Binance Futures"  # 只要API有回應就認為連線成功
+            except Exception as e:
+                print(f"獲取交易所信息失敗: {e}")
+                exchange_name = "Binance Futures"  # 既然API連線正常，就顯示Binance Futures
+            
             return jsonify({
                 'success': True,
                 'status': 'connected',
+                'exchange_name': exchange_name,
                 'can_trade': can_trade,
                 'can_withdraw': can_withdraw,
                 'can_deposit': can_deposit,
@@ -1412,8 +1610,16 @@ def send_btc_daily_startup_notification():
         if binance_client:
             try:
                 exchange_info = binance_client.get_exchange_info()
-                if exchange_info and 'exchangeInfo' in str(exchange_info):
-                    exchange_name = "Binance Futures"  # 如果API可用，使用正式的名稱
+                if exchange_info and isinstance(exchange_info, dict):
+                    # 檢查回應是否包含正確的交易所信息
+                    if 'timezone' in exchange_info and 'serverTime' in exchange_info:
+                        exchange_name = "Binance Futures"
+                    elif exchange_info.get('symbols'):  # 或者檢查是否有symbols列表
+                        exchange_name = "Binance Futures"
+                    else:
+                        exchange_name = "Binance Futures"  # 只要API有回應就認為連線成功
+                else:
+                    exchange_name = "未知"
             except Exception as e:
                 print(f"獲取交易所信息失敗: {e}")
                 exchange_name = "未知"
@@ -1512,218 +1718,206 @@ def send_btc_daily_startup_notification():
         print(f"發送BTC每日啟動通知失敗: {e}")
 
 def generate_btc_trading_report():
-    """生成BTC交易日報 - 保存到根目錄"""
+    """生成BTC交易日報 - 參考TX格式"""
     try:
         import openpyxl
         from openpyxl.styles import Alignment, PatternFill, Font
         from openpyxl.utils import get_column_letter
         
-        current_date = datetime.now().strftime('%Y-%m-%d')
-        report_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        # 創建BTC交易日報目錄（與TX並列）
+        report_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'BTC交易日報')
+        os.makedirs(report_dir, exist_ok=True)
         
-        # 創建工作簿
+        # 創建工作簿和工作表
         wb = openpyxl.Workbook()
         ws = wb.active
-        ws.title = f"BTC交易日報_{current_date}"
         
-        # 設置標題樣式
-        header_font = Font(bold=True, size=14)
-        header_fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
-        center_alignment = Alignment(horizontal="center", vertical="center")
+        # 設置所有欄寬為19（與TX一致）
+        for col in range(1, 12):
+            ws.column_dimensions[get_column_letter(col)].width = 19
+            
+        # 設置藍色和灰色背景、置中對齊（與TX一致）
+        blue_fill = PatternFill(start_color='B8CCE4', end_color='B8CCE4', fill_type='solid')
+        gray_fill = PatternFill(start_color='D9D9D9', end_color='D9D9D9', fill_type='solid')
+        center_alignment = Alignment(horizontal='center', vertical='center')
         
-        # 報告標題
-        ws.merge_cells('A1:H1')
-        ws['A1'] = f"BTC期貨交易日報 - {current_date}"
-        ws['A1'].font = Font(bold=True, size=16)
-        ws['A1'].alignment = center_alignment
-        ws['A1'].fill = PatternFill(start_color="E7E6E6", end_color="E7E6E6", fill_type="solid")
-        
-        # 帳戶資訊區塊
-        row = 3
-        ws[f'A{row}'] = "帳戶資訊"
-        ws[f'A{row}'].font = header_font
-        ws[f'A{row}'].fill = header_fill
-        ws.merge_cells(f'A{row}:H{row}')
-        
-        row += 1
-        if binance_client:
-            try:
-                # 獲取帳戶資訊
-                account_data = binance_client.get_account_info()
-                balance_data = binance_client.get_balance()
-                position_data = binance_client.get_position_info()
-                
-                if account_data:
-                    total_wallet = float(account_data.get('totalWalletBalance', 0))
-                    total_margin = float(account_data.get('totalMarginBalance', 0))
-                    available_balance = float(account_data.get('availableBalance', 0))
-                    total_unrealized_pnl = float(account_data.get('totalUnrealizedProfit', 0))
-                    
-                    ws[f'A{row}'] = "錢包總額："
-                    ws[f'B{row}'] = f"{total_wallet:.2f} USDT"
-                    ws[f'C{row}'] = "保證金餘額："
-                    ws[f'D{row}'] = f"{total_margin:.2f} USDT"
-                    row += 1
-                    
-                    ws[f'A{row}'] = "可用餘額："
-                    ws[f'B{row}'] = f"{available_balance:.2f} USDT"
-                    ws[f'C{row}'] = "未實現損益："
-                    ws[f'D{row}'] = f"{total_unrealized_pnl:.2f} USDT"
-                    row += 1
-                
-                # 持倉資訊
-                if position_data:
-                    active_positions = []
-                    for pos in position_data:
-                        position_amt = float(pos.get('positionAmt', 0))
-                        if position_amt != 0:
-                            symbol = pos.get('symbol')
-                            entry_price = float(pos.get('entryPrice', 0))
-                            unrealized_pnl = float(pos.get('unRealizedProfit', 0))
-                            direction = "多頭" if position_amt > 0 else "空頭"
-                            
-                            active_positions.append({
-                                'symbol': symbol,
-                                'direction': direction,
-                                'size': abs(position_amt),
-                                'entry_price': entry_price,
-                                'unrealized_pnl': unrealized_pnl
-                            })
-                    
-                    if active_positions:
-                        row += 1
-                        ws[f'A{row}'] = "當前持倉"
-                        ws[f'A{row}'].font = header_font
-                        ws.merge_cells(f'A{row}:H{row}')
-                        row += 1
-                        
-                        for pos in active_positions:
-                            ws[f'A{row}'] = f"合約：{pos['symbol']}"
-                            ws[f'B{row}'] = f"方向：{pos['direction']}"
-                            ws[f'C{row}'] = f"數量：{pos['size']:.3f}"
-                            ws[f'D{row}'] = f"均價：{pos['entry_price']:.2f}"
-                            ws[f'E{row}'] = f"未實現損益：{pos['unrealized_pnl']:.2f}"
-                            row += 1
-                
-            except Exception as e:
-                print(f"獲取BTC帳戶資訊失敗: {e}")
-        
-        # 今日交易記錄 (00:00-23:59)
-        row += 2
-        ws[f'A{row}'] = f"今日交易記錄 ({current_date} 00:00-23:59)"
-        ws[f'A{row}'].font = header_font
-        ws[f'A{row}'].fill = header_fill
-        ws.merge_cells(f'A{row}:H{row}')
-        
-        # 讀取今日交易記錄
+        # 讀取今日交易數據
         today = datetime.now().strftime('%Y%m%d')
         trades_file = os.path.join(os.path.dirname(__file__), 'BTCtransdata', f'BTCtrades_{today}.json')
-        today_trades = []
+        trades = []
         
         if os.path.exists(trades_file):
             try:
                 with open(trades_file, 'r', encoding='utf-8') as f:
-                    all_trades = json.load(f)
-                
-                # 篩選今日交易 (00:00-23:59)
-                for trade in all_trades:
-                    trade_time = trade.get('timestamp', '')
-                    if current_date in trade_time:
-                        today_trades.append(trade)
+                    trades = json.load(f)
             except:
                 pass
         
-        row += 1
-        # 表頭
-        headers = ['時間', '合約', '方向', '數量', '成交價', '訂單號', '狀態']
-        for col, header in enumerate(headers, 1):
-            cell = ws.cell(row=row, column=col, value=header)
-            cell.font = header_font
-            cell.fill = PatternFill(start_color="D9E1F2", end_color="D9E1F2", fill_type="solid")
-            cell.alignment = center_alignment
+        # 計算交易統計
+        total_orders = len(trades)
+        total_cancels = 0  # BTC暫時沒有取消統計
+        total_trades = len([t for t in trades if t.get('type') == 'deal'])
         
-        # 交易數據
-        for trade in today_trades:
-            row += 1
-            trade_time = trade.get('timestamp', '')[:19]  # 只取日期時間部分
-            symbol = trade.get('symbol', '')
-            side = "做多" if trade.get('side') == 'BUY' else "做空"
-            quantity = trade.get('fill_quantity', trade.get('quantity', 0))
-            price = trade.get('fill_price', 0)
-            order_id = str(trade.get('order_id', ''))
-            status = trade.get('status', 'NEW')
-            
-            ws[f'A{row}'] = trade_time
-            ws[f'B{row}'] = symbol
-            ws[f'C{row}'] = side
-            ws[f'D{row}'] = f"{quantity:.3f}"
-            ws[f'E{row}'] = f"{price:.2f}" if price else "-"
-            ws[f'F{row}'] = order_id
-            ws[f'G{row}'] = status
+        # 計算買賣統計
+        buy_orders = len([t for t in trades if t.get('side') == 'BUY'])
+        sell_orders = len([t for t in trades if t.get('side') == 'SELL'])
         
-        if not today_trades:
-            row += 1
-            ws[f'A{row}'] = "今日無交易記錄"
-            ws.merge_cells(f'A{row}:G{row}')
-            ws[f'A{row}'].alignment = center_alignment
+        # 獲取帳戶信息
+        account_data = {}
+        if binance_client:
+            try:
+                account_info = binance_client.get_account_info()
+                if account_info:
+                    account_data = {
+                        'totalWalletBalance': float(account_info.get('totalWalletBalance', 0)),
+                        'totalMarginBalance': float(account_info.get('totalMarginBalance', 0)),
+                        'availableBalance': float(account_info.get('availableBalance', 0)),
+                        'totalUnrealizedProfit': float(account_info.get('totalUnrealizedProfit', 0)),
+                        'totalInitialMargin': float(account_info.get('totalInitialMargin', 0)),
+                        'totalMaintMargin': float(account_info.get('totalMaintMargin', 0))
+                    }
+            except:
+                pass
         
-        # 交易統計
-        row += 3
-        ws[f'A{row}'] = "交易統計"
-        ws[f'A{row}'].font = header_font
-        ws[f'A{row}'].fill = header_fill
-        ws.merge_cells(f'A{row}:H{row}')
+        # 交易總覽區塊（參考TX格式）
+        ws['A1'] = '交易總覽'
+        ws['A1'].fill = blue_fill
+        ws['A1'].alignment = center_alignment
         
-        row += 1
-        total_trades = len(today_trades)
-        buy_trades = len([t for t in today_trades if t.get('side') == 'BUY'])
-        sell_trades = len([t for t in today_trades if t.get('side') == 'SELL'])
+        # 交易總覽標題（橫向）
+        titles = ['委託數量', '取消數量', '成交數量', '買入次數', '賣出次數', 'BTC損益', '總錢包餘額']
+        for i, title in enumerate(titles):
+            col = get_column_letter(i + 1)
+            ws[f'{col}2'] = title
+            ws[f'{col}2'].alignment = center_alignment
+            ws[f'{col}2'].fill = gray_fill
         
-        ws[f'A{row}'] = "總交易次數："
-        ws[f'B{row}'] = f"{total_trades} 筆"
-        ws[f'C{row}'] = "買入次數："
-        ws[f'D{row}'] = f"{buy_trades} 筆"
-        row += 1
+        # 交易總覽內容
+        ws['A3'] = f"{total_orders} 筆"
+        ws['B3'] = f"{total_cancels} 筆"
+        ws['C3'] = f"{total_trades} 筆"
+        ws['D3'] = f"{buy_orders} 筆"
+        ws['E3'] = f"{sell_orders} 筆"
+        ws['F3'] = f"＄{account_data.get('totalUnrealizedProfit', 0):,.2f} USDT"
+        ws['G3'] = f"＄{account_data.get('totalWalletBalance', 0):,.2f} USDT"
         
-        ws[f'A{row}'] = "賣出次數："
-        ws[f'B{row}'] = f"{sell_trades} 筆"
-        row += 1
+        # 帳戶狀態區塊
+        current_row = 5
+        ws[f'A{current_row}'] = '帳戶狀態'
+        ws[f'A{current_row}'].fill = blue_fill
+        ws[f'A{current_row}'].alignment = center_alignment
         
-        # 報告生成時間
-        row += 2
-        ws[f'A{row}'] = f"報告生成時間：{report_time}"
-        ws[f'A{row}'].font = Font(size=10, italic=True)
+        # 帳戶狀態標題（橫向）
+        account_titles = ['錢包餘額', '保證金餘額', '可用餘額', '未實現損益', '總保證金', '維持保證金', '保證金率']
+        for i, title in enumerate(account_titles):
+            col = get_column_letter(i + 1)
+            ws[f'{col}{current_row + 1}'] = title
+            ws[f'{col}{current_row + 1}'].alignment = center_alignment
+            ws[f'{col}{current_row + 1}'].fill = gray_fill
         
-        # 調整列寬
-        for col in range(1, 9):
-            ws.column_dimensions[get_column_letter(col)].width = 15
+        # 帳戶狀態內容
+        margin_ratio = 0
+        if account_data.get('totalMarginBalance', 0) > 0:
+            margin_ratio = (account_data.get('totalMaintMargin', 0) / account_data.get('totalMarginBalance', 1)) * 100
         
-        # 保存到根目錄
-        # 創建BTC交易日報目錄
-        report_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'BTC交易日報')
-        os.makedirs(report_dir, exist_ok=True)
+        ws[f'A{current_row + 2}'] = f"＄{account_data.get('totalWalletBalance', 0):,.2f}"
+        ws[f'B{current_row + 2}'] = f"＄{account_data.get('totalMarginBalance', 0):,.2f}"
+        ws[f'C{current_row + 2}'] = f"＄{account_data.get('availableBalance', 0):,.2f}"
+        ws[f'D{current_row + 2}'] = f"＄{account_data.get('totalUnrealizedProfit', 0):,.2f}"
+        ws[f'E{current_row + 2}'] = f"＄{account_data.get('totalInitialMargin', 0):,.2f}"
+        ws[f'F{current_row + 2}'] = f"＄{account_data.get('totalMaintMargin', 0):,.2f}"
+        ws[f'G{current_row + 2}'] = f"{margin_ratio:.2f}%"
         
-        filename = f"BTC_{current_date}.xlsx"
+        # 交易明細區塊
+        current_row += 4
+        ws[f'A{current_row}'] = '交易明細'
+        ws[f'A{current_row}'].fill = blue_fill
+        ws[f'A{current_row}'].alignment = center_alignment
+        
+        # 交易明細標題
+        detail_titles = ['成交時間', '訂單編號', '交易對', '訂單類型', '成交類型', '成交方向', 
+                        '成交動作', '成交數量', '成交價格', '成交金額', '手續費']
+        for i, title in enumerate(detail_titles):
+            col = get_column_letter(i + 1)
+            ws[f'{col}{current_row + 1}'] = title
+            ws[f'{col}{current_row + 1}'].alignment = center_alignment
+            ws[f'{col}{current_row + 1}'].fill = gray_fill
+        
+        # 交易明細內容
+        if trades:
+            for i, trade in enumerate(trades):
+                row = current_row + i + 2
+                ws[f'A{row}'] = trade.get('timestamp', '')[:19]  # 只顯示日期時間部分
+                ws[f'B{row}'] = trade.get('order_id', '')
+                ws[f'C{row}'] = trade.get('symbol', 'BTCUSDT')
+                
+                # 訂單類型
+                order_type = trade.get('order_type', 'MARKET')
+                ws[f'D{row}'] = '市價單' if order_type == 'MARKET' else '限價單'
+                
+                # 成交類型
+                ws[f'E{row}'] = '手動交易' if trade.get('is_manual', False) else '自動交易'
+                
+                # 成交方向
+                side = trade.get('side', 'BUY')
+                ws[f'F{row}'] = '買入' if side == 'BUY' else '賣出'
+                
+                # 成交動作
+                action_type = trade.get('action_type', '開倉')
+                ws[f'G{row}'] = action_type
+                
+                # 成交數量
+                quantity = trade.get('quantity', 0)
+                ws[f'H{row}'] = f"{quantity}"
+                
+                # 成交價格
+                price = trade.get('price', 0)
+                ws[f'I{row}'] = f"＄{price:,.2f}" if price > 0 else '市價'
+                
+                # 成交金額
+                fill_price = trade.get('fill_price', price)
+                if fill_price and quantity:
+                    amount = float(fill_price) * float(quantity)
+                    ws[f'J{row}'] = f"＄{amount:,.2f}"
+                else:
+                    ws[f'J{row}'] = '-'
+                
+                # 手續費
+                commission = trade.get('commission', 0)
+                ws[f'K{row}'] = f"＄{commission:,.4f}" if commission else '-'
+        
+        # 保存檔案
+        current_date = datetime.now().strftime('%Y-%m-%d')
+        filename = f"BTC交易日報_{current_date}.xlsx"
         filepath = os.path.join(report_dir, filename)
         
         wb.save(filepath)
         print(f"BTC交易日報已生成: {filepath}")
         
         # 添加BTC系統日誌記錄
-        log_btc_system_message(f"BTC交易日報 {filename} 生成成功！！！", "success")
+        log_btc_system_message(f"交易日報 {filename} 生成成功！！！", "success")
         
         # 發送 Telegram 通知
         message = f"{filename} BTC交易日報已生成！！！"
         send_btc_telegram_message(message)
         
-        return filepath
+        return True
         
     except Exception as e:
         print(f"生成BTC交易日報失敗: {e}")
-        return None
+        import traceback
+        traceback.print_exc()
+        
+        # 記錄錯誤到系統日誌
+        try:
+            log_btc_system_message(f"交易日報生成失敗：{str(e)[:100]}", "error")
+        except:
+            pass
+        
+        return False
 
 def generate_btc_monthly_report():
-    """生成BTC交易月報 - 保存到根目錄"""
+    """生成BTC交易月報 - 參考TX格式"""
     try:
         import openpyxl
         from openpyxl.styles import Alignment, PatternFill, Font
@@ -1739,17 +1933,22 @@ def generate_btc_monthly_report():
         ws = wb.active
         ws.title = f"BTC交易月報_{current_month}"
         
-        # 設置樣式
+        # 設置所有欄寬為19（與TX一致）
+        for col in range(1, 12):
+            ws.column_dimensions[get_column_letter(col)].width = 19
+        
+        # 設置樣式（與TX一致）
         header_font = Font(bold=True, size=14)
-        header_fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
+        blue_fill = PatternFill(start_color='B8CCE4', end_color='B8CCE4', fill_type='solid')
+        gray_fill = PatternFill(start_color='D9D9D9', end_color='D9D9D9', fill_type='solid')
         center_alignment = Alignment(horizontal="center", vertical="center")
         
-        # 報告標題
-        ws.merge_cells('A1:J1')
+        # 報告標題（與TX一致）
+        ws.merge_cells('A1:K1')
         ws['A1'] = f"BTC期貨交易月報 - {current_month}"
         ws['A1'].font = Font(bold=True, size=16)
         ws['A1'].alignment = center_alignment
-        ws['A1'].fill = PatternFill(start_color="E7E6E6", end_color="E7E6E6", fill_type="solid")
+        ws['A1'].fill = gray_fill
         
         # 讀取本月所有交易記錄
         btc_transdata_dir = os.path.join(os.path.dirname(__file__), 'BTCtransdata')
@@ -1774,62 +1973,117 @@ def generate_btc_monthly_report():
             except:
                 pass
         
-        # 月度統計
+        # 交易總覽區塊（參考TX格式）
         row = 3
-        ws[f'A{row}'] = "月度統計摘要"
-        ws[f'A{row}'].font = header_font
-        ws[f'A{row}'].fill = header_fill
-        ws.merge_cells(f'A{row}:J{row}')
+        ws['A3'] = '交易總覽'
+        ws['A3'].font = header_font
+        ws['A3'].fill = blue_fill
+        ws['A3'].alignment = center_alignment
+        ws.merge_cells('A3:K3')
         
-        row += 1
+        # 統計數據計算
         total_trades = len(month_trades)
         buy_trades = len([t for t in month_trades if t.get('side') == 'BUY'])
         sell_trades = len([t for t in month_trades if t.get('side') == 'SELL'])
         
-        # 計算總交易量
+        # 計算總交易量和BTC損益
         total_volume = sum(float(t.get('fill_quantity', t.get('quantity', 0))) for t in month_trades)
         
-        ws[f'A{row}'] = "交易統計："
-        ws[f'B{row}'] = f"總次數: {total_trades}"
-        ws[f'C{row}'] = f"買入: {buy_trades}"
-        ws[f'D{row}'] = f"賣出: {sell_trades}"
-        ws[f'E{row}'] = f"總量: {total_volume:.3f} BTC"
-        row += 1
+        # 交易總覽標題行（參考TX格式）
+        row = 4
+        titles = ['委託數量', '取消數量', '成交數量', '買入次數', '賣出次數', 'BTC損益', '總錢包餘額']
+        for col, title in enumerate(titles, 1):
+            cell = ws.cell(row=row, column=col, value=title)
+            cell.fill = gray_fill
+            cell.alignment = center_alignment
+            cell.font = Font(bold=True, size=10)
         
-        # 當前帳戶狀態
+        # 交易總覽數據行
+        row = 5
+        ws.cell(row=row, column=1, value=total_trades).alignment = center_alignment
+        ws.cell(row=row, column=2, value=0).alignment = center_alignment  # 取消數量暫時為0
+        ws.cell(row=row, column=3, value=total_trades).alignment = center_alignment
+        ws.cell(row=row, column=4, value=buy_trades).alignment = center_alignment
+        ws.cell(row=row, column=5, value=sell_trades).alignment = center_alignment
+        ws.cell(row=row, column=6, value=f"{total_volume:.3f}").alignment = center_alignment
+        
+        # 獲取總錢包餘額
         if binance_client:
             try:
                 account_data = binance_client.get_account_info()
                 if account_data:
                     total_wallet = float(account_data.get('totalWalletBalance', 0))
-                    total_unrealized_pnl = float(account_data.get('totalUnrealizedProfit', 0))
-                    
-                    ws[f'A{row}'] = "帳戶狀態："
-                    ws[f'B{row}'] = f"錢包總額: {total_wallet:.2f} USDT"
-                    ws[f'C{row}'] = f"未實現損益: {total_unrealized_pnl:.2f} USDT"
-                    row += 1
+                    ws.cell(row=5, column=7, value=f"{total_wallet:.2f}").alignment = center_alignment
             except Exception as e:
                 print(f"獲取BTC月報帳戶資訊失敗: {e}")
+                ws.cell(row=5, column=7, value="未知").alignment = center_alignment
+        else:
+            ws.cell(row=5, column=7, value="未知").alignment = center_alignment
         
-        # 每日交易明細
-        row += 2
-        ws[f'A{row}'] = "每日交易明細"
+        # 帳戶狀態區塊（參考TX格式）
+        row = 7
+        ws[f'A{row}'] = '帳戶狀態'
         ws[f'A{row}'].font = header_font
-        ws[f'A{row}'].fill = header_fill
-        ws.merge_cells(f'A{row}:J{row}')
+        ws[f'A{row}'].fill = blue_fill
+        ws[f'A{row}'].alignment = center_alignment
+        ws.merge_cells(f'A{row}:K{row}')
         
-        row += 1
-        # 表頭
-        headers = ['日期', '時間', '合約', '方向', '數量', '成交價', '金額(USDT)', '訂單號', '狀態']
+        # 帳戶狀態標題行
+        row = 8
+        account_titles = ['可用餘額', '保證金餘額', '錢包總額', '未實現損益', '今日實現損益', '總實現損益', '維持保證金']
+        for col, title in enumerate(account_titles, 1):
+            cell = ws.cell(row=row, column=col, value=title)
+            cell.fill = gray_fill
+            cell.alignment = center_alignment
+            cell.font = Font(bold=True, size=10)
+        
+        # 帳戶狀態數據行
+        row = 9
+        if binance_client:
+            try:
+                account_data = binance_client.get_account_info()
+                if account_data:
+                    available_balance = float(account_data.get('availableBalance', 0))
+                    total_margin = float(account_data.get('totalMarginBalance', 0))
+                    total_wallet = float(account_data.get('totalWalletBalance', 0))
+                    total_unrealized_pnl = float(account_data.get('totalUnrealizedProfit', 0))
+                    
+                    ws.cell(row=row, column=1, value=f"{available_balance:.2f}").alignment = center_alignment
+                    ws.cell(row=row, column=2, value=f"{total_margin:.2f}").alignment = center_alignment
+                    ws.cell(row=row, column=3, value=f"{total_wallet:.2f}").alignment = center_alignment
+                    ws.cell(row=row, column=4, value=f"{total_unrealized_pnl:.2f}").alignment = center_alignment
+                    ws.cell(row=row, column=5, value="0.00").alignment = center_alignment  # 今日實現損益暫時為0
+                    ws.cell(row=row, column=6, value="0.00").alignment = center_alignment  # 總實現損益暫時為0
+                    ws.cell(row=row, column=7, value="0.00").alignment = center_alignment  # 維持保證金暫時為0
+            except Exception as e:
+                print(f"獲取BTC月報帳戶詳細資訊失敗: {e}")
+                for col in range(1, 8):
+                    ws.cell(row=row, column=col, value="未知").alignment = center_alignment
+        else:
+            for col in range(1, 8):
+                ws.cell(row=row, column=col, value="未知").alignment = center_alignment
+        
+        # 交易明細區塊（參考TX格式）
+        row = 11
+        ws[f'A{row}'] = '交易明細'
+        ws[f'A{row}'].font = header_font
+        ws[f'A{row}'].fill = blue_fill
+        ws[f'A{row}'].alignment = center_alignment
+        ws.merge_cells(f'A{row}:K{row}')
+        
+        # 交易明細表頭
+        row = 12
+        headers = ['日期', '時間', '合約', '方向', '數量', '成交價', '金額(USDT)', '訂單號', '狀態', '手續費', '備註']
         for col, header in enumerate(headers, 1):
             cell = ws.cell(row=row, column=col, value=header)
-            cell.font = header_font
-            cell.fill = PatternFill(start_color="D9E1F2", end_color="D9E1F2", fill_type="solid")
+            cell.fill = gray_fill
             cell.alignment = center_alignment
+            cell.font = Font(bold=True, size=10)
         
         # 按日期排序交易記錄
         month_trades.sort(key=lambda x: x.get('timestamp', ''))
         
+        # 交易明細數據
         for trade in month_trades:
             row += 1
             timestamp = trade.get('timestamp', '')
@@ -1843,33 +2097,29 @@ def generate_btc_monthly_report():
             order_id = str(trade.get('order_id', ''))
             status = trade.get('status', 'NEW')
             
-            ws[f'A{row}'] = trade_date
-            ws[f'B{row}'] = trade_time
-            ws[f'C{row}'] = symbol
-            ws[f'D{row}'] = side
-            ws[f'E{row}'] = f"{quantity:.3f}"
-            ws[f'F{row}'] = f"{price:.2f}" if price else "-"
-            ws[f'G{row}'] = f"{amount:.2f}" if amount else "-"
-            ws[f'H{row}'] = order_id
-            ws[f'I{row}'] = status
+            ws.cell(row=row, column=1, value=trade_date).alignment = center_alignment
+            ws.cell(row=row, column=2, value=trade_time).alignment = center_alignment
+            ws.cell(row=row, column=3, value=symbol).alignment = center_alignment
+            ws.cell(row=row, column=4, value=side).alignment = center_alignment
+            ws.cell(row=row, column=5, value=f"{quantity:.3f}").alignment = center_alignment
+            ws.cell(row=row, column=6, value=f"{price:.2f}" if price else "-").alignment = center_alignment
+            ws.cell(row=row, column=7, value=f"{amount:.2f}" if amount else "-").alignment = center_alignment
+            ws.cell(row=row, column=8, value=order_id).alignment = center_alignment
+            ws.cell(row=row, column=9, value=status).alignment = center_alignment
+            ws.cell(row=row, column=10, value="0.00").alignment = center_alignment  # 手續費暫時為0
+            ws.cell(row=row, column=11, value="").alignment = center_alignment  # 備註暫時為空
         
         if not month_trades:
-            row += 1
-            ws[f'A{row}'] = "本月無交易記錄"
-            ws.merge_cells(f'A{row}:I{row}')
-            ws[f'A{row}'].alignment = center_alignment
+            row = 13
+            ws.cell(row=row, column=1, value="本月無交易記錄").alignment = center_alignment
+            ws.merge_cells(f'A{row}:K{row}')
         
         # 報告生成時間
         row += 3
-        ws[f'A{row}'] = f"報告生成時間：{report_time}"
-        ws[f'A{row}'].font = Font(size=10, italic=True)
+        ws.cell(row=row, column=1, value=f"報告生成時間：{report_time}")
+        ws.cell(row=row, column=1).font = Font(size=10, italic=True)
         
-        # 調整列寬
-        for col in range(1, 11):
-            ws.column_dimensions[get_column_letter(col)].width = 12
-        
-        # 保存到根目錄
-        # 創建BTC交易月報目錄
+        # 保存檔案
         monthly_report_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'BTC交易月報')
         os.makedirs(monthly_report_dir, exist_ok=True)
         
@@ -1883,7 +2133,7 @@ def generate_btc_monthly_report():
         print(f"BTC交易月報已生成: {filepath}")
         
         # 添加BTC系統日誌記錄
-        log_btc_system_message(f"BTC交易月報 {filename} 生成成功！！！", "success")
+        log_btc_system_message(f"交易月報 {filename} 生成成功！！！", "success")
         
         # 發送 Telegram 通知
         message = f"{filename} BTC交易月報已生成！！！"
