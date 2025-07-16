@@ -135,6 +135,15 @@
                         </div>
                     </div>
                     <div class="form-group">
+                        <label for="contract_type">合約類型</label>
+                        <select id="contract_type" name="CONTRACT_TYPE" required>
+                            <option value="PERPETUAL">永續合約</option>
+                        </select>
+                        <div class="input-hint">
+                            ⚠️目前僅支援永續合約，後續將新增更多合約類型<br>
+                        </div>
+                    </div>
+                    <div class="form-group">
                         <label for="leverage">槓桿倍數</label>
                         <select id="leverage" name="LEVERAGE" required>
                             <option value="1">1倍</option>
@@ -166,16 +175,7 @@
                             <option value="125">125倍</option>
                         </select>
                     </div>
-                    <div class="form-group">
-                        <label for="contract_type">合約類型</label>
-                        <select id="contract_type" name="CONTRACT_TYPE" required>
-                            <option value="PERPETUAL">永續合約</option>
-                        </select>
-                        <div class="input-hint">
-                            ⚠️目前僅支援永續合約，後續將新增更多合約類型<br>
-                        </div>
-                    </div>
-                    
+
                     <span id="save-status-btc"></span>
                 </form>
             </div>
@@ -637,16 +637,16 @@
                         </div>
                         <div id="available-contracts-btc" class="contracts-list" style="display: block;">
                             <div class="info-item">
-                                <span class="info-label">主要交易對</span>
+                                <span class="info-label">交易對</span>
                                 <span class="info-value" id="btc-trading-pair">-</span>
-                            </div>
-                            <div class="info-item">
-                                <span class="info-label">槓桿倍數</span>
-                                <span class="info-value" id="btc-leverage">-</span>
                             </div>
                             <div class="info-item">
                                 <span class="info-label">合約類型</span>
                                 <span class="info-value" id="btc-contract-type">-</span>
+                            </div>
+                            <div class="info-item">
+                                <span class="info-label">槓桿倍數</span>
+                                <span class="info-value" id="btc-leverage">-</span>
                             </div>
                         </div>
                     </div>
@@ -686,24 +686,19 @@
                                 <span class="account-value" id="btc-wallet-balance">-</span>
                             </div>
                             <div class="account-item">
-                                <input type="checkbox" class="account-checkbox" data-field="margin-balance" onchange="toggleBtcAccountItemVisibility(this)">
-                                <span class="account-label">保證金餘額</span>
-                                <span class="account-value" id="btc-margin-balance">-</span>
-                            </div>
-                            <div class="account-item">
                                 <input type="checkbox" class="account-checkbox" data-field="available-balance" onchange="toggleBtcAccountItemVisibility(this)">
                                 <span class="account-label">可用餘額</span>
                                 <span class="account-value" id="btc-available-balance">-</span>
                             </div>
                             <div class="account-item">
-                                <input type="checkbox" class="account-checkbox" data-field="unrealized-pnl" onchange="toggleBtcAccountItemVisibility(this)">
-                                <span class="account-label">未實現損益</span>
-                                <span class="account-value" id="btc-unrealized-pnl">-</span>
+                                <input type="checkbox" class="account-checkbox" data-field="total-margin" onchange="toggleBtcAccountItemVisibility(this)">
+                                <span class="account-label">保證金總額</span>
+                                <span class="account-value" id="btc-total-margin">-</span>
                             </div>
                             <div class="account-item">
-                                <input type="checkbox" class="account-checkbox" data-field="total-margin" onchange="toggleBtcAccountItemVisibility(this)">
-                                <span class="account-label">總保證金</span>
-                                <span class="account-value" id="btc-total-margin">-</span>
+                                <input type="checkbox" class="account-checkbox" data-field="margin-balance" onchange="toggleBtcAccountItemVisibility(this)">
+                                <span class="account-label">保證金餘額</span>
+                                <span class="account-value" id="btc-margin-balance">-</span>
                             </div>
                             <div class="account-item">
                                 <input type="checkbox" class="account-checkbox" data-field="maintenance-margin" onchange="toggleBtcAccountItemVisibility(this)">
@@ -714,6 +709,16 @@
                                 <input type="checkbox" class="account-checkbox" data-field="margin-ratio" onchange="toggleBtcAccountItemVisibility(this)">
                                 <span class="account-label">保證金率</span>
                                 <span class="account-value" id="btc-margin-ratio">-</span>
+                            </div>
+                            <div class="account-item">
+                                <input type="checkbox" class="account-checkbox" data-field="today-commission" onchange="toggleBtcAccountItemVisibility(this)">
+                                <span class="account-label">手續費</span>
+                                <span class="account-value" id="btc-today-commission">-</span>
+                            </div>
+                            <div class="account-item">
+                                <input type="checkbox" class="account-checkbox" data-field="today-realized-pnl" onchange="toggleBtcAccountItemVisibility(this)">
+                                <span class="account-label">本日已實現盈虧</span>
+                                <span class="account-value" id="btc-today-realized-pnl">-</span>
                             </div>
                         </div>
                     </div>

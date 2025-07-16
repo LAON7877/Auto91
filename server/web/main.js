@@ -3716,17 +3716,16 @@ function refreshBtcAccountInfo() {
         if (data.success && data.account) {
             const account = data.account;
             
-            // 更新帳戶資訊顯示
+            // 更新帳戶資訊顯示 - 使用新的後端字段映射
             const accountElements = {
-                'btc-wallet-balance': formatCurrency(account.totalWalletBalance || 0, 'USDT'),
-                'btc-margin-balance': formatCurrency(account.totalMarginBalance || 0, 'USDT'),
+                'btc-wallet-balance': formatCurrency(account.walletBalance || 0, 'USDT'),
                 'btc-available-balance': formatCurrency(account.availableBalance || 0, 'USDT'),
-                'btc-unrealized-pnl': formatPnL(account.totalUnrealizedProfit || 0),
-                'btc-total-margin': formatCurrency(account.totalInitialMargin || 0, 'USDT'),
-                'btc-maintenance-margin': formatCurrency(account.totalMaintMargin || 0, 'USDT'),
-                'btc-margin-ratio': account.totalMarginBalance > 0 
-                    ? `${((account.totalMaintMargin / account.totalMarginBalance) * 100).toFixed(2)}%` 
-                    : '0.00%'
+                'btc-total-margin': formatCurrency(account.totalMarginBalance || 0, 'USDT'),
+                'btc-margin-balance': formatCurrency(account.marginBalance || 0, 'USDT'),
+                'btc-maintenance-margin': formatCurrency(account.maintMargin || 0, 'USDT'),
+                'btc-margin-ratio': account.marginRatio || '無限大',
+                'btc-today-commission': formatCurrency(account.todayCommission || 0, 'USDT'),
+                'btc-today-realized-pnl': formatPnL(account.todayRealizedPnl || 0)
             };
             
             Object.entries(accountElements).forEach(([id, value]) => {
@@ -3735,8 +3734,8 @@ function refreshBtcAccountInfo() {
                     element.textContent = value;
                     
                     // 損益顏色
-                    if (id === 'btc-unrealized-pnl') {
-                        const numValue = parseFloat(account.totalUnrealizedProfit || 0);
+                    if (id === 'btc-today-realized-pnl') {
+                        const numValue = parseFloat(account.todayRealizedPnl || 0);
                         element.className = element.className.replace(/(\\s|^)(profit|loss)(\\s|$)/, '');
                         if (numValue > 0) {
                             element.classList.add('profit');

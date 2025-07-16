@@ -95,16 +95,6 @@ except ImportError as e:
     if 'dotenv' in str(e):
         DOTENV_AVAILABLE = False
         print_console("SYSTEM", "WARNING", "python-dotenv 模組未安裝")
-    try:
-        import shioaji as sj
-        SHIOAJI_AVAILABLE = True
-    except ImportError:
-        SHIOAJI_AVAILABLE = False
-    try:
-        from dotenv import load_dotenv
-        DOTENV_AVAILABLE = True
-    except ImportError:
-        DOTENV_AVAILABLE = False
 
 # 創建兼容的常數處理類別
 class SafeConstants:
@@ -1220,9 +1210,48 @@ def api_load_btc_env():
 
 @app.route('/api/btc/webhook', methods=['POST'])
 def api_btc_webhook():
+    # 解析請求數據
+    try:
+        raw = request.data.decode('utf-8')
+        data = json.loads(raw) if raw.strip() else {}
+        action = data.get('action', '未知')
+    except:
+        add_custom_request_log('POST', '/api/btc/webhook', 400, {
+            'reason': 'BTC API webhook解析失敗',
+            'system': 'BTC'
+        })
+        return jsonify({'success': False, 'message': '請求數據解析失敗'}), 400
+    
     if BTC_MODULE_AVAILABLE:
-        return btcmain.btc_webhook()
+        try:
+            result = btcmain.btc_webhook()
+            # 檢查返回結果判斷是否成功
+            if hasattr(result, 'get_json'):
+                response_data = result.get_json()
+                success = response_data.get('success', True) if response_data else True
+            else:
+                success = True  # 預設成功
+            
+            status_code = 200 if success else 500
+            add_custom_request_log('POST', '/api/btc/webhook', status_code, {
+                'reason': 'BTC API webhook處理成功' if success else 'BTC API webhook處理失敗',
+                'action': action,
+                'system': 'BTC'
+            })
+            return result
+        except Exception as e:
+            add_custom_request_log('POST', '/api/btc/webhook', 500, {
+                'reason': f'BTC API webhook處理異常: {str(e)[:50]}',
+                'action': action,
+                'system': 'BTC'
+            })
+            return jsonify({'success': False, 'message': f'處理失敗: {str(e)}'})
     else:
+        add_custom_request_log('POST', '/api/btc/webhook', 503, {
+            'reason': 'BTC模組不可用',
+            'action': action,
+            'system': 'BTC'
+        })
         return jsonify({'success': False, 'message': 'BTC模組不可用'})
 
 # 為BTC添加 /webhook 路由支持（通過URL參數區分）
@@ -1233,9 +1262,48 @@ def unified_webhook(system):
     
     # 如果明確指定BTC系統
     if system == 'btc':
+        # 解析請求數據
+        try:
+            raw = request.data.decode('utf-8')
+            data = json.loads(raw) if raw.strip() else {}
+            action = data.get('action', '未知')
+        except:
+            add_custom_request_log('POST', '/webhook/btc', 400, {
+                'reason': 'BTC訊號解析失敗',
+                'system': 'BTC'
+            })
+            return jsonify({'success': False, 'message': '請求數據解析失敗'}), 400
+        
         if BTC_MODULE_AVAILABLE:
-            return btcmain.btc_webhook()
+            try:
+                result = btcmain.btc_webhook()
+                # 檢查返回結果判斷是否成功
+                if hasattr(result, 'get_json'):
+                    response_data = result.get_json()
+                    success = response_data.get('success', True) if response_data else True
+                else:
+                    success = True  # 預設成功
+                
+                status_code = 200 if success else 500
+                add_custom_request_log('POST', '/webhook/btc', status_code, {
+                    'reason': 'BTC訊號處理成功' if success else 'BTC訊號處理失敗',
+                    'action': action,
+                    'system': 'BTC'
+                })
+                return result
+            except Exception as e:
+                add_custom_request_log('POST', '/webhook/btc', 500, {
+                    'reason': f'BTC訊號處理異常: {str(e)[:50]}',
+                    'action': action,
+                    'system': 'BTC'
+                })
+                return jsonify({'success': False, 'message': f'處理失敗: {str(e)}'})
         else:
+            add_custom_request_log('POST', '/webhook/btc', 503, {
+                'reason': 'BTC模組不可用',
+                'action': action,
+                'system': 'BTC'
+            })
             return jsonify({'success': False, 'message': 'BTC模組不可用'})
     
     # 如果明確指定TX系統
@@ -1255,12 +1323,42 @@ def unified_webhook(system):
             # 自動識別訊號類型
             if is_btc_signal(data):
                 print_console("WEBHOOK", "INFO", "自動識別為BTC訊號")
+                action = data.get('action', '未知')
+                
                 if BTC_MODULE_AVAILABLE:
-                    return btcmain.btc_webhook()
+                    try:
+                        result = btcmain.btc_webhook()
+                        # 檢查返回結果判斷是否成功
+                        if hasattr(result, 'get_json'):
+                            response_data = result.get_json()
+                            success = response_data.get('success', True) if response_data else True
+                        else:
+                            success = True  # 預設成功
+                        
+                        status_code = 200 if success else 500
+                        add_custom_request_log('POST', '/webhook/btc', status_code, {
+                            'reason': 'BTC訊號自動識別處理成功' if success else 'BTC訊號自動識別處理失敗',
+                            'action': action,
+                            'system': 'BTC'
+                        })
+                        return result
+                    except Exception as e:
+                        add_custom_request_log('POST', '/webhook/btc', 500, {
+                            'reason': f'BTC訊號自動識別處理異常: {str(e)[:50]}',
+                            'action': action,
+                            'system': 'BTC'
+                        })
+                        return jsonify({'success': False, 'message': f'處理失敗: {str(e)}'})
                 else:
+                    add_custom_request_log('POST', '/webhook/btc', 503, {
+                        'reason': 'BTC模組不可用',
+                        'action': action,
+                        'system': 'BTC'
+                    })
                     return jsonify({'success': False, 'message': 'BTC模組不可用'})
             else:
                 print_console("WEBHOOK", "INFO", "自動識別為TX訊號")
+                # TX訊號的日誌記錄已經在 tradingview_webhook_tx() 函數中處理
                 return tradingview_webhook_tx()
                 
         except json.JSONDecodeError:
@@ -1362,20 +1460,20 @@ def tradingview_webhook_tx():
         
         if signal_type == 'entry':
             if direction == '開多':
-                log_message = f"來自 webhook開倉訊號：開多"
+                log_message = f"來自webhook開倉訊號：開多"
             elif direction == '開空':
-                log_message = f"來自 webhook開倉訊號：開空"
+                log_message = f"來自webhook開倉訊號：開空"
             else:
-                log_message = f"來自 webhook開倉訊號：{direction}"
+                log_message = f"來自webhook開倉訊號：{direction}"
         elif signal_type == 'exit':
             if direction == '平多':
-                log_message = f"來自 webhook平倉訊號：平多"
+                log_message = f"來自webhook平倉訊號：平多"
             elif direction == '平空':
-                log_message = f"來自 webhook平倉訊號：平空"
+                log_message = f"來自webhook平倉訊號：平空"
             else:
-                log_message = f"來自 webhook平倉訊號：{direction}"
+                log_message = f"來自webhook平倉訊號：{direction}"
         else:
-            log_message = f"來自 webhook訊號：{signal_type} - {direction}"
+            log_message = f"來自webhook訊號：{signal_type} - {direction}"
         
         # 發送到前端系統日誌
         try:
@@ -1386,6 +1484,15 @@ def tradingview_webhook_tx():
             )
         except:
             pass
+        
+        # 記錄成功的webhook請求日誌
+        add_custom_request_log('POST', '/webhook', 200, {
+            'reason': 'TX訊號處理成功',
+            'signal_id': signal_id,
+            'action': action,
+            'contract': contract_code,
+            'client_ip': client_ip
+        })
         
         return 'OK', 200
         
@@ -2070,22 +2177,11 @@ def api_futures_contracts():
                     
                     # 選用合約：轉倉模式下使用次月合約，否則使用最近交割日合約
                     if sorted_contracts:
-                        # 調試信息：顯示轉倉模式狀態
-                        print_console("DEBUG", "INFO", f"=== API {code}合約選擇 ===")
-                        print_console("DEBUG", "INFO", f"rollover_mode={rollover_mode}")
-                        print_console("DEBUG", "INFO", f"next_month_contracts中有{code}={bool(next_month_contracts.get(code))}")
-                        if next_month_contracts.get(code):
-                            print_console("DEBUG", "INFO", f"次月{code}合約: {next_month_contracts[code].code}")
-                        print_console("DEBUG", "INFO", f"當月{code}合約: {sorted_contracts[0].code}")
-                        
                         # 在轉倉模式下，優先使用次月合約
                         if rollover_mode and next_month_contracts.get(code):
                             selected_contract = next_month_contracts[code]
-                            print_console("DEBUG", "SUCCESS", f"API選擇: {code} 使用次月合約 {selected_contract.code}")
                         else:
                             selected_contract = sorted_contracts[0]
-                            reason = "非轉倉模式" if not rollover_mode else "無次月合約"
-                            print_console("DEBUG", "INFO", f"API選擇: {code} 使用當月合約 {selected_contract.code} ({reason})")
                         
                         contract_name = '大台' if code == 'TXF' else '小台' if code == 'MXF' else '微台'
                         margin = margin_requirements.get(contract_name, 0)
@@ -2472,15 +2568,23 @@ def api_system_log():
 
 @app.route('/api/btc_system_log', methods=['POST'])
 def api_btc_system_log():
-    """接收前端BTC系統日誌"""
+    """接收BTC系統日誌"""
     try:
         data = request.get_json()
         message = data.get('message', '')
         log_type = data.get('type', 'info')
         
-        # 儲存到 BTC 專用的日誌記錄
-        if BTC_MODULE_AVAILABLE:
-            btcmain.log_btc_system_message(message, log_type)
+        # 儲存到 custom_request_logs (與TX系統共用日誌系統)
+        add_custom_request_log(
+            method='POST',
+            uri='/api/btc_system_log',
+            status=200,
+            extra_info={
+                'message': message,
+                'type': log_type,
+                'system': 'BTC'  # 標記為BTC系統日誌
+            }
+        )
         
         # 後端日誌記錄
         print_console("BTC", log_type.upper(), message)
@@ -2745,10 +2849,8 @@ def update_futures_contracts():
                 sorted_contracts = sorted(contracts, key=lambda x: x.delivery_date)
                 if rollover_mode and next_month_contracts.get(code):
                     futures_contracts[code] = next_month_contracts[code]
-                    print_console("DEBUG", "SUCCESS", f"更新{code}期貨合約: 使用次月合約 {futures_contracts[code].code}")
                 else:
                     futures_contracts[code] = sorted_contracts[0]
-                    print_console("DEBUG", "INFO", f"更新{code}期貨合約: 使用當月合約 {futures_contracts[code].code}")
         
         return True
     except Exception as e:
@@ -3167,26 +3269,25 @@ def handle_futures_deal_callback(deal, octype_info):
         
         is_manual = octype_info.get('is_manual', False)
         
-        # 調試信息：顯示成交通知使用的訂單資訊
-        print_console("DEBUG", "INFO", f"成交通知資訊: 合約={contract_name}, 方向={direction}, 價格類型={price_type}, 訂單類型={order_type}, 手動={is_manual}")
         
         # 獲取完整合約代碼和交割日期用於成交通知
+        # 使用轉倉邏輯選擇合約
         full_contract_code = None
         delivery_date_for_deal = None
         try:
-            # 根據合約代碼前綴找到對應的全域合約對象
-            if contract_code.startswith('TXF') and contract_txf:
-                full_contract_code = contract_txf.code
-                if hasattr(contract_txf, 'delivery_date'):
-                    delivery_date_for_deal = format_delivery_date(contract_txf.delivery_date)
-            elif contract_code.startswith('MXF') and contract_mxf:
-                full_contract_code = contract_mxf.code
-                if hasattr(contract_mxf, 'delivery_date'):
-                    delivery_date_for_deal = format_delivery_date(contract_mxf.delivery_date)
-            elif contract_code.startswith('TMF') and contract_tmf:
-                full_contract_code = contract_tmf.code
-                if hasattr(contract_tmf, 'delivery_date'):
-                    delivery_date_for_deal = format_delivery_date(contract_tmf.delivery_date)
+            # 根據合約代碼前綴和轉倉模式找到對應的合約對象
+            target_contract = None
+            if contract_code.startswith('TXF'):
+                target_contract = get_contract_for_rollover('TXF')
+            elif contract_code.startswith('MXF'):
+                target_contract = get_contract_for_rollover('MXF')
+            elif contract_code.startswith('TMF'):
+                target_contract = get_contract_for_rollover('TMF')
+            
+            if target_contract:
+                full_contract_code = target_contract.code
+                if hasattr(target_contract, 'delivery_date'):
+                    delivery_date_for_deal = format_delivery_date(target_contract.delivery_date)
             
             # 如果無法獲取交割日期，嘗試從 delivery_month 計算
             if not delivery_date_for_deal:
@@ -4228,7 +4329,7 @@ def send_daily_startup_notification():
         try:
             requests.post(
                 f'http://127.0.0.1:{CURRENT_PORT}/api/system_log',
-                json={'message': '每日啟動通知發送成功', 'type': 'success'},
+                json={'message': 'Telegram［每日啟動］訊息發送成功！！！', 'type': 'success'},
                 timeout=5
             )
         except:
@@ -4240,7 +4341,7 @@ def send_daily_startup_notification():
         try:
             requests.post(
                 f'http://127.0.0.1:{CURRENT_PORT}/api/system_log',
-                json={'message': f'每日啟動通知發送失敗: {str(e)[:50]}', 'type': 'error'},
+                json={'message': f'Telegram［每日啟動］訊息發送失敗: {str(e)[:50]}', 'type': 'error'},
                 timeout=5
             )
         except:
@@ -4470,7 +4571,7 @@ def generate_trading_report(trades, account_data, position_data, cover_trades, t
         try:
             requests.post(
                 f'http://127.0.0.1:{CURRENT_PORT}/api/system_log',
-                json={'message': f"交易日報 {filename} 生成成功！！！", 'type': 'success'},
+                json={'message': f"TX_{filename} 生成成功！！！", 'type': 'success'},
                 timeout=5
             )
         except:
@@ -4953,7 +5054,7 @@ def generate_monthly_trading_report():
         try:
             requests.post(
                 f'http://127.0.0.1:{CURRENT_PORT}/api/system_log',
-                json={'message': f"交易月報 {filename} 生成成功！！！", 'type': 'success'},
+                json={'message': f"TX_{filename} 生成成功！！！", 'type': 'success'},
                 timeout=5
             )
         except:
@@ -5412,32 +5513,32 @@ def process_signal(data):
         positions = sinopac_api.list_positions(sinopac_api.futopt_account)
         
         # 初始化合約對象（如果尚未設置）
-        if not contract_txf:
-            txf_contracts = sinopac_api.Contracts.Futures.get("TXF")
-            if txf_contracts:
-                sorted_contracts = sorted(txf_contracts, key=lambda x: x.delivery_date)
-                if rollover_mode and next_month_contracts.get('TXF'):
-                    contract_txf = next_month_contracts['TXF']
-                else:
-                    contract_txf = sorted_contracts[0]
+        # 更新TXF合約（無論是否已存在，都重新選擇以確保轉倉邏輯正確）
+        txf_contracts = sinopac_api.Contracts.Futures.get("TXF")
+        if txf_contracts:
+            sorted_contracts = sorted(txf_contracts, key=lambda x: x.delivery_date)
+            if rollover_mode and next_month_contracts.get('TXF'):
+                contract_txf = next_month_contracts['TXF']
+            else:
+                contract_txf = sorted_contracts[0]
                 
-        if not contract_mxf:
-            mxf_contracts = sinopac_api.Contracts.Futures.get("MXF")
-            if mxf_contracts:
-                sorted_contracts = sorted(mxf_contracts, key=lambda x: x.delivery_date)
-                if rollover_mode and next_month_contracts.get('MXF'):
-                    contract_mxf = next_month_contracts['MXF']
-                else:
-                    contract_mxf = sorted_contracts[0]
+        # 更新MXF合約（無論是否已存在，都重新選擇以確保轉倉邏輯正確）
+        mxf_contracts = sinopac_api.Contracts.Futures.get("MXF")
+        if mxf_contracts:
+            sorted_contracts = sorted(mxf_contracts, key=lambda x: x.delivery_date)
+            if rollover_mode and next_month_contracts.get('MXF'):
+                contract_mxf = next_month_contracts['MXF']
+            else:
+                contract_mxf = sorted_contracts[0]
                 
-        if not contract_tmf:
-            tmf_contracts = sinopac_api.Contracts.Futures.get("TMF")
-            if tmf_contracts:
-                sorted_contracts = sorted(tmf_contracts, key=lambda x: x.delivery_date)
-                if rollover_mode and next_month_contracts.get('TMF'):
-                    contract_tmf = next_month_contracts['TMF']
-                else:
-                    contract_tmf = sorted_contracts[0]
+        # 更新TMF合約（無論是否已存在，都重新選擇以確保轉倉邏輯正確）
+        tmf_contracts = sinopac_api.Contracts.Futures.get("TMF")
+        if tmf_contracts:
+            sorted_contracts = sorted(tmf_contracts, key=lambda x: x.delivery_date)
+            if rollover_mode and next_month_contracts.get('TMF'):
+                contract_tmf = next_month_contracts['TMF']
+            else:
+                contract_tmf = sorted_contracts[0]
         
         print(f"當前合約: TXF={contract_txf.code if contract_txf else None}, "
               f"MXF={contract_mxf.code if contract_mxf else None}, "
@@ -5535,8 +5636,15 @@ def process_entry_signal(data, qty_txf, qty_mxf, qty_tmf, direction, price, orde
     for contract, qty, name, code in contracts:
         if qty > 0 and contract:
             try:
-                contract_type = "次月" if is_rollover_mode else "當月"
-                print(f"[process_entry_signal] 開始處理{name}進場: {qty}口 {direction} ({contract_type}合約)")
+                # 判斷使用的合約類型
+                if contract.code.endswith('R2'):
+                    contract_type = "R2合約"
+                elif contract.code.endswith('R1'):
+                    contract_type = "R1合約"
+                else:
+                    contract_type = f"合約{contract.code}"
+                    
+                print(f"[process_entry_signal] 開始處理{name}進場: {qty}口 {direction}，開倉合約: {contract.code} ({contract_type})")
                 
                 result = place_futures_order_tx_style(
                     contract=contract,
@@ -5550,7 +5658,7 @@ def process_entry_signal(data, qty_txf, qty_mxf, qty_tmf, direction, price, orde
                 
                 if result.get('success'):
                     active_trades[contract_key_map[name]] = data.get('tradeId')
-                    print(f"{name}進場成功 ({contract_type}合約)")
+                    print(f"{name}進場成功，開倉合約: {contract.code} ({contract_type})")
                 else:
                     print(f"{name}進場失敗: {result.get('message', '未知錯誤')}")
                     
@@ -5571,7 +5679,7 @@ def process_exit_signal(data, qty_txf, qty_mxf, qty_tmf, direction, price, order
     
     print(f"[process_exit_signal] 處理出場訊號: direction={direction}")
     
-    # 轉倉邏輯：在轉倉模式下，先平倉當月合約
+    # 平倉邏輯：使用實際持倉的合約進行平倉
     is_rollover_mode = data.get('rollover_mode', False)
     
     # 檢查是否有持倉
@@ -5584,11 +5692,11 @@ def process_exit_signal(data, qty_txf, qty_mxf, qty_tmf, direction, price, order
     if not has_position:
         print("警告: 無對應持倉，取消平倉")
         
-        # 發送提交失敗訊息
+        # 發送提交失敗訊息 - 使用轉倉邏輯選擇合約（用於通知顯示）
         contracts_to_check = [
             (get_contract_for_rollover('TXF'), qty_txf, "大台", "TXF"),
             (get_contract_for_rollover('MXF'), qty_mxf, "小台", "MXF"), 
-            (contract_tmf, qty_tmf, "微台", "TMF")
+            (get_contract_for_rollover('TMF'), qty_tmf, "微台", "TMF")
         ]
         
         # 對每個有數量的合約發送失敗訊息
@@ -5619,18 +5727,50 @@ def process_exit_signal(data, qty_txf, qty_mxf, qty_tmf, direction, price, order
                 send_telegram_message(fail_message)
         return
         
-    # 執行平倉
+    # 執行平倉 - 使用實際持倉的合約
+    def get_contract_from_position(position, contract_type):
+        """根據持倉獲取實際的合約對象"""
+        if not position:
+            return None
+            
+        # 從持倉中獲取合約代碼，然後找到對應的合約對象
+        position_code = position.code
+        print(f"持倉合約代碼: {position_code}")
+        
+        try:
+            # 獲取該類型的所有合約
+            contracts = sinopac_api.Contracts.Futures.get(contract_type)
+            if contracts:
+                # 找到與持倉代碼匹配的合約對象
+                for contract in contracts:
+                    if contract.code == position_code:
+                        print(f"找到匹配的合約對象: {contract.code}")
+                        return contract
+                        
+            print(f"警告: 未找到持倉 {position_code} 對應的合約對象")
+            return None
+        except Exception as e:
+            print(f"獲取持倉合約對象失敗: {e}")
+            return None
+    
     contracts_positions = [
-        (get_contract_for_rollover('TXF'), qty_txf, "大台", "TXF", position_txf),
-        (get_contract_for_rollover('MXF'), qty_mxf, "小台", "MXF", position_mxf),
-        (get_contract_for_rollover('TMF'), qty_tmf, "微台", "TMF", position_tmf)
+        (get_contract_from_position(position_txf, 'TXF'), qty_txf, "大台", "TXF", position_txf),
+        (get_contract_from_position(position_mxf, 'MXF'), qty_mxf, "小台", "MXF", position_mxf),
+        (get_contract_from_position(position_tmf, 'TMF'), qty_tmf, "微台", "TMF", position_tmf)
     ]
     
     for contract, qty, name, code, position in contracts_positions:
         if qty > 0 and contract and position:
             try:
-                contract_type = "次月" if is_rollover_mode else "當月"
-                print(f"[process_exit_signal] 開始處理{name}出場: {qty}口 ({contract_type}合約)")
+                # 判斷使用的合約類型
+                if contract.code.endswith('R2'):
+                    contract_type = "R2合約"
+                elif contract.code.endswith('R1'):
+                    contract_type = "R1合約"
+                else:
+                    contract_type = f"合約{contract.code}"
+                    
+                print(f"[process_exit_signal] 開始處理{name}出場: {qty}口，平倉合約: {contract.code} ({contract_type})")
                 
                 result = place_futures_order_tx_style(
                     contract=contract,
@@ -5645,7 +5785,7 @@ def process_exit_signal(data, qty_txf, qty_mxf, qty_tmf, direction, price, order
                 
                 if result.get('success'):
                     active_trades[contract_key_map[name]] = None
-                    print(f"{name}出場成功 ({contract_type}合約)")
+                    print(f"{name}出場成功，平倉合約: {contract.code} ({contract_type})")
                 else:
                     print(f"{name}出場失敗: {result.get('message', '未知錯誤')}")
             
@@ -5885,28 +6025,42 @@ def init_contracts():
     try:
         print("[init_contracts] 開始初始化合約對象...")
         
-        # 初始化大台指合約
+        # 初始化大台指合約（使用轉倉邏輯）
         txf_contracts = sinopac_api.Contracts.Futures.get("TXF")
         if txf_contracts:
-            # 選擇最近月份的合約
-            contract_txf = sorted(txf_contracts, key=lambda x: x.delivery_date)[0]
-            print(f"大台指合約: {contract_txf.code} (交割日: {contract_txf.delivery_date})")
+            sorted_contracts = sorted(txf_contracts, key=lambda x: x.delivery_date)
+            if rollover_mode and next_month_contracts.get('TXF'):
+                contract_txf = next_month_contracts['TXF']
+                print(f"大台指合約（轉倉模式）: {contract_txf.code} (交割日: {contract_txf.delivery_date})")
+            else:
+                contract_txf = sorted_contracts[0]
+                print(f"大台指合約: {contract_txf.code} (交割日: {contract_txf.delivery_date})")
         else:
             print("警告: 無法獲取大台指合約")
             
-        # 初始化小台指合約
+        # 初始化小台指合約（使用轉倉邏輯）
         mxf_contracts = sinopac_api.Contracts.Futures.get("MXF")
         if mxf_contracts:
-            contract_mxf = sorted(mxf_contracts, key=lambda x: x.delivery_date)[0]
-            print(f"小台指合約: {contract_mxf.code} (交割日: {contract_mxf.delivery_date})")
+            sorted_contracts = sorted(mxf_contracts, key=lambda x: x.delivery_date)
+            if rollover_mode and next_month_contracts.get('MXF'):
+                contract_mxf = next_month_contracts['MXF']
+                print(f"小台指合約（轉倉模式）: {contract_mxf.code} (交割日: {contract_mxf.delivery_date})")
+            else:
+                contract_mxf = sorted_contracts[0]
+                print(f"小台指合約: {contract_mxf.code} (交割日: {contract_mxf.delivery_date})")
         else:
             print("警告: 無法獲取小台指合約")
             
-        # 初始化微台指合約
+        # 初始化微台指合約（使用轉倉邏輯）
         tmf_contracts = sinopac_api.Contracts.Futures.get("TMF")
         if tmf_contracts:
-            contract_tmf = sorted(tmf_contracts, key=lambda x: x.delivery_date)[0]
-            print(f"微台指合約: {contract_tmf.code} (交割日: {contract_tmf.delivery_date})")
+            sorted_contracts = sorted(tmf_contracts, key=lambda x: x.delivery_date)
+            if rollover_mode and next_month_contracts.get('TMF'):
+                contract_tmf = next_month_contracts['TMF']
+                print(f"微台指合約（轉倉模式）: {contract_tmf.code} (交割日: {contract_tmf.delivery_date})")
+            else:
+                contract_tmf = sorted_contracts[0]
+                print(f"微台指合約: {contract_tmf.code} (交割日: {contract_tmf.delivery_date})")
         else:
             print("警告: 無法獲取微台指合約")
             
@@ -5948,11 +6102,9 @@ def place_futures_order(contract_code, quantity, direction, price=0, is_manual=F
         # 根據轉倉模式選擇合約
         if rollover_mode and next_month_contracts.get(contract_code):
             target_contract = next_month_contracts[contract_code]
-            print_console("DEBUG", "SUCCESS", f"轉倉模式: 使用次月{contract_code}合約 {target_contract.code}")
         else:
             # 使用最近月份的合約（按到期日排序）
             target_contract = sorted(contracts, key=lambda x: x.delivery_date)[0]
-            print_console("DEBUG", "INFO", f"一般模式: 使用當月{contract_code}合約 {target_contract.code}")
         
         
         # 永豐手動下單：使用永豐官方參數格式
@@ -6401,14 +6553,6 @@ def get_next_month_contracts():
                     # 按交割日期排序
                     sorted_contracts = sorted(contracts, key=get_sort_date)
                     
-                    # 調試信息：顯示所有合約及其交割日期
-                    print_console("DEBUG", "INFO", f"=== {code} 所有合約 ===")
-                    for i, contract in enumerate(sorted_contracts):
-                        delivery_date = format_delivery_date(contract.delivery_date)
-                        # 檢查合約代碼是否包含R1, R2等標識
-                        contract_suffix = contract.code[-2:] if len(contract.code) >= 2 else "??"
-                        print_console("DEBUG", "INFO", f"  [{i}] {contract.code} (後綴:{contract_suffix}) 交割日: {delivery_date}")
-                    
                     # 優先使用R2合約作為次月合約，如果沒有R2則使用第二個合約
                     next_month_contract = None
                     
@@ -6416,23 +6560,17 @@ def get_next_month_contracts():
                     for contract in sorted_contracts:
                         if contract.code.endswith('R2'):
                             next_month_contract = contract
-                            print_console("DEBUG", "SUCCESS", f"找到R2合約: {contract.code}")
                             break
                     
                     # 方法2: 如果沒有R2合約，使用第二個合約
                     if not next_month_contract and len(sorted_contracts) >= 2:
                         next_month_contract = sorted_contracts[1]
-                        print_console("DEBUG", "INFO", f"使用第二個合約作為次月合約: {next_month_contract.code}")
                     
                     if next_month_contract:
                         next_month_contracts[code] = next_month_contract
-                        selected_delivery = format_delivery_date(next_month_contract.delivery_date)
-                        print_console("DEBUG", "SUCCESS", f"次月{code}合約: {next_month_contract.code} 交割日: {selected_delivery}")
-                    else:
-                        print_console("DEBUG", "WARNING", f"{code}沒有可用的次月合約")
                         
             except Exception as e:
-                print_console("DEBUG", "ERROR", f"獲取{code}次月合約失敗", str(e))
+                print(f"獲取{code}次月合約失敗: {e}")
                 
         return next_month_contracts
         
@@ -6446,21 +6584,14 @@ def check_rollover_mode():
     
     try:
         today = datetime.now().date()
-        print_console("DEBUG", "INFO", f"=== 轉倉檢查開始 ===")
-        print_console("DEBUG", "INFO", f"當前日期: {today}")
-        print_console("DEBUG", "INFO", f"當前轉倉模式: {rollover_mode}")
-        
         # 檢查當前合約的交割日
         current_contracts = [contract_txf, contract_mxf, contract_tmf]
         delivery_dates = []
-        
-        print_console("DEBUG", "INFO", f"當前合約狀態: TXF={bool(contract_txf)}, MXF={bool(contract_mxf)}, TMF={bool(contract_tmf)}")
         
         for contract in current_contracts:
             if contract and hasattr(contract, 'delivery_date'):
                 delivery_date_str = contract.delivery_date
                 contract_code = getattr(contract, 'code', 'Unknown')
-                print_console("DEBUG", "INFO", f"合約 {contract_code} 交割日字符串: {delivery_date_str}")
                 
                 if isinstance(delivery_date_str, str):
                     if len(delivery_date_str) == 8:  # YYYYMMDD
@@ -6472,8 +6603,6 @@ def check_rollover_mode():
                     else:
                         continue
                     delivery_dates.append(delivery_date)
-                    formatted_date = format_delivery_date(delivery_date_str)
-                    print_console("DEBUG", "INFO", f"合約 {contract_code} 解析後交割日: {formatted_date}")
         
         if delivery_dates:
             # 找到最近的交割日
@@ -6483,30 +6612,40 @@ def check_rollover_mode():
             
             formatted_nearest = format_delivery_date(str(nearest_delivery))
             formatted_rollover = format_delivery_date(str(rollover_start))
-            print_console("DEBUG", "INFO", f"最近交割日: {formatted_nearest}")
-            print_console("DEBUG", "INFO", f"轉倉開始日: {formatted_rollover}")
-            print_console("DEBUG", "INFO", f"比較: {today} >= {rollover_start} = {today >= rollover_start}")
             
-            # 檢查是否應該進入轉倉模式
-            if today >= rollover_start:
+            # 檢查轉倉模式狀態
+            # 轉倉期間：交割日前一天到交割日當天夜盤開始（15:00）前
+            # 交割日當天15:00後才結束轉倉模式（夜盤開始使用新合約）
+            current_time = datetime.now()
+            if today == nearest_delivery and current_time.hour >= 15:
+                # 交割日當天15:00後，結束轉倉模式
+                rollover_end = nearest_delivery
+            else:
+                # 其他情況，交割日隔天才結束轉倉模式
+                rollover_end = nearest_delivery + timedelta(days=1)
+            
+            # 更精確的轉倉期間判斷
+            in_rollover_period = False
+            if today < nearest_delivery:
+                # 交割日前一天及之前
+                in_rollover_period = (today >= rollover_start)
+            elif today == nearest_delivery:
+                # 交割日當天，15:00前仍在轉倉期間
+                in_rollover_period = (current_time.hour < 15)
+            else:
+                # 交割日之後
+                in_rollover_period = False
+            
+            if in_rollover_period:
+                # 轉倉期間：交割日前一天到交割日當天之前
                 if not rollover_mode:
                     rollover_mode = True
                     rollover_start_date = rollover_start
                     print_console("TRADE", "INFO", f"進入轉倉模式，交割日: {formatted_nearest}")
-                    print_console("DEBUG", "SUCCESS", f"轉倉模式已設置: rollover_mode={rollover_mode}")
                     
                     # 獲取次月合約
-                    print_console("DEBUG", "INFO", "開始獲取次月合約...")
                     get_next_month_contracts()
-                    print_console("DEBUG", "INFO", f"次月合約獲取完成，數量: {len(next_month_contracts)}")
-                    
-                    # 顯示次月合約內容
-                    for code, contract in next_month_contracts.items():
-                        if contract:
-                            delivery_date = format_delivery_date(contract.delivery_date)
-                            print_console("DEBUG", "INFO", f"次月合約 {code}: {contract.code} (交割日: {delivery_date})")
                 else:
-                    print_console("DEBUG", "INFO", "已經處於轉倉模式，無需重複設置")
                     
                     # 系統重啟後的轉倉檢查，不發送通知（避免重複發送）
                     # 因為轉倉通知應該只在定時檢查（00:05）時發送一次
@@ -6551,22 +6690,43 @@ def check_rollover_mode():
                     
                 return True
             else:
-                formatted_today = format_delivery_date(str(today))
-                print_console("DEBUG", "INFO", f"尚未到達轉倉時間 ({formatted_today} < {formatted_rollover})")
+                # 不在轉倉期間
                 if rollover_mode:
-                    rollover_mode = False
-                    rollover_start_date = None
-                    next_month_contracts.clear()
-                    rollover_processed_signals.clear()
-                    print_console("DEBUG", "INFO", "退出轉倉模式")
+                    # 檢查是否應該結束轉倉模式
+                    should_end_rollover = False
+                    
+                    if today > nearest_delivery:
+                        # 交割日之後，結束轉倉模式
+                        should_end_rollover = True
+                    elif today == nearest_delivery and current_time.hour >= 15:
+                        # 交割日當天15:00後，結束轉倉模式
+                        should_end_rollover = True
+                    elif today < rollover_start:
+                        # 還未到轉倉時間，結束轉倉模式
+                        should_end_rollover = True
+                    
+                    if should_end_rollover:
+                        rollover_mode = False
+                        rollover_start_date = None
+                        next_month_contracts.clear()
+                        rollover_processed_signals.clear()
+                        
+                        if today >= nearest_delivery:
+                            print_console("TRADE", "SUCCESS", f"交割日夜盤開始，結束轉倉模式，切換至新月份合約")
+                            # 強制重新初始化合約對象，以更新為新的當月合約
+                            contract_txf = None
+                            contract_mxf = None 
+                            contract_tmf = None
+                            print_console("SYSTEM", "INFO", "已重置合約對象，將重新初始化為新當月合約")
+                        else:
+                            print_console("SYSTEM", "INFO", "退出轉倉模式（尚未到轉倉時間）")
                     
                 return False
         else:
-            print_console("DEBUG", "WARNING", "無可用的交割日期，無法進行轉倉檢查")
             return False
         
     except Exception as e:
-        print_console("DEBUG", "ERROR", "檢查轉倉模式失敗", str(e))
+        print_console("SYSTEM", "ERROR", "檢查轉倉模式失敗", str(e))
         return False
 
 def get_contract_for_rollover(contract_type):
