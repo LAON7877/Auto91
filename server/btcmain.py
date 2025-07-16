@@ -108,14 +108,8 @@ class BinanceClient:
     def test_connection(self):
         """測試API連接"""
         try:
-            print(f"正在進行幣安API連接測試...")
             result = self._make_request('GET', '/fapi/v1/ping', signed=False)
-            if result is not None and isinstance(result, dict):
-                print(f"幣安API ping測試成功: {result}")
-                return True
-            else:
-                print(f"幣安API ping測試失敗: 無回應或格式錯誤 - {result}")
-                return False
+            return result is not None and isinstance(result, dict)
         except Exception as e:
             print(f"幣安連接測試異常: {e}")
             return False
@@ -341,21 +335,15 @@ def btc_login():
         binance_client = BinanceClient(api_key, secret_key)
         
         # 測試連接
-        print(f"正在測試幣安API連接...")
         connection_test = binance_client.test_connection()
-        print(f"幣安API連接測試結果: {connection_test}")
         
         if not connection_test:
-            print(f"幣安API連接測試失敗")
             return jsonify({'success': False, 'message': '無法連接到幣安服務器'})
         
-        print(f"幣安API連接測試成功，正在獲取帳戶信息...")
         # 獲取帳戶信息
         fresh_account_info = binance_client.get_account_info()
-        print(f"帳戶信息獲取結果: {type(fresh_account_info)} - {fresh_account_info}")
         
         if not fresh_account_info:
-            print(f"獲取帳戶信息失敗 - 返回值為空")
             return jsonify({'success': False, 'message': 'API認證失敗，請檢查API Key和Secret Key'})
         
         # 更新全局帳戶信息
@@ -1311,14 +1299,18 @@ def send_btc_trading_statistics():
                     if maintenance_margin > 0:
                         margin_ratio = (margin_balance / maintenance_margin) * 100
                     
+                    # 獲取實際的手續費和已實現盈虧
+                    today_commission = get_today_commission()
+                    today_realized_pnl = get_today_realized_pnl()
+                    
                     msg += f"錢包餘額：{wallet_balance:,.2f} USDT\n"
                     msg += f"可用餘額：{available_balance:,.2f} USDT\n"
                     msg += f"總保證金：{total_margin:,.2f} USDT\n"
                     msg += f"保證金餘額：{margin_balance:,.2f} USDT\n"
                     msg += f"維持保證金：{maintenance_margin:,.2f} USDT\n"
                     msg += f"保證金率：{margin_ratio:,.1f}%\n"
-                    msg += f"手續費：0.00 USDT\n"
-                    msg += f"本日已實現盈虧：0.00 USDT\n"
+                    msg += f"手續費：{today_commission:,.2f} USDT\n"
+                    msg += f"本日已實現盈虧：{today_realized_pnl:,.2f} USDT\n"
             except Exception as e:
                 print(f"獲取BTC帳戶信息失敗: {e}")
                 msg += "帳戶信息獲取失敗\n"
@@ -1914,7 +1906,7 @@ def generate_btc_trading_report():
         
         # 計算交易統計
         total_orders = len(trades)
-        total_cancels = 0  # BTC暫時沒有取消統計
+        total_cancels = 0  # BTC沒有取消統計
         total_trades = len([t for t in trades if t.get('type') == 'deal'])
         
         # 計算買賣統計
@@ -1979,14 +1971,18 @@ def generate_btc_trading_report():
         if account_data.get('totalMaintMargin', 0) > 0:
             margin_ratio = (account_data.get('totalMarginBalance', 0) / account_data.get('totalMaintMargin', 1)) * 100
         
+        # 獲取實際的手續費和已實現盈虧
+        today_commission = get_today_commission()
+        today_realized_pnl = get_today_realized_pnl()
+        
         ws[f'A{current_row + 2}'] = f"＄{account_data.get('totalWalletBalance', 0):,.2f}"      # 錢包餘額
         ws[f'B{current_row + 2}'] = f"＄{account_data.get('availableBalance', 0):,.2f}"       # 可用餘額
         ws[f'C{current_row + 2}'] = f"＄{account_data.get('totalInitialMargin', 0):,.2f}"     # 總保證金
         ws[f'D{current_row + 2}'] = f"＄{account_data.get('totalMarginBalance', 0):,.2f}"     # 保證金餘額
         ws[f'E{current_row + 2}'] = f"＄{account_data.get('totalMaintMargin', 0):,.2f}"       # 維持保證金
         ws[f'F{current_row + 2}'] = f"{margin_ratio:.2f}%"                                    # 保證金率
-        ws[f'G{current_row + 2}'] = f"＄0.00"                                                 # 手續費（暫時為0）
-        ws[f'H{current_row + 2}'] = f"＄0.00"                                                 # 本日已實現盈虧（暫時為0）
+        ws[f'G{current_row + 2}'] = f"＄{today_commission:,.2f}"                              # 手續費
+        ws[f'H{current_row + 2}'] = f"＄{today_realized_pnl:,.2f}"                           # 本日已實現盈虧
         
         # 交易明細區塊
         current_row += 4
@@ -2161,7 +2157,7 @@ def generate_btc_monthly_report():
         # 交易總覽數據行
         row = 5
         ws.cell(row=row, column=1, value=total_trades).alignment = center_alignment
-        ws.cell(row=row, column=2, value=0).alignment = center_alignment  # 取消數量暫時為0
+        ws.cell(row=row, column=2, value=0).alignment = center_alignment  # 取消數量
         ws.cell(row=row, column=3, value=total_trades).alignment = center_alignment
         ws.cell(row=row, column=4, value=buy_trades).alignment = center_alignment
         ws.cell(row=row, column=5, value=sell_trades).alignment = center_alignment
@@ -2214,14 +2210,18 @@ def generate_btc_monthly_report():
                     if total_maint_margin > 0:
                         margin_ratio = (total_margin_balance / total_maint_margin) * 100
                     
+                    # 獲取實際的本月手續費和已實現盈虧
+                    monthly_commission = get_monthly_commission()
+                    monthly_realized_pnl = get_monthly_realized_pnl()
+                    
                     ws.cell(row=row, column=1, value=f"{wallet_balance:.2f}").alignment = center_alignment      # 錢包餘額
                     ws.cell(row=row, column=2, value=f"{available_balance:.2f}").alignment = center_alignment   # 可用餘額
                     ws.cell(row=row, column=3, value=f"{total_initial_margin:.2f}").alignment = center_alignment # 總保證金
                     ws.cell(row=row, column=4, value=f"{total_margin_balance:.2f}").alignment = center_alignment # 保證金餘額
                     ws.cell(row=row, column=5, value=f"{total_maint_margin:.2f}").alignment = center_alignment   # 維持保證金
                     ws.cell(row=row, column=6, value=f"{margin_ratio:.2f}%").alignment = center_alignment       # 保證金率
-                    ws.cell(row=row, column=7, value="0.00").alignment = center_alignment                       # 手續費（暫時為0）
-                    ws.cell(row=row, column=8, value="0.00").alignment = center_alignment                       # 本月已實現盈虧（暫時為0）
+                    ws.cell(row=row, column=7, value=f"{monthly_commission:.2f}").alignment = center_alignment   # 手續費
+                    ws.cell(row=row, column=8, value=f"{monthly_realized_pnl:.2f}").alignment = center_alignment # 本月已實現盈虧
             except Exception as e:
                 print(f"獲取BTC月報帳戶詳細資訊失敗: {e}")
                 for col in range(1, 9):  # 修改為9，因為現在有8個欄位
@@ -2273,8 +2273,8 @@ def generate_btc_monthly_report():
             ws.cell(row=row, column=7, value=f"{amount:.2f}" if amount else "-").alignment = center_alignment
             ws.cell(row=row, column=8, value=order_id).alignment = center_alignment
             ws.cell(row=row, column=9, value=status).alignment = center_alignment
-            ws.cell(row=row, column=10, value="0.00").alignment = center_alignment  # 手續費暫時為0
-            ws.cell(row=row, column=11, value="").alignment = center_alignment  # 備註暫時為空
+            ws.cell(row=row, column=10, value="0.00").alignment = center_alignment  # 手續費
+            ws.cell(row=row, column=11, value="").alignment = center_alignment  # 備註
         
         if not month_trades:
             row = 13
@@ -2313,6 +2313,78 @@ def generate_btc_monthly_report():
         return None
 
 # ========================== API 路由函數 ==========================
+
+def get_monthly_commission():
+    """獲取本月手續費"""
+    try:
+        if not binance_client:
+            return 0.0
+        
+        from datetime import datetime, timezone
+        
+        # 獲取本月1號00:00的時間戳
+        now = datetime.now(timezone.utc)
+        start_of_month = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        start_time = int(start_of_month.timestamp() * 1000)
+        
+        # 獲取當前時間戳
+        end_time = int(now.timestamp() * 1000)
+        
+        try:
+            # 查詢手續費記錄
+            income_data = binance_client._make_request('GET', '/fapi/v1/income', {
+                'incomeType': 'COMMISSION',
+                'startTime': start_time,
+                'endTime': end_time,
+                'limit': 1000
+            })
+            
+            if income_data:
+                total_commission = sum(abs(float(item.get('income', 0))) for item in income_data)
+                return total_commission
+        except Exception as e:
+            print(f"獲取本月手續費失敗: {e}")
+        
+        return 0.0
+    except Exception as e:
+        print(f"計算本月手續費時發生錯誤: {e}")
+        return 0.0
+
+def get_monthly_realized_pnl():
+    """獲取本月已實現盈虧"""
+    try:
+        if not binance_client:
+            return 0.0
+        
+        from datetime import datetime, timezone
+        
+        # 獲取本月1號00:00的時間戳
+        now = datetime.now(timezone.utc)
+        start_of_month = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        start_time = int(start_of_month.timestamp() * 1000)
+        
+        # 獲取當前時間戳
+        end_time = int(now.timestamp() * 1000)
+        
+        try:
+            # 查詢已實現盈虧記錄
+            income_data = binance_client._make_request('GET', '/fapi/v1/income', {
+                'incomeType': 'REALIZED_PNL',
+                'startTime': start_time,
+                'endTime': end_time,
+                'limit': 1000
+            })
+            
+            if income_data:
+                total_realized_pnl = sum(float(item.get('income', 0)) for item in income_data)
+                return total_realized_pnl
+        except Exception as e:
+            print(f"獲取本月已實現盈虧失敗: {e}")
+        
+        return 0.0
+    except Exception as e:
+        print(f"計算本月已實現盈虧時發生錯誤: {e}")
+        return 0.0
 
 def get_btc_config():
     """獲取BTC配置"""
