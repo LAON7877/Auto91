@@ -2175,13 +2175,20 @@ def api_futures_contracts():
                     
                     available_contracts[code] = available_list
                     
-                    # 選用合約：轉倉模式下使用次月合約，否則使用最近交割日合約
+                    # 選用合約：轉倉模式下使用次月合約(R2)，否則使用當月合約(R1)
                     if sorted_contracts:
-                        # 在轉倉模式下，優先使用次月合約
+                        # 在轉倉模式下，優先使用次月合約（R2）
                         if rollover_mode and next_month_contracts.get(code):
                             selected_contract = next_month_contracts[code]
                         else:
-                            selected_contract = sorted_contracts[0]
+                            # 非轉倉模式：尋找R1合約作為當月合約
+                            r1_contract = None
+                            for contract in sorted_contracts:
+                                if contract.code.endswith('R1'):
+                                    r1_contract = contract
+                                    break
+                            # 如果找到R1合約則使用，否則使用第一個合約
+                            selected_contract = r1_contract if r1_contract else sorted_contracts[0]
                         
                         contract_name = '大台' if code == 'TXF' else '小台' if code == 'MXF' else '微台'
                         margin = margin_requirements.get(contract_name, 0)
@@ -2237,7 +2244,7 @@ def api_account_status():
         # 獲取保證金資訊
         margin_data = sinopac_api.margin()
         
-        # 獲取持倉資訊計算未實現盈虧
+        # 獲取持倉資訊計算未實現損益
         total_pnl = 0.0
         try:
             positions = sinopac_api.list_positions(sinopac_api.futopt_account)
@@ -2260,7 +2267,7 @@ def api_account_status():
                 '手續費': getattr(margin_data, 'fee', 0) or 0,
                 '期交稅': getattr(margin_data, 'tax', 0) or 0,
                 '本日平倉損益': getattr(margin_data, 'future_settle_profitloss', 0) or 0,
-                '未實現盈虧': total_pnl
+                '未實現損益': total_pnl
             },
             'last_updated': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         })
@@ -2476,9 +2483,9 @@ def api_position_status():
         
         # 初始化三種合約的持倉資料
         position_data = {
-            'TXF': {'動作': '-', '數量': '-', '均價': '-', '市價': '-', '未實現盈虧': '-'},
-            'MXF': {'動作': '-', '數量': '-', '均價': '-', '市價': '-', '未實現盈虧': '-'},
-            'TMF': {'動作': '-', '數量': '-', '均價': '-', '市價': '-', '未實現盈虧': '-'}
+            'TXF': {'動作': '-', '數量': '-', '均價': '-', '市價': '-', '未實現損益': '-'},
+            'MXF': {'動作': '-', '數量': '-', '均價': '-', '市價': '-', '未實現損益': '-'},
+            'TMF': {'動作': '-', '數量': '-', '均價': '-', '市價': '-', '未實現損益': '-'}
         }
         
         # 初始化總損益
@@ -2503,7 +2510,7 @@ def api_position_status():
                 # 判斷多空方向
                 direction = '多單' if position.direction == 'Buy' else '空單'
                 
-                # 獲取該持倉的未實現盈虧
+                # 獲取該持倉的未實現損益
                 unrealized_pnl = float(position.pnl) if hasattr(position, 'pnl') else 0.0
                 
                 # 獲取市價
@@ -2515,7 +2522,7 @@ def api_position_status():
                     '數量': f"{abs(int(position.quantity))} 口",
                     '均價': f"{float(position.price):,.0f}",
                     '市價': f"{last_price:,.0f}",
-                    '未實現盈虧': f"{unrealized_pnl:,.0f}"
+                    '未實現損益': f"{unrealized_pnl:,.0f}"
                 }
                 
                 # 累計總損益
@@ -2850,7 +2857,13 @@ def update_futures_contracts():
                 if rollover_mode and next_month_contracts.get(code):
                     futures_contracts[code] = next_month_contracts[code]
                 else:
-                    futures_contracts[code] = sorted_contracts[0]
+                    # 非轉倉模式：尋找R1合約作為當月合約
+                    r1_contract = None
+                    for contract in sorted_contracts:
+                        if contract.code.endswith('R1'):
+                            r1_contract = contract
+                            break
+                    futures_contracts[code] = r1_contract if r1_contract else sorted_contracts[0]
         
         return True
     except Exception as e:
@@ -4306,8 +4319,8 @@ def send_daily_startup_notification():
             for code, contract_name in position_order:
                 pos = positions.get(code, {})
                 if pos.get('動作', '-') != '-':  # 有持倉的才顯示
-                    # 獲取該持倉的未實現盈虧
-                    unrealized_pnl = pos.get('未實現盈虧', '0')
+                    # 獲取該持倉的未實現損益
+                    unrealized_pnl = pos.get('未實現損益', '0')
                     # 移除千分位符號並轉換為數字
                     pnl_value = int(unrealized_pnl.replace(',', '')) if unrealized_pnl != '-' else 0
                     message += f"{contract_name}｜{pos['動作']}｜{pos['數量']}｜{pos['均價']}｜＄{pnl_value:,} TWD\n"
@@ -4555,7 +4568,7 @@ def generate_trading_report(trades, account_data, position_data, cover_trades, t
                     ws[f'I{current_row + row_offset}'] = pos.get('均價', '')
                     ws[f'J{current_row + row_offset}'] = '0'
                     
-                    unrealized_pnl = pos.get('未實現盈虧', '0')
+                    unrealized_pnl = pos.get('未實現損益', '0')
                     pnl_value = int(unrealized_pnl.replace(',', '')) if unrealized_pnl != '-' else 0
                     ws[f'K{current_row + row_offset}'] = f"＄{pnl_value:,} TWD"
                     
@@ -5213,8 +5226,8 @@ def send_daily_trading_statistics():
             for code, contract_name in position_order:
                 pos = positions.get(code, {})
                 if pos.get('動作', '-') != '-':  # 有持倉的才顯示
-                    # 獲取該持倉的未實現盈虧
-                    unrealized_pnl = pos.get('未實現盈虧', '0')
+                    # 獲取該持倉的未實現損益
+                    unrealized_pnl = pos.get('未實現損益', '0')
                     # 移除千分位符號並轉換為數字
                     pnl_value = int(unrealized_pnl.replace(',', '')) if unrealized_pnl != '-' else 0
                     message += f"{contract_name}｜{pos['動作']}｜{pos['數量']}｜{pos['均價']}｜＄{pnl_value:,} TWD\n"
@@ -5520,7 +5533,13 @@ def process_signal(data):
             if rollover_mode and next_month_contracts.get('TXF'):
                 contract_txf = next_month_contracts['TXF']
             else:
-                contract_txf = sorted_contracts[0]
+                # 非轉倉模式：尋找R1合約作為當月合約
+                r1_contract = None
+                for contract in sorted_contracts:
+                    if contract.code.endswith('R1'):
+                        r1_contract = contract
+                        break
+                contract_txf = r1_contract if r1_contract else sorted_contracts[0]
                 
         # 更新MXF合約（無論是否已存在，都重新選擇以確保轉倉邏輯正確）
         mxf_contracts = sinopac_api.Contracts.Futures.get("MXF")
@@ -5529,7 +5548,13 @@ def process_signal(data):
             if rollover_mode and next_month_contracts.get('MXF'):
                 contract_mxf = next_month_contracts['MXF']
             else:
-                contract_mxf = sorted_contracts[0]
+                # 非轉倉模式：尋找R1合約作為當月合約
+                r1_contract = None
+                for contract in sorted_contracts:
+                    if contract.code.endswith('R1'):
+                        r1_contract = contract
+                        break
+                contract_mxf = r1_contract if r1_contract else sorted_contracts[0]
                 
         # 更新TMF合約（無論是否已存在，都重新選擇以確保轉倉邏輯正確）
         tmf_contracts = sinopac_api.Contracts.Futures.get("TMF")
@@ -5538,7 +5563,13 @@ def process_signal(data):
             if rollover_mode and next_month_contracts.get('TMF'):
                 contract_tmf = next_month_contracts['TMF']
             else:
-                contract_tmf = sorted_contracts[0]
+                # 非轉倉模式：尋找R1合約作為當月合約
+                r1_contract = None
+                for contract in sorted_contracts:
+                    if contract.code.endswith('R1'):
+                        r1_contract = contract
+                        break
+                contract_tmf = r1_contract if r1_contract else sorted_contracts[0]
         
         print(f"當前合約: TXF={contract_txf.code if contract_txf else None}, "
               f"MXF={contract_mxf.code if contract_mxf else None}, "
@@ -6033,7 +6064,13 @@ def init_contracts():
                 contract_txf = next_month_contracts['TXF']
                 print(f"大台指合約（轉倉模式）: {contract_txf.code} (交割日: {contract_txf.delivery_date})")
             else:
-                contract_txf = sorted_contracts[0]
+                # 非轉倉模式：尋找R1合約作為當月合約
+                r1_contract = None
+                for contract in sorted_contracts:
+                    if contract.code.endswith('R1'):
+                        r1_contract = contract
+                        break
+                contract_txf = r1_contract if r1_contract else sorted_contracts[0]
                 print(f"大台指合約: {contract_txf.code} (交割日: {contract_txf.delivery_date})")
         else:
             print("警告: 無法獲取大台指合約")
@@ -6046,7 +6083,13 @@ def init_contracts():
                 contract_mxf = next_month_contracts['MXF']
                 print(f"小台指合約（轉倉模式）: {contract_mxf.code} (交割日: {contract_mxf.delivery_date})")
             else:
-                contract_mxf = sorted_contracts[0]
+                # 非轉倉模式：尋找R1合約作為當月合約
+                r1_contract = None
+                for contract in sorted_contracts:
+                    if contract.code.endswith('R1'):
+                        r1_contract = contract
+                        break
+                contract_mxf = r1_contract if r1_contract else sorted_contracts[0]
                 print(f"小台指合約: {contract_mxf.code} (交割日: {contract_mxf.delivery_date})")
         else:
             print("警告: 無法獲取小台指合約")
@@ -6059,7 +6102,13 @@ def init_contracts():
                 contract_tmf = next_month_contracts['TMF']
                 print(f"微台指合約（轉倉模式）: {contract_tmf.code} (交割日: {contract_tmf.delivery_date})")
             else:
-                contract_tmf = sorted_contracts[0]
+                # 非轉倉模式：尋找R1合約作為當月合約
+                r1_contract = None
+                for contract in sorted_contracts:
+                    if contract.code.endswith('R1'):
+                        r1_contract = contract
+                        break
+                contract_tmf = r1_contract if r1_contract else sorted_contracts[0]
                 print(f"微台指合約: {contract_tmf.code} (交割日: {contract_tmf.delivery_date})")
         else:
             print("警告: 無法獲取微台指合約")
@@ -6103,8 +6152,14 @@ def place_futures_order(contract_code, quantity, direction, price=0, is_manual=F
         if rollover_mode and next_month_contracts.get(contract_code):
             target_contract = next_month_contracts[contract_code]
         else:
-            # 使用最近月份的合約（按到期日排序）
-            target_contract = sorted(contracts, key=lambda x: x.delivery_date)[0]
+            # 非轉倉模式：尋找R1合約作為當月合約
+            sorted_contracts = sorted(contracts, key=lambda x: x.delivery_date)
+            r1_contract = None
+            for contract in sorted_contracts:
+                if contract.code.endswith('R1'):
+                    r1_contract = contract
+                    break
+            target_contract = r1_contract if r1_contract else sorted_contracts[0]
         
         
         # 永豐手動下單：使用永豐官方參數格式
