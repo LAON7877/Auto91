@@ -1936,7 +1936,7 @@ def generate_btc_trading_report():
         ws['A1'].alignment = center_alignment
         
         # 交易總覽標題（橫向）
-        titles = ['委託數量', '取消數量', '成交數量', '買入次數', '賣出次數', 'BTC損益', '總錢包餘額']
+        titles = ['委託數量', '取消數量', '成交數量', '買入次數', '賣出次數', 'BTC盈虧', '總錢包餘額']
         for i, title in enumerate(titles):
             col = get_column_letter(i + 1)
             ws[f'{col}2'] = title
@@ -2142,12 +2142,12 @@ def generate_btc_monthly_report():
         buy_trades = len([t for t in month_trades if t.get('side') == 'BUY'])
         sell_trades = len([t for t in month_trades if t.get('side') == 'SELL'])
         
-        # 計算總交易量和BTC損益
+        # 計算總交易量和BTC盈虧
         total_volume = sum(float(t.get('fill_quantity', t.get('quantity', 0))) for t in month_trades)
         
         # 交易總覽標題行（參考TX格式）
         row = 4
-        titles = ['委託數量', '取消數量', '成交數量', '買入次數', '賣出次數', 'BTC損益', '總錢包餘額']
+        titles = ['委託數量', '取消數量', '成交數量', '買入次數', '賣出次數', 'BTC盈虧', '總錢包餘額']
         for col, title in enumerate(titles, 1):
             cell = ws.cell(row=row, column=col, value=title)
             cell.fill = gray_fill

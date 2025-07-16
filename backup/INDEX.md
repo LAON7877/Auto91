@@ -1,6 +1,17 @@
 # 文檔導航索引
 
-**最新版本：v1.4.1** - 轉倉系統完整重構與代碼優化 (2025-07-15)
+**最新版本：v1.4.2** - TX合約選擇與持倉狀態顯示修復 (2025-07-16)
+
+### 2025-07-16 重大更新內容
+- **TX合約選擇顯示修復**：修復TX交易面板顯示G5合約而非R1合約的問題
+- **持倉狀態顯示修復**：修復TX前端持倉狀態所有欄位顯示"-"的問題
+- **個別損益顯示修復**：修復持倉狀態中各部位個別損益顯示"-"而非實際數字的問題
+- **合約選擇邏輯增強**：改善非轉倉模式下的R1合約優先選擇邏輯
+- **持倉狀態API修復**：修復後端API中position.pnl為None時的處理邏輯
+- **前端欄位映射修復**：修正前端JavaScript中欄位名稱不匹配問題
+- **系統穩定性提升**：修復多個潛在的null pointer異常
+
+**歷史版本：v1.4.1** - 轉倉系統完整重構與代碼優化 (2025-07-15)
 
 ### 2025-07-15 重大更新內容
 - **轉倉系統完整重構**：移除所有硬編碼，實現完全動態的轉倉系統
@@ -60,14 +71,14 @@
 
 - 2025-07-06：轉倉/保證金前端日誌、日誌格式優化、顏色說明、細節修正。
 
-- [README.md](README.md) 系統概況與功能 **[v1.4.1 已更新]**
-- [QUICK_START.md](QUICK_START.md) 5 分鐘快速上手 **[v1.4.1 已更新]**
-- [API_REFERENCE.md](API_REFERENCE.md) API 技術參考 **[v1.4.1 已更新]**
-- [CHANGELOG.md](CHANGELOG.md) 版本變更紀錄 **[v1.4.1 已更新]**
-- [TROUBLESHOOTING.md](TROUBLESHOOTING.md) 故障排除 **[v1.4.1 已更新]**
-- [DEPLOYMENT.md](DEPLOYMENT.md) 生產部署指南 **[v1.4.1 已更新]**
-- [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md) 開發者指南 **[v1.4.1 已更新]**
-- [MAINTENANCE.md](MAINTENANCE.md) 維護運營指南 **[v1.4.1 已更新]**
+- [README.md](README.md) 系統概況與功能 **[v1.4.2 已更新]**
+- [QUICK_START.md](QUICK_START.md) 5 分鐘快速上手 **[v1.4.2 已更新]**
+- [API_REFERENCE.md](API_REFERENCE.md) API 技術參考 **[v1.4.2 已更新]**
+- [CHANGELOG.md](CHANGELOG.md) 版本變更紀錄 **[v1.4.2 已更新]**
+- [TROUBLESHOOTING.md](TROUBLESHOOTING.md) 故障排除 **[v1.4.2 已更新]**
+- [DEPLOYMENT.md](DEPLOYMENT.md) 生產部署指南 **[v1.4.2 已更新]**
+- [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md) 開發者指南 **[v1.4.2 已更新]**
+- [MAINTENANCE.md](MAINTENANCE.md) 維護運營指南 **[v1.4.2 已更新]**
 
 ## 重點功能文檔
 

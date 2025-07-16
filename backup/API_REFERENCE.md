@@ -1,6 +1,54 @@
 # API 參考文檔
 
-## 最新更新 (v1.4.1 - 2025-07-15)
+## 最新更新 (v1.4.2 - 2025-07-16)
+
+### TX合約選擇與持倉狀態顯示修復
+
+#### 持倉狀態 API 修復
+**修復 `/api/position/status` 端點**
+```python
+@app.route('/api/position/status', methods=['GET'])
+def api_position_status():
+    """獲取持倉狀態資訊 - v1.4.2 修復版本"""
+    try:
+        # 修復：增加null檢查避免float(None)錯誤
+        unrealized_pnl = float(position.pnl) if hasattr(position, 'pnl') and position.pnl is not None else 0.0
+        
+        # 修復：統一欄位名稱為"未實現損益"
+        position_data[contract_type] = {
+            '動作': direction,
+            '數量': f"{quantity} 口",
+            '均價': f"{avg_price:,.0f}",
+            '市價': f"{last_price:,.0f}",
+            '未實現損益': f"{unrealized_pnl:,.0f}"  # 統一欄位名稱
+        }
+```
+
+#### 前端欄位映射修復
+**修復 main.js 中的欄位名稱匹配**
+```javascript
+// 修復前：錯誤的欄位名稱
+const pnlText = contractData['未實現盈虧']; // 錯誤
+
+// 修復後：正確的欄位名稱
+const pnlText = contractData['未實現損益']; // 正確
+```
+
+#### 合約選擇邏輯增強
+**改善非轉倉模式下的R1合約優先選擇**
+```python
+# 非轉倉模式：優先尋找R1合約
+r1_contract = None
+for contract in sorted_contracts:
+    if contract.code.endswith('R1'):
+        r1_contract = contract
+        break
+selected_contract = r1_contract if r1_contract else sorted_contracts[0]
+```
+
+---
+
+## 版本歷史更新 (v1.4.1 - 2025-07-15)
 
 ### 轉倉系統完整重構與合約選擇優化
 

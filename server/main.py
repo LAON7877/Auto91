@@ -2512,7 +2512,7 @@ def api_position_status():
                     direction = '多單' if position.direction == 'Buy' else '空單'
                     
                     # 獲取該持倉的未實現損益
-                    unrealized_pnl = float(position.pnl) if hasattr(position, 'pnl') else 0.0
+                    unrealized_pnl = float(position.pnl) if hasattr(position, 'pnl') and position.pnl is not None else 0.0
                     
                     # 獲取市價
                     last_price = float(position.last_price) if hasattr(position, 'last_price') else 0.0

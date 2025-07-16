@@ -2594,7 +2594,7 @@ function updatePositionStatus() {
                 // 未實現盈虧 - 可隱藏
                 const pnlElement = document.getElementById(`position-${contractName}-unrealized-pnl`);
                 if (pnlElement) {
-                    const pnlText = contractData['未實現盈虧'];
+                    const pnlText = contractData['未實現損益'];
                     
                     if (pnlText && pnlText !== '-' && pnlText !== undefined) {
                         const pnlValue = parseFloat(pnlText.replace(/,/g, ''));

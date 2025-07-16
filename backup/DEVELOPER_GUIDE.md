@@ -1,6 +1,68 @@
 # 開發者指南
 
-## 最新重大更新 (v1.4.1 - 2025-07-15)
+## 最新重大更新 (v1.4.2 - 2025-07-16)
+
+### TX合約選擇與持倉狀態顯示修復
+
+#### 持倉狀態API修復架構
+
+**修復前的問題**：
+```python
+# 問題1：沒有null檢查
+unrealized_pnl = float(position.pnl) if hasattr(position, 'pnl') else 0.0
+# 當position.pnl為None時會產生float(None)錯誤
+
+# 問題2：前後端欄位名稱不一致
+# 後端：'未實現損益'
+# 前端：'未實現盈虧'
+```
+
+**修復後的邏輯**：
+```python
+# 修復：增加null檢查
+unrealized_pnl = float(position.pnl) if hasattr(position, 'pnl') and position.pnl is not None else 0.0
+
+# 修復：統一欄位名稱
+position_data[contract_type] = {
+    '未實現損益': f"{unrealized_pnl:,.0f}"  # 前後端統一使用此欄位名稱
+}
+```
+
+#### 前端欄位映射修復
+
+**JavaScript修復**：
+```javascript
+// 修復前：錯誤的欄位名稱
+const pnlText = contractData['未實現盈虧'];
+
+// 修復後：正確的欄位名稱
+const pnlText = contractData['未實現損益'];
+
+// 增強的錯誤處理
+if (pnlText && pnlText !== '-' && pnlText !== undefined && pnlText !== null) {
+    const pnlValue = parseFloat(pnlText.replace(/,/g, ''));
+    // 正確處理和格式化
+}
+```
+
+#### 合約選擇邏輯增強
+
+**R1合約優先選擇**：
+```python
+# 非轉倉模式：優先尋找R1合約
+r1_contract = None
+for contract in sorted_contracts:
+    if contract.code.endswith('R1'):
+        r1_contract = contract
+        break
+
+# 使用R1合約，如果沒有找到則使用第一個合約
+selected_contract = r1_contract if r1_contract else sorted_contracts[0]
+```
+
+---
+
+## 版本歷史開發 (v1.4.1 - 2025-07-15)
 
 ### 轉倉系統完整重構與代碼優化
 
