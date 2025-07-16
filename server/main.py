@@ -2507,27 +2507,36 @@ def api_position_status():
                 else:
                     continue  # 跳過非期貨合約
                 
-                # 判斷多空方向
-                direction = '多單' if position.direction == 'Buy' else '空單'
-                
-                # 獲取該持倉的未實現損益
-                unrealized_pnl = float(position.pnl) if hasattr(position, 'pnl') else 0.0
-                
-                # 獲取市價
-                last_price = float(position.last_price) if hasattr(position, 'last_price') else 0.0
-                
-                # 更新對應合約的資料
-                position_data[contract_type] = {
-                    '動作': direction,
-                    '數量': f"{abs(int(position.quantity))} 口",
-                    '均價': f"{float(position.price):,.0f}",
-                    '市價': f"{last_price:,.0f}",
-                    '未實現損益': f"{unrealized_pnl:,.0f}"
-                }
-                
-                # 累計總損益
-                total_pnl += unrealized_pnl
-                has_positions = True
+                try:
+                    # 判斷多空方向
+                    direction = '多單' if position.direction == 'Buy' else '空單'
+                    
+                    # 獲取該持倉的未實現損益
+                    unrealized_pnl = float(position.pnl) if hasattr(position, 'pnl') else 0.0
+                    
+                    # 獲取市價
+                    last_price = float(position.last_price) if hasattr(position, 'last_price') else 0.0
+                    
+                    # 獲取數量和均價
+                    quantity = abs(int(position.quantity))
+                    avg_price = float(position.price)
+                    
+                    # 更新對應合約的資料
+                    position_data[contract_type] = {
+                        '動作': direction,
+                        '數量': f"{quantity} 口",
+                        '均價': f"{avg_price:,.0f}",
+                        '市價': f"{last_price:,.0f}",
+                        '未實現損益': f"{unrealized_pnl:,.0f}"
+                    }
+                    
+                    # 累計總損益
+                    total_pnl += unrealized_pnl
+                    has_positions = True
+                    
+                except Exception as e:
+                    print(f"處理持倉 {contract_code} 時發生錯誤: {e}")
+                    continue
         
         # 格式化總損益
         total_pnl_display = f"{total_pnl:,.0f} TWD" if has_positions else "-"

@@ -2547,65 +2547,79 @@ function updatePositionStatus() {
             const contractNames = ['txf', 'mxf', 'tmf'];
             
             contractTypes.forEach((contractType, index) => {
-                const contractName = contractNames[index];
-                const contractData = positionData[contractType];
+                try {
+                    const contractName = contractNames[index];
+                    const contractData = positionData[contractType];
+                    
                 
                 // 動作 - 不隱藏
                 const actionElement = document.getElementById(`position-${contractName}-action`);
-                actionElement.textContent = contractData['動作'];
-                actionElement.className = 'position-table-value';
-                actionElement.dataset.originalValue = contractData['動作'];
-                if (contractData['動作'] === '多單') {
-                    actionElement.classList.add('long');
-                } else if (contractData['動作'] === '空單') {
-                    actionElement.classList.add('short');
+                if (actionElement) {
+                    actionElement.textContent = contractData['動作'];
+                    actionElement.className = 'position-table-value';
+                    actionElement.dataset.originalValue = contractData['動作'];
+                }
+                if (actionElement) {
+                    if (contractData['動作'] === '多單') {
+                        actionElement.classList.add('long');
+                    } else if (contractData['動作'] === '空單') {
+                        actionElement.classList.add('short');
+                    }
                 }
                 
                 // 數量 - 可隱藏
                 const quantityElement = document.getElementById(`position-${contractName}-quantity`);
-                const quantityValue = contractData['數量'];
-                quantityElement.dataset.originalValue = quantityValue;
-                // 直接更新數值，隱藏效果由CSS blur處理
-                quantityElement.textContent = quantityValue;
+                if (quantityElement) {
+                    const quantityValue = contractData['數量'];
+                    quantityElement.dataset.originalValue = quantityValue;
+                    quantityElement.textContent = quantityValue;
+                }
                 
                 // 均價 - 可隱藏
                 const avgPriceElement = document.getElementById(`position-${contractName}-avg-price`);
-                const avgPriceValue = contractData['均價'];
-                avgPriceElement.dataset.originalValue = avgPriceValue;
-                // 直接更新數值，隱藏效果由CSS blur處理
-                avgPriceElement.textContent = avgPriceValue;
+                if (avgPriceElement) {
+                    const avgPriceValue = contractData['均價'];
+                    avgPriceElement.dataset.originalValue = avgPriceValue;
+                    avgPriceElement.textContent = avgPriceValue;
+                }
                 
                 // 市價 - 可隱藏
                 const lastPriceElement = document.getElementById(`position-${contractName}-last-price`);
-                const lastPriceValue = contractData['市價'];
-                lastPriceElement.dataset.originalValue = lastPriceValue;
-                // 直接更新數值，隱藏效果由CSS blur處理
-                lastPriceElement.textContent = lastPriceValue;
+                if (lastPriceElement) {
+                    const lastPriceValue = contractData['市價'];
+                    lastPriceElement.dataset.originalValue = lastPriceValue;
+                    lastPriceElement.textContent = lastPriceValue;
+                }
                 
                 // 未實現盈虧 - 可隱藏
                 const pnlElement = document.getElementById(`position-${contractName}-unrealized-pnl`);
-                const pnlText = contractData['未實現盈虧'];
-                
-                if (pnlText !== '-') {
-                    const pnlValue = parseFloat(pnlText.replace(/,/g, ''));
-                    const pnlDisplay = formatNumber(pnlValue) + ' TWD';
+                if (pnlElement) {
+                    const pnlText = contractData['未實現盈虧'];
                     
-                    pnlElement.dataset.originalValue = pnlDisplay;
-                    pnlElement.className = 'position-table-value';
-                    
-                    // 直接更新數值，隱藏效果由CSS blur處理
-                    pnlElement.textContent = pnlDisplay;
-                    if (pnlValue > 0) {
-                        pnlElement.classList.add('positive');
-                    } else if (pnlValue < 0) {
-                        pnlElement.classList.add('negative');
-                    } else if (pnlValue === 0) {
-                        pnlElement.classList.add('neutral');
+                    if (pnlText && pnlText !== '-' && pnlText !== undefined) {
+                        const pnlValue = parseFloat(pnlText.replace(/,/g, ''));
+                        const pnlDisplay = formatNumber(pnlValue) + ' TWD';
+                        
+                        pnlElement.dataset.originalValue = pnlDisplay;
+                        pnlElement.className = 'position-table-value';
+                        pnlElement.textContent = pnlDisplay;
+                        
+                        if (pnlValue > 0) {
+                            pnlElement.classList.add('positive');
+                        } else if (pnlValue < 0) {
+                            pnlElement.classList.add('negative');
+                        } else if (pnlValue === 0) {
+                            pnlElement.classList.add('neutral');
+                        }
+                    } else {
+                        pnlElement.textContent = '-';
+                        pnlElement.className = 'position-table-value';
+                        pnlElement.dataset.originalValue = '-';
                     }
-                } else {
-                    pnlElement.textContent = '-';
-                    pnlElement.className = 'position-table-value';
-                    pnlElement.dataset.originalValue = '-';
+                }
+                
+                } catch (error) {
+                    console.error(`處理 ${contractType} 持倉時發生錯誤:`, error);
                 }
             });
             
