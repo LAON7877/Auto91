@@ -1,8 +1,8 @@
 {
-  "version": "1.4.5",
-  "build": "20250718001",
+  "version": "1.4.6",
+  "build": "202507182042",
   "release_date": "2025-07-18",
-  "description": "Auto91 交易系統 + 線上自動更新",
+  "description": "v1.4.6",
   "github_repo": "LAON7877/Auto91",
   "update_url": "https://api.github.com/repos/LAON7877/Auto91/releases/latest",
   "changelog": [
@@ -13,13 +13,20 @@
   ],
   "required_files": [
     "main.py",
-    "btcmain.py", 
+    "btcmain.py",
     "tunnel.py",
     "updater.py",
+    "version.json",
+    "version.json",
+    "start.bat",
     "version.json"
   ],
   "config_files": [
     "config/tx.env",
     "config/btc.env"
+  ],
+  "updated_at": "2025-07-18T20:42:38.898909",
+  "updated_files": [
+    "start.bat"
   ]
 }

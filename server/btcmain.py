@@ -579,8 +579,7 @@ def place_btc_futures_order(symbol, side, quantity, price=None, order_type="MARK
         manual_type = '手動' if is_manual else '自動'
         
         print(f"準備下BTC單: symbol={symbol}, side={side}, quantity={quantity}, type={order_type}, action={action_type}")
-        # 記錄到系統日誌
-        log_btc_system_message(f"準備{manual_type}{action_type}: {symbol} {side} {quantity} {order_type}", "info")
+        # 記錄到系統日誌（僅後端顯示）
         
         # 執行下單
         result = binance_client.place_order(
@@ -597,7 +596,7 @@ def place_btc_futures_order(symbol, side, quantity, price=None, order_type="MARK
             
             print(f"BTC訂單提交成功: OrderID={order_id}, ClientOrderID={client_order_id}")
             
-            # 記錄詳細的訂單提交日誌（參考TX格式）
+            # 記錄詳細的訂單提交日誌（僅後端顯示）
             detailed_log = get_btc_order_log_message(
                 symbol=symbol,
                 side=side,
@@ -608,7 +607,7 @@ def place_btc_futures_order(symbol, side, quantity, price=None, order_type="MARK
                 is_manual=is_manual,
                 action_type=action_type
             )
-            log_btc_system_message(detailed_log, "info")
+            # 僅在後端控制台顯示，不發送到前端
             
             # 記錄到活躍交易
             trade_record = {
@@ -716,7 +715,7 @@ def check_btc_order_fill(order_id, symbol):
                     is_success=True  # 成交時使用成功格式
                 )
                 log_message = detailed_fill_log
-                log_btc_system_message(log_message, "success")
+                # 僅在後端控制台顯示，不發送到前端
                 
                 # 發送成交通知
                 send_btc_trade_notification(trade_record)

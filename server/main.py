@@ -433,6 +433,9 @@ reconnect_attempts = 0  # 當前重連嘗試次數
 last_connection_check = None  # 上次連線檢查時間
 is_reconnecting = False  # 是否正在重連中
 
+# Webhook活動追蹤變數（用於自動/手動判斷）
+last_webhook_time = 0
+
 # 自定義請求日誌系統（用於前端顯示）
 custom_request_logs = []
 MAX_CUSTOM_LOGS = 50  # 最多保留50筆記錄
@@ -717,6 +720,12 @@ def add_custom_request_log(method, uri, status, extra_info=None):
     """添加自定義請求記錄"""
     global custom_request_logs
     
+    # 過濾掉 webhook 相關日誌，避免前端顯示
+    if uri in ['/webhook', '/webhook/btc', '/api/btc/webhook']:
+        # 只在後端記錄，不添加到前端日誌
+        print(f"[WEBHOOK] {method} {uri} - {status} - {extra_info}")
+        return
+    
     # 建立時間戳（加上日期但前端會只顯示時分秒）
     now = datetime.now()
     time_str = now.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3] + ' CST'
@@ -730,7 +739,7 @@ def add_custom_request_log(method, uri, status, extra_info=None):
         'uri': uri,
         'status': status,
         'status_text': get_status_text(status),
-        'type': 'webhook' if uri == '/webhook' else 'custom',
+        'type': 'custom',
         'extra_info': extra_info or {}
     }
     
@@ -1573,6 +1582,11 @@ def tradingview_webhook_tx():
             timer_thread.start()
         
         data['receive_time'] = datetime.now()
+        
+        # 記錄webhook活動時間，用於自動/手動判斷
+        global last_webhook_time
+        last_webhook_time = time.time()
+        
         process_signal(data)
         
         # 添加前端日誌 - 顯示訊號類型
@@ -1596,15 +1610,9 @@ def tradingview_webhook_tx():
         else:
             log_message = f"來自webhook訊號：{signal_type} - {direction}"
         
-        # 發送到前端系統日誌
-        try:
-            requests.post(
-                f'http://127.0.0.1:{CURRENT_PORT}/api/system_log',
-                json={'message': log_message, 'type': 'info'},
-                timeout=5
-            )
-        except:
-            pass
+        # 不發送webhook信號到前端系統日誌，只在後端記錄
+        # 後端日誌記錄
+        print(f"[WEBHOOK] {log_message}")
         
         # 記錄成功的webhook請求日誌
         add_custom_request_log('POST', '/webhook', 200, {
@@ -3136,7 +3144,7 @@ def order_callback(state, deal, order=None):
             # 如果找不到映射資訊，嘗試從交易記錄JSON文件中讀取（參考TXserver.py）
             today = datetime.now().strftime("%Y%m%d")
             filename = f"{LOG_DIR}/TXtrades_{today}.json"
-            oc_type, direction, order_type, price_type, is_manual = None, None, None, None, True
+            oc_type, direction, order_type, price_type, is_manual = None, None, None, None, None
             
             if os.path.exists(filename):
                 try:
@@ -3149,7 +3157,7 @@ def order_callback(state, deal, order=None):
                             direction = raw_order.get('action', deal.get('order', {}).get('action', 'Sell'))
                             order_type = raw_order.get('order_type', deal.get('order', {}).get('order_type', 'IOC'))
                             price_type = raw_order.get('price_type', 'MKT')
-                            is_manual = trade.get('is_manual', True)
+                            is_manual = trade.get('is_manual', False)
                             break
                 except Exception as e:
                     print(f"讀取交易記錄失敗：{e}")
@@ -3192,13 +3200,19 @@ def order_callback(state, deal, order=None):
                     direction = action
                     order_type = deal.get('order', {}).get('order_type', 'IOC')
                     price_type = deal.get('order', {}).get('price_type', 'MKT')
-                    is_manual = True  # 預設為手動操作
+                    
+                    # 簡化判斷：如果找不到資訊，預設為手動操作
+                    if is_manual is None:
+                        is_manual = True  # 無法判斷時，預設為手動操作
                 except:
                     oc_type = 'New'
                     direction = deal.get('order', {}).get('action', 'Sell')
                     order_type = deal.get('order', {}).get('order_type', 'IOC')
                     price_type = deal.get('order', {}).get('price_type', 'MKT')
-                    is_manual = True  # 預設為手動操作
+                    
+                    # 簡化判斷：如果找不到資訊，預設為手動操作
+                    if is_manual is None:
+                        is_manual = True  # 無法判斷時，預設為手動操作
             
             octype_info = {
                 'octype': oc_type,
@@ -5904,7 +5918,7 @@ def send_unified_failure_message(data, reason, order_id="未知"):
                     delivery_date_str = "未知"
                     contract_code = f"{code}XX" 
                 
-                # 記錄掛單失敗日誌
+                # 記錄掛單失敗日誌（僅後端顯示）
                 log_message = get_simple_order_log_message(
                     contract_name=name,
                     direction=str(expected_action),
@@ -5917,14 +5931,7 @@ def send_unified_failure_message(data, reason, order_id="未知"):
                     order_type="IOC",
                     price_type="MKT"
                 )
-                try:
-                    requests.post(
-                        f'http://127.0.0.1:{CURRENT_PORT}/api/system_log',
-                        json={'message': log_message, 'type': 'error'},
-                        timeout=5
-                    )
-                except:
-                    pass
+                # 僅在後端控制台顯示，不發送到前端
                 
                 fail_message = get_formatted_order_message(
                     is_success=False,
@@ -6193,15 +6200,35 @@ def process_exit_signal(data, qty_txf, qty_mxf, qty_tmf, direction, price, order
     # 平倉邏輯：使用實際持倉的合約進行平倉
     is_rollover_mode = data.get('rollover_mode', False)
     
-    # 檢查是否有持倉
-    position_txf = next((p for p in positions if p.code.startswith("TXF") and qty_txf > 0), None) if qty_txf > 0 else None
-    position_mxf = next((p for p in positions if p.code.startswith("MXF") and qty_mxf > 0), None) if qty_mxf > 0 else None  
-    position_tmf = next((p for p in positions if p.code.startswith("TMF") and qty_tmf > 0), None) if qty_tmf > 0 else None
+    # 檢查是否有對應方向的持倉 - 修正邏輯
+    # 平多：只平多單(Buy方向)，平空：只平空單(Sell方向)
+    if direction == "平多":
+        target_direction = safe_constants.get_action('BUY')
+    elif direction == "平空":
+        target_direction = safe_constants.get_action('SELL')
+    else:
+        print(f"警告: 未知的平倉方向: {direction}")
+        return
+    
+    position_txf = next((p for p in positions if p.code.startswith("TXF") and p.quantity != 0 and p.direction == target_direction), None) if qty_txf > 0 else None
+    position_mxf = next((p for p in positions if p.code.startswith("MXF") and p.quantity != 0 and p.direction == target_direction), None) if qty_mxf > 0 else None  
+    position_tmf = next((p for p in positions if p.code.startswith("TMF") and p.quantity != 0 and p.direction == target_direction), None) if qty_tmf > 0 else None
     
     has_position = bool(position_txf or position_mxf or position_tmf)
+    
+    # 調試信息
+    print(f"[平倉檢查] 訊號方向: {direction}, 目標持倉方向: {target_direction}")
+    print(f"[平倉檢查] 找到持倉: TXF={position_txf is not None}, MXF={position_mxf is not None}, TMF={position_tmf is not None}")
+    if position_txf:
+        print(f"[平倉檢查] TXF持倉: {position_txf.code}, 方向: {position_txf.direction}, 數量: {position_txf.quantity}")
+    if position_mxf:
+        print(f"[平倉檢查] MXF持倉: {position_mxf.code}, 方向: {position_mxf.direction}, 數量: {position_mxf.quantity}")
+    if position_tmf:
+        print(f"[平倉檢查] TMF持倉: {position_tmf.code}, 方向: {position_tmf.direction}, 數量: {position_tmf.quantity}")
             
     if not has_position:
-        print("警告: 無對應持倉，取消平倉")
+        print(f"警告: 無對應方向的持倉，取消平倉。訊號: {direction}")
+        print(f"當前所有持倉: {[(p.code, p.direction, p.quantity) for p in positions if p.quantity != 0]}")
         
         # 發送提交失敗訊息 - 使用轉倉邏輯選擇合約（用於通知顯示）
         contracts_to_check = [
@@ -6387,7 +6414,7 @@ def place_futures_order_tx_style(contract, quantity, direction, price, order_typ
         if hasattr(trade, 'operation') and trade.operation.get('op_msg'):
             error_msg = trade.operation.get('op_msg')
             
-            # 記錄掛單失敗日誌
+            # 記錄掛單失敗日誌（僅後端顯示）
             log_message = get_simple_order_log_message(
                 contract_name=contract_name,
                 direction=direction_str,
@@ -6400,14 +6427,7 @@ def place_futures_order_tx_style(contract, quantity, direction, price, order_typ
                 order_type=order_type,
                 price_type=price_type
             )
-            try:
-                requests.post(
-                    f'http://127.0.0.1:{CURRENT_PORT}/api/system_log',
-                    json={'message': log_message, 'type': 'error'},
-                    timeout=5
-                )
-            except:
-                pass
+            # 僅在後端控制台顯示，不發送到前端
             
             # 發送失敗通知
             # 修正：將永豐API常數轉換為字符串
@@ -6437,7 +6457,7 @@ def place_futures_order_tx_style(contract, quantity, direction, price, order_typ
                 'order_id': order_id
             }
         
-        # 記錄掛單成功日誌（前端顯示已移除）
+        # 記錄掛單成功日誌（僅後端顯示）
         log_message = get_simple_order_log_message(
             contract_name=contract_name,
             direction=direction_str,
@@ -6450,15 +6470,7 @@ def place_futures_order_tx_style(contract, quantity, direction, price, order_typ
             order_type=order_type,
             price_type=price_type
         )
-        # 前端系統日誌
-        try:
-            requests.post(
-                f'http://127.0.0.1:{CURRENT_PORT}/api/system_log',
-                json={'message': log_message, 'type': 'success'},
-                timeout=5
-            )
-        except:
-            pass
+        # 僅在後端控制台顯示，不發送到前端
         
         # 訂單提交成功 - 不需要立即發送通知，等callback處理
         print(f"訂單提交成功: {order_id} - {contract_name} {quantity} 口 {direction}")
@@ -6816,7 +6828,7 @@ def place_futures_order(contract_code, quantity, direction, price=0, is_manual=F
         print(f"訂單映射已建立: {order_info}")
         print(f"當前 order_octype_map 內容: {order_octype_map}")
         
-        # 記錄掛單成功日誌
+        # 記錄掛單成功日誌（僅後端顯示）
         log_message = get_simple_order_log_message(
             contract_name=contract_name,
             direction=direction_str,
@@ -6829,14 +6841,7 @@ def place_futures_order(contract_code, quantity, direction, price=0, is_manual=F
             order_type=str(final_order_type),
             price_type=str(final_price_type)
         )
-        try:
-            requests.post(
-                f'http://127.0.0.1:{CURRENT_PORT}/api/system_log',
-                json={'message': log_message, 'type': 'success'},
-                timeout=5
-            )
-        except:
-            pass
+        # 僅在後端控制台顯示，不發送到前端
         
         # 返回訂單資訊
         return {
@@ -8036,15 +8041,12 @@ def start_tx_service():
     start_rollover_checker()
     
     # 延遲執行轉倉檢查，等待合約對象初始化
-    # 在登入後會自動執行轉倉檢查，此處暫時移除
-    # print_console("SYSTEM", "INFO", "轉倉狀態檢查將在登入後自動執行")
+    # 在登入後會自動執行轉倉檢查
     
     # 啟動連線監控器
     start_connection_monitor()
     
     # 信號處理器只能在主線程中設置，在 start_tx_service 中不設置
-    # signal.signal(signal.SIGINT, signal_handler)
-    # signal.signal(signal.SIGTERM, signal_handler)
     
     print_console("SYSTEM", "SUCCESS", "TX交易服務初始化完成")
 

@@ -433,13 +433,11 @@ async function checkBtcLoginButton() {
         for (const key of requiredFields) {
             const value = env[key];
             if (!value || !value.toString().trim()) {
-                console.log(`BTC欄位 ${key} 為空:`, value);
                 allFilled = false;
                 break;
             }
         }
 
-        console.log('BTC所有欄位已填:', allFilled);
         if (allFilled) {
             loginBtn.disabled = false;
         }
@@ -853,7 +851,6 @@ function clearNgrokToken() {
 function updateTokenStatus() {
     // 原本的token狀態顯示元素已移除，此函數現在主要用於其他元件的狀態同步
     // 如果需要，可以在此處添加其他需要更新的元素
-    console.log('Token狀態已更新');
 }
 
 // 頁面載入時更新token狀態
@@ -902,7 +899,6 @@ function login() {
             })
             .then(res => res.json())
             .then(tunnelData => {
-                console.log('TX隧道啟動結果:', tunnelData);
             })
             .catch(error => {
                 console.error('TX隧道啟動失敗:', error);
@@ -1157,10 +1153,8 @@ function updateTunnelStatus(statusData, tunnelType = 'tx') {
 }
 
 // 已移除延遲監控功能 - Cloudflare Tunnel 不需要延遲監控
-// function updateLatency() - 已移除
 
 // 已移除TTL監控功能 - Cloudflare Tunnel 不需要TTL監控
-// function updateTTL() - 已移除
 
 // 複製到剪貼板的函數
 function copyToClipboard(text, button) {
@@ -1497,7 +1491,15 @@ function updateSystemLogsFromBackend() {
                                        (log.extra_info && log.extra_info.message && 
                                         (log.extra_info.message.includes('BTC') || log.extra_info.message.includes('比特幣')));
                         
-                        return isSystemLog && !isBtcLog;
+                        // 排除 webhook 相關日誌
+                        const isWebhookLog = log.uri === '/webhook' || 
+                                           log.uri === '/webhook/btc' || 
+                                           log.uri === '/api/btc/webhook' ||
+                                           (log.extra_info && log.extra_info.message && 
+                                            (log.extra_info.message.includes('來自webhook') ||
+                                             log.extra_info.message.includes('webhook')));
+                        
+                        return isSystemLog && !isBtcLog && !isWebhookLog;
                     })
                     .map(log => {
                         // 解析後端日誌格式
@@ -1848,10 +1850,8 @@ async function updateSinopacApiStatus() {
 // 更新幣安API狀態
 async function updateBinanceApiStatus() {
     try {
-        console.log('開始檢查BTC API狀態...');
         const response = await fetch('/api/btc/trading/status');
         const data = await response.json();
-        console.log('BTC API狀態回應:', data);
         
         const statusElement = document.getElementById('binance-api-status');
         const accountElement = document.getElementById('binance-account-id');
@@ -1862,7 +1862,6 @@ async function updateBinanceApiStatus() {
             if (data.success && data.status === 'connected') {
                 statusElement.textContent = 'API已連線';
                 statusElement.className = 'status-value running';  // 綠色
-                console.log('BTC API已連線');
                 
                 // 從btc.env獲取幣安用戶ID
                 fetch('/api/load_btc_env')
@@ -1882,12 +1881,10 @@ async function updateBinanceApiStatus() {
                 statusElement.textContent = 'API未連線';
                 statusElement.className = 'status-value stopped';  // 紅色
                 accountElement.textContent = '無幣安帳戶';
-                console.log('BTC API未連線或無帳戶信息:', data.message);
             } else {
                 statusElement.textContent = 'API連線中';
                 statusElement.className = 'status-value checking';  // 灰色
                 accountElement.textContent = '檢查中...';
-                console.log('BTC API連線中:', data.message);
             }
         }
         
@@ -2130,8 +2127,7 @@ function checkScheduledUpdate() {
         .then(res => res.json())
         .then(data => {
             if (data.is_trading_day) {
-                console.log('交易日14:50 - 執行合約和保證金更新');
-                updateFuturesContracts();
+                        updateFuturesContracts();
             }
             // 非交易日時不輸出任何訊息
         })
@@ -2456,15 +2452,12 @@ function startAccountAutoUpdate() {
     window.accountUpdateInterval = setInterval(async () => {
         const shouldUpdate = await shouldUpdateAccountStatus();
         if (shouldUpdate) {
-            console.log('交易時段內且為交易日，執行帳戶狀態和持倉狀態自動更新');
             updateAccountStatus();
             updatePositionStatus();
         } else {
-            console.log('非交易時段或非交易日，跳過帳戶狀態和持倉狀態自動更新');
         }
     }, 300000); // 每五分鐘檢查一次
     
-    console.log('帳戶自動更新已啟動');
 }
 
 // 停止帳戶自動更新
@@ -2472,7 +2465,6 @@ function stopAccountAutoUpdate() {
     if (window.accountUpdateInterval) {
         clearInterval(window.accountUpdateInterval);
         window.accountUpdateInterval = null;
-        console.log('帳戶自動更新已停止');
     }
 }
 
@@ -2525,8 +2517,7 @@ async function shouldUpdateAccountStatus() {
         tradingDayCache.isTradingDay = data.is_trading_day;
         tradingDayCache.lastUpdated = now;
         
-        console.log(`交易日狀態檢查: ${data.is_trading_day ? '交易日' : '非交易日'}`);
-        
+            
         return data.is_trading_day;
     } catch (error) {
         console.error('獲取交易日狀態失敗：', error);
@@ -2538,7 +2529,6 @@ async function shouldUpdateAccountStatus() {
 
 // 更新帳戶狀態
 function updateAccountStatus() {
-    console.log('執行帳戶狀態更新...');
     fetch('/api/account/status')
     .then(res => res.json())
     .then(data => {
@@ -2684,7 +2674,6 @@ function formatNumber(value) {
 
 // 更新持倉狀態
 function updatePositionStatus() {
-    console.log('執行持倉狀態更新...');
     fetch('/api/position/status')
     .then(res => res.json())
     .then(data => {
@@ -3148,12 +3137,10 @@ function startSinopacUpdate() {
                     })
                     .then(() => {
                         // 如果後端 API 成功，程式會關閉
-                        console.log('應用程式關閉請求已發送');
-                    })
+                                        })
                     .catch(() => {
                         // 如果後端 API 失敗，嘗試關閉視窗
-                        console.log('嘗試關閉視窗');
-                        if (window.close) {
+                                        if (window.close) {
                             window.close();
                         }
                     });
@@ -3193,7 +3180,6 @@ document.addEventListener('DOMContentLoaded', function() {
         setDomainMode('temporary');
     }
     // 移除自動檢查更新，避免不必要的錯誤訊息
-    console.log('頁面載入完成');
 });
 
 // 重新整理合約資訊
@@ -3208,8 +3194,7 @@ async function refreshContractInfo() {
         refreshBtn.disabled = true;
         refreshBtn.classList.add('loading');
         
-        console.log('開始重新整理合約資訊...');
-
+    
         // 重新獲取合約資訊
         const response = await fetch('/api/futures/contracts');
         if (!response.ok) {
@@ -3217,7 +3202,6 @@ async function refreshContractInfo() {
         }
         const data = await response.json();
 
-        console.log('合約資訊更新成功:', data);
 
         // 更新合約資訊顯示
         if (data.selected_contracts) {
@@ -3240,8 +3224,7 @@ async function refreshContractInfo() {
         setTimeout(() => {
             refreshBtn.classList.remove('loading');
             refreshBtn.disabled = false;
-            console.log('合約資訊更新完成');
-        }, 500);
+            }, 500);
     }
 }
 
@@ -3541,7 +3524,6 @@ function loginBtc() {
         if (data.success) {
             sessionStorage.setItem('isBtcLoggedIn', '1');
             sessionStorage.setItem('btcLoginTime', new Date().toISOString());
-            console.log('BTC帳戶登入成功！');
             
             // 刷新帳戶和持倉信息
             refreshBtcAccountInfo();
@@ -3570,8 +3552,7 @@ function loginBtc() {
                 })
                 .then(res => res.json())
                 .then(tunnelData => {
-                    console.log('BTC隧道啟動結果:', tunnelData);
-                })
+                    })
                 .catch(error => {
                     console.error('BTC隧道啟動失敗:', error);
                 });
@@ -3696,7 +3677,6 @@ function loadBtcConfig() {
             // 更新交易對資訊顯示
             updateBtcTradingPairDisplay(config);
             
-            console.log('BTC配置載入成功');
         } else {
             console.error('載入BTC配置失敗：', data.error);
         }
@@ -3909,7 +3889,6 @@ function refreshBtcAccountInfo() {
                 }
             });
             
-            console.log('BTC帳戶資訊更新成功');
         } else {
             console.error('獲取BTC帳戶資訊失敗：', data.error);
         }
@@ -4069,7 +4048,6 @@ function refreshBtcPositionInfo() {
                 }
             }
             
-            console.log('BTC持倉資訊更新成功');
         } else {
             console.error('獲取BTC持倉資訊失敗：', data.error);
         }
