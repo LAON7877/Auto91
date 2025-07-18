@@ -14,8 +14,11 @@ import hashlib
 import requests
 import threading
 import glob
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from urllib.parse import urlencode
+import openpyxl
+from openpyxl.styles import Alignment, PatternFill, Font
+from openpyxl.utils import get_column_letter
 
 # 配置目錄
 CONFIG_DIR = os.path.join(os.path.dirname(__file__), 'config')
@@ -28,7 +31,34 @@ BINANCE_FAPI_URL = "https://fapi.binance.com"  # 期貨API
 # 全局變量
 binance_client = None
 account_info = None
+btc_shutdown_flag = threading.Event()  # BTC模組停止標誌
+btc_active_threads = []  # BTC模組活動線程列表
 btc_active_trades = {}  # 活躍交易記錄
+
+def stop_btc_module():
+    """停止BTC模組的所有線程和連接"""
+    global btc_shutdown_flag, btc_active_threads
+    print("🔴 正在停止BTC模組...")
+    
+    # 設置停止標誌
+    btc_shutdown_flag.set()
+    
+    # 等待所有活動線程結束
+    for thread in btc_active_threads:
+        if thread.is_alive():
+            print(f"等待BTC線程結束: {thread.name}")
+            thread.join(timeout=3)
+            if thread.is_alive():
+                print(f"BTC線程 {thread.name} 仍在運行")
+    
+    btc_active_threads.clear()
+    print("✅ BTC模組已停止")
+
+def register_btc_thread(thread, name="未知BTC線程"):
+    """註冊BTC線程"""
+    global btc_active_threads
+    btc_active_threads.append(thread)
+    print(f"🧵 已註冊BTC線程: {name}")
 
 class BinanceClient:
     """幣安API客戶端"""
@@ -386,7 +416,8 @@ def btc_login():
         
         # 啟動風險監控
         try:
-            risk_thread = threading.Thread(target=start_btc_risk_monitoring, daemon=True)
+            risk_thread = threading.Thread(target=start_btc_risk_monitoring, daemon=True, name="BTC風險監控")
+            register_btc_thread(risk_thread, "BTC風險監控")
             risk_thread.start()
             print("BTC風險監控已啟動")
         except Exception as e:
@@ -604,7 +635,9 @@ def place_btc_futures_order(symbol, side, quantity, price=None, order_type="MARK
                 time.sleep(3)  # 延遲3秒檢查
                 check_btc_order_fill(order_id, symbol)
             
-            threading.Thread(target=check_fill_status, daemon=True).start()
+            fill_check_thread = threading.Thread(target=check_fill_status, daemon=True, name=f"BTC訂單檢查-{order_id}")
+            register_btc_thread(fill_check_thread, f"BTC訂單檢查-{order_id}")
+            fill_check_thread.start()
             
             return {
                 'success': True,
@@ -897,8 +930,6 @@ def cleanup_old_btc_trade_files():
 def send_btc_telegram_message(message, chat_id=None, bot_token=None):
     """發送BTC Telegram訊息（參考TX系統格式）"""
     try:
-        # print(f"=== 準備發送BTC Telegram訊息 ===")
-        # print(f"訊息內容:\n{message}")
         
         # 載入BTC配置
         env_data = load_btc_env_data()
@@ -1043,7 +1074,6 @@ def log_btc_system_message(message, log_type="info"):
     """記錄BTC系統日誌到前端"""
     try:
         # 動態獲取當前端口
-        import os
         current_port = 5000  # 預設端口
         try:
             # 嘗試從主模組獲取當前端口
@@ -1383,7 +1413,9 @@ def check_btc_daily_trading_statistics():
                 generate_btc_monthly_report()
         
         # 在新線程中執行延遲生成報表
-        threading.Thread(target=delayed_generate_btc_reports, daemon=True).start()
+        report_thread = threading.Thread(target=delayed_generate_btc_reports, daemon=True, name="BTC報表生成")
+        register_btc_thread(report_thread, "BTC報表生成")
+        report_thread.start()
         
     except Exception as e:
         print(f"檢查BTC每日交易統計失敗: {e}")
@@ -1863,18 +1895,14 @@ def send_btc_daily_startup_notification():
         message += position_info.rstrip('\n')  # 移除最後的換行符
         
         if send_btc_telegram_message(message):
-            # print(f"Telegram［每日啟動］通知發送成功: {current_date}")
             pass
         
     except Exception as e:
-        pass  # print(f"Telegram［每日啟動］通知發送失敗: {e}")
+        pass
 
 def generate_btc_trading_report():
     """生成BTC交易日報 - 新格式"""
     try:
-        import openpyxl
-        from openpyxl.styles import Alignment, PatternFill, Font
-        from openpyxl.utils import get_column_letter
         
         # 創建BTC交易日報目錄（與TX並列）
         report_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'BTC交易日報')
@@ -2076,9 +2104,6 @@ def generate_btc_trading_report():
 def generate_btc_monthly_report():
     """生成BTC交易月報 - 參考TX格式"""
     try:
-        import openpyxl
-        from openpyxl.styles import Alignment, PatternFill, Font
-        from openpyxl.utils import get_column_letter
         import calendar
         
         current_date = datetime.now()
@@ -2321,7 +2346,6 @@ def get_monthly_commission():
         if not binance_client:
             return 0.0
         
-        from datetime import datetime, timezone
         
         # 獲取本月1號00:00的時間戳
         now = datetime.now(timezone.utc)
@@ -2357,7 +2381,6 @@ def get_monthly_realized_pnl():
         if not binance_client:
             return 0.0
         
-        from datetime import datetime, timezone
         
         # 獲取本月1號00:00的時間戳
         now = datetime.now(timezone.utc)
@@ -2407,7 +2430,6 @@ def get_today_realized_pnl():
         if not binance_client:
             return 0.0
         
-        from datetime import datetime, timezone
         
         # 獲取今日00:00的時間戳
         today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
@@ -2442,7 +2464,6 @@ def get_today_commission():
         if not binance_client:
             return 0.0
         
-        from datetime import datetime, timezone
         
         # 獲取今日00:00的時間戳
         today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
@@ -2844,8 +2865,10 @@ def start_btc_websocket():
         btc_ws_thread = threading.Thread(
             target=btc_ws.run_forever,
             kwargs={'sslopt': {"cert_reqs": ssl.CERT_NONE}},
-            daemon=True
+            daemon=True,
+            name="BTC-WebSocket"
         )
+        register_btc_thread(btc_ws_thread, "BTC-WebSocket")
         btc_ws_thread.start()
         
         print("BTC WebSocket線程已啟動")

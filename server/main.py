@@ -14,16 +14,16 @@ try:
     from updater import check_and_update
     
     print("=" * 60)
-    print("🚀 Auto91 啟動前自動更新檢查")
+    print("Auto91 啟動前自動更新檢查")
     print("=" * 60)
     
     # 執行自動更新檢查（自動確認模式）
     update_success = check_and_update(auto_confirm=True)
     
     if update_success:
-        print("✅ 版本檢查完成")
+        print("版本檢查完成")
     else:
-        print("⚠️ 更新檢查過程中發生問題，但將繼續啟動程式")
+        print("更新檢查過程中發生問題，但將繼續啟動程式")
     
     print("=" * 60)
     
@@ -36,7 +36,7 @@ except Exception as e:
 
 # ========== 套件依賴檢查 ==========
 # 套件檢查功能已移除，如需要請手動安裝依賴套件
-print("💡 如果遇到模組導入錯誤，請手動安裝相關Python套件")
+print("如果遇到模組導入錯誤，請手動安裝相關Python套件")
 
 # ========== 正常的程式導入開始 ==========
 from flask import Flask, send_from_directory, request, jsonify, abort
@@ -73,6 +73,33 @@ def create_managed_subprocess(*args, **kwargs):
     """創建subprocess（兼容函數）"""
     kwargs.pop('process_name', None)  # 移除自定義參數
     return subprocess.Popen(*args, **kwargs)
+
+def register_subprocess(process, name="未知進程", description=""):
+    """註冊子進程到ALL_CHILD_PROCESSES列表以便清理"""
+    global ALL_CHILD_PROCESSES
+    if process and process not in ALL_CHILD_PROCESSES:
+        ALL_CHILD_PROCESSES.append(process)
+        print(f"📋 已註冊子進程: {name} (PID: {process.pid}) - {description}")
+
+def unregister_subprocess(process):
+    """從ALL_CHILD_PROCESSES列表移除子進程"""
+    global ALL_CHILD_PROCESSES
+    if process in ALL_CHILD_PROCESSES:
+        ALL_CHILD_PROCESSES.remove(process)
+        print(f"📋 已移除子進程註冊: PID {process.pid}")
+
+def register_thread(thread, name="未知線程"):
+    """註冊非daemon線程到ALL_ACTIVE_THREADS列表以便清理"""
+    global ALL_ACTIVE_THREADS
+    if thread and not thread.daemon and thread not in ALL_ACTIVE_THREADS:
+        ALL_ACTIVE_THREADS.append(thread)
+        print(f"🧵 已註冊活動線程: {name}")
+
+def signal_shutdown():
+    """設置全域停止標誌，通知所有線程準備結束"""
+    global SHUTDOWN_FLAG
+    SHUTDOWN_FLAG.set()
+    print("🚩 已設置全域停止標誌")
 
 # ========================== 美化輸出系統 ==========================
 
@@ -379,8 +406,10 @@ order_octype_map = {}  # 記錄訂單詳細資訊
 duplicate_signal_window = {}  # 重複訊號時間窗口記錄
 global_lock = threading.Lock()  # 線程鎖
 
-# 子進程管理
+# 子進程和線程管理
 ALL_CHILD_PROCESSES = []  # 記錄所有啟動的子進程，用於程式關閉時清理
+ALL_ACTIVE_THREADS = []   # 記錄所有非daemon線程，用於程式關閉時清理
+SHUTDOWN_FLAG = threading.Event()  # 全域停止標誌
 
 # TXserver 風格的全域變數和狀態管理
 contract_txf = None
@@ -1826,7 +1855,6 @@ def api_ngrok_setup():
         
         # 根據模式處理
         if authtoken in ['workers-mode', 'temporary-mode']:
-            # print(f"使用 {mode} 模式啟動 Cloudflare Tunnel")
             pass
         elif not authtoken:
             return jsonify({
@@ -1855,20 +1883,14 @@ def api_ngrok_setup():
                     'message': f'儲存 token 失敗: {str(e)}'
                 }), 500
         
-        # 執行 Cloudflare Tunnel 配置
+        # 在背景執行設置
         def setup_tunnel_background():
             try:
-                # print(f"開始設置 Cloudflare Tunnel，CLOUDFLARE_TUNNEL_AVAILABLE={CLOUDFLARE_TUNNEL_AVAILABLE}")
-                
                 # 初始化並啟動 Cloudflare Tunnel
                 init_tunnel_service(mode)
-                # print(f"初始化完成，tunnel_service={tunnel_service}")
-                
                 success = start_cloudflare_tunnel()
-                # print(f"啟動結果: {success}")
                 
                 if success:
-                    # print("Cloudflare Tunnel 設置並啟動成功！")
                     return True
                 else:
                     print("Cloudflare Tunnel 設置失敗！")
@@ -1876,11 +1898,8 @@ def api_ngrok_setup():
                     
             except Exception as e:
                 print(f"設置 Cloudflare Tunnel 失敗: {e}")
-                import traceback
-                traceback.print_exc()
                 return False
         
-        # 在背景執行設置
         create_managed_thread(target=setup_tunnel_background, name="隧道設置背景線程").start()
         
         return jsonify({
@@ -2000,10 +2019,8 @@ def api_tunnel_setup():
                     success = start_cloudflare_tunnel()
                 
                 if success:
-                    # print(f"{service_type} 設置並啟動成功!")
                     pass
                 else:
-                    # print(f"{service_type} 設置失敗!")
                     pass
             except Exception as e:
                 print(f"設置 {service_type} 失敗: {e}")
@@ -3193,10 +3210,6 @@ def order_callback(state, deal, order=None):
             }
             
             # 調試信息
-            # print(f"=== 找不到映射，使用備援機制 ===")
-            # print(f"order_id: {order_id}")
-            # print(f"從交易記錄讀取: oc_type={oc_type}, direction={direction}")
-            # print(f"最終 octype_info: {octype_info}")
         
         octype = octype_info['octype']
         direction = octype_info['direction']
@@ -4243,11 +4256,22 @@ reset_login_flag()
 
 def cleanup_on_exit():
     """程式退出時的清理工作"""
-    global sinopac_api, sinopac_connected, sinopac_account, sinopac_login_status, auto_logout_timer, order_octype_map, connection_monitor_timer, ALL_CHILD_PROCESSES, tunnel_manager
+    global sinopac_api, sinopac_connected, sinopac_account, sinopac_login_status, auto_logout_timer, order_octype_map, connection_monitor_timer, ALL_CHILD_PROCESSES, ALL_ACTIVE_THREADS, SHUTDOWN_FLAG, tunnel_manager
     
     try:
         # ========== 基本清理（優先執行） ==========
         print_console("SYSTEM", "INFO", "開始程式清理工作...")
+        
+        # 設置全域停止標誌
+        signal_shutdown()
+        
+        # 停止BTC模組
+        try:
+            import btcmain
+            btcmain.stop_btc_module()
+            print_console("SYSTEM", "SUCCESS", "BTC模組已停止")
+        except Exception as e:
+            print_console("SYSTEM", "WARNING", "停止BTC模組時發生錯誤", str(e))
         
         # 停止自動登出定時器
         stop_auto_logout_timer()
@@ -4291,6 +4315,28 @@ def cleanup_on_exit():
                     print_console("SYSTEM", "SUCCESS", "已清理 cloudflared 進程")
         except Exception as e:
             print_console("SYSTEM", "WARNING", "清理 cloudflared 進程時發生錯誤", str(e))
+        
+        # ========== 清理所有活動線程 ========== #
+        if ALL_ACTIVE_THREADS:
+            print_console("SYSTEM", "INFO", f"正在等待活動線程結束... (共 {len(ALL_ACTIVE_THREADS)} 個)")
+            for i, thread in enumerate(ALL_ACTIVE_THREADS.copy()):
+                try:
+                    if thread and thread.is_alive():
+                        print_console("SYSTEM", "INFO", f"等待線程結束: {thread.name} ({i+1}/{len(ALL_ACTIVE_THREADS)})")
+                        thread.join(timeout=3)  # 等待3秒
+                        if thread.is_alive():
+                            print_console("SYSTEM", "WARNING", f"線程 {thread.name} 仍在運行，將被強制結束")
+                        else:
+                            print_console("SYSTEM", "SUCCESS", f"線程 {thread.name} 已正常結束")
+                    else:
+                        print_console("SYSTEM", "INFO", f"線程 {thread.name} 已結束")
+                except Exception as e:
+                    print_console("SYSTEM", "WARNING", f"處理線程 {getattr(thread, 'name', '未知')} 時發生錯誤", str(e))
+            
+            ALL_ACTIVE_THREADS.clear()
+            print_console("SYSTEM", "SUCCESS", "所有活動線程清理完畢")
+        else:
+            print_console("SYSTEM", "INFO", "沒有需要清理的活動線程")
         
         # ========== 統一結束所有子進程 ========== #
         if ALL_CHILD_PROCESSES:
@@ -4411,19 +4457,14 @@ def check_daily_startup_notification():
                     if notification_sent_date != today:
                         send_daily_startup_notification()
                         notification_sent_date = today
-                        # print(f"已發送每日啟動通知：{today}")
                     else:
-                        # print(f"今日已發送過啟動通知：{today}")
                         pass
                 else:
-                    # print(f"非交易日或非開市時間，跳過啟動通知：{today}")
                     pass
             else:
-                # print(f"無法獲取交易狀態，跳過啟動通知：{today}")
                 pass
             
     except Exception as e:
-        # print(f"檢查每日啟動通知失敗: {e}")
         pass
 
 def schedule_next_check():
@@ -4624,7 +4665,6 @@ def send_daily_startup_notification():
             pass
         
     except Exception as e:
-        # print(f"發送每日啟動通知失敗: {e}")
         # 記錄錯誤日誌
         try:
             requests.post(
@@ -6876,8 +6916,6 @@ def send_telegram_file(file_path, caption=""):
 def send_telegram_message(message, log_type="info"):
     """發送Telegram訊息"""
     try:
-        # print(f"=== 準備發送Telegram訊息 ===")
-        # print(f"訊息內容:\n{message}")
         
         if not os.path.exists(ENV_PATH):
             print(f"找不到 .env 檔案，路徑: {ENV_PATH}")

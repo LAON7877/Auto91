@@ -3,12 +3,13 @@
   "build": "20250718001",
   "release_date": "2025-07-18",
   "description": "Auto91 交易系統 + 線上自動更新",
-  "github_repo": "CLAY-YUAN/Auto91",
-  "update_url": "https://api.github.com/repos/CLAY-YUAN/Auto91/releases/latest",
+  "github_repo": "LAON7877/Auto91",
+  "update_url": "https://api.github.com/repos/LAON7877/Auto91/releases/latest",
   "changelog": [
     "修復Python語法錯誤，提升系統穩定性",
     "完成系統完整性檢查和語法修正",
-    "確保所有功能正常運作"
+    "確保所有功能正常運作",
+    "修復進程管理系統，確保程式關閉時正確清理"
   ],
   "required_files": [
     "main.py",

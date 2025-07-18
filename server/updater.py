@@ -86,12 +86,12 @@ class AutoUpdater:
             Tuple[bool, Dict]: (是否有更新, 最新版本信息)
         """
         try:
-            print("🔍 檢查線上最新版本...")
+            print("檢查線上最新版本...")
             
             # 獲取GitHub API URL
             update_url = self.current_version.get("update_url")
             if not update_url:
-                print("❌ 更新URL未配置")
+                print("更新URL未配置")
                 return False, {}
             
             # 請求GitHub API
@@ -107,19 +107,19 @@ class AutoUpdater:
             latest_version = latest_release.get('tag_name', '').lstrip('v')
             
             if not latest_version:
-                print("❌ 無法獲取最新版本信息")
+                print("無法獲取最新版本信息")
                 return False, {}
             
             current_version = self.current_version.get('version', '0.0.0')
             
-            print(f"📋 當前版本: {current_version}")
-            print(f"📋 最新版本: {latest_version}")
+            print(f"當前版本: {current_version}")
+            print(f"最新版本: {latest_version}")
             
             # 比較版本
             has_update = self._compare_versions(current_version, latest_version)
             
             if has_update:
-                print("🆕 發現新版本可用！")
+                print("發現新版本可用！")
                 return True, {
                     'version': latest_version,
                     'name': latest_release.get('name', ''),
@@ -129,17 +129,19 @@ class AutoUpdater:
                     'html_url': latest_release.get('html_url', '')
                 }
             else:
-                print("✅ 當前版本已是最新版本")
+                print("當前版本已是最新版本")
                 return False, {}
                 
         except requests.RequestException as e:
             if "404" in str(e):
-                print(f"⚠️ GitHub Repository 尚未建立或無Release，跳過更新檢查")
+                repo_name = self.current_version.get("github_repo", "未知")
+                print(f"GitHub Repository '{repo_name}' 尚未建立或無Release，跳過更新檢查")
+                print(f"請確認Repository名稱是否正確，或在GitHub上創建對應的Repository和Release")
             else:
-                print(f"❌ 網絡請求失敗: {e}")
+                print(f"網絡請求失敗: {e}")
             return False, {}
         except Exception as e:
-            print(f"❌ 檢查更新失敗: {e}")
+            print(f"檢查更新失敗: {e}")
             return False, {}
     
     def _compare_versions(self, current: str, latest: str) -> bool:
@@ -171,7 +173,7 @@ class AutoUpdater:
             return False  # 版本相同
             
         except Exception as e:
-            print(f"⚠️ 版本比較失敗: {e}")
+            print(f"版本比較失敗: {e}")
             return False
     
     def download_update(self, release_info: Dict) -> bool:
@@ -186,7 +188,7 @@ class AutoUpdater:
         try:
             download_url = release_info.get('download_url')
             if not download_url:
-                print("❌ 下載URL不可用")
+                print("下載URL不可用")
                 return False
             
             # 創建臨時目錄
@@ -208,8 +210,6 @@ class AutoUpdater:
                         f.write(chunk)
                         downloaded += len(chunk)
                         
-                        # 靜默下載
-                        pass
             
             # 解壓縮文件
             extract_dir = Path(self.temp_dir) / "extracted"
@@ -436,7 +436,7 @@ class AutoUpdater:
             # 6. 清理臨時文件
             self._cleanup_temp()
             
-            print("✅ 更新完成！請重新啟動程式以使用新版本")
+            print("更新完成！請重新啟動程式以使用新版本")
             
             return True
             

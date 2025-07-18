@@ -11,6 +11,7 @@ import subprocess
 import threading
 import time
 import requests
+import re
 import platform
 import zipfile
 import shutil
@@ -323,7 +324,6 @@ ingress:
                     print(f"隧道進程結束，完整輸出：\n{full_output}")
                     
                     # 檢查完整輸出中是否有URL
-                    import re
                     url_match = re.search(r'https://[a-zA-Z0-9\-]+\.trycloudflare\.com', full_output)
                     if url_match:
                         self.tunnel_url = url_match.group(0)
@@ -363,7 +363,6 @@ ingress:
                         print(f"讀取輸出: {line.strip()}")
                         
                         if 'trycloudflare.com' in line:
-                            import re
                             url_match = re.search(r'https://[a-zA-Z0-9\-]+\.trycloudflare\.com', line)
                             if url_match:
                                 self.tunnel_url = url_match.group(0)
