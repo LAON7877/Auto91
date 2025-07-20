@@ -1,4 +1,4 @@
 @echo off
-cd /d "%USERPROFILE%\Desktop\Auto91\server"
+cd /d "%USERPROFILE%\Desktop\Auto91 renew\server"
 python main.py
 pause
