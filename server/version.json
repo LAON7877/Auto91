@@ -1,8 +1,8 @@
 {
-  "version": "1.4.6",
-  "build": "202507182042",
-  "release_date": "2025-07-18",
-  "description": "v1.4.6",
+  "version": "1.4.7",
+  "build": "202507190025",
+  "release_date": "2025-07-19",
+  "description": "v1.4.7",
   "github_repo": "LAON7877/Auto91",
   "update_url": "https://api.github.com/repos/LAON7877/Auto91/releases/latest",
   "changelog": [
@@ -19,14 +19,18 @@
     "version.json",
     "version.json",
     "start.bat",
+    "version.json",
+    "version.json",
+    "start.bat",
     "version.json"
   ],
   "config_files": [
     "config/tx.env",
     "config/btc.env"
   ],
-  "updated_at": "2025-07-18T20:42:38.898909",
+  "updated_at": "2025-07-19T00:25:12.342414",
   "updated_files": [
+    "start.bat",
     "start.bat"
   ]
 }

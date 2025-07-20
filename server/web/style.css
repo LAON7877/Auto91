@@ -1628,8 +1628,13 @@ button[type="submit"]:hover {
     margin-left: 10px;
 }
 
-/* BTC選用交易對特殊樣式 - 內容靠右 */
+/* BTC選用交易對特殊樣式 - 內容靠右對齊 */
 #available-contracts-btc .info-value {
+    text-align: right;
+}
+
+/* TX選用合約特殊樣式 - 內容靠右對齊 */
+#system-info-container .info-value {
     text-align: right;
 }
 
@@ -1762,6 +1767,45 @@ button[type="submit"]:hover {
 /* 持倉狀態表格樣式 */
 .position-table {
     width: 100%;
+}
+
+/* BTC持倉表格專用樣式 - 支援水平滾動 */
+#btc-position-table-container {
+    overflow-x: auto;
+    max-width: 100%;
+}
+
+#btc-position-table {
+    min-width: 100%;
+    white-space: nowrap;
+}
+
+/* 當有超過3個交易對時，啟用滾動 */
+#btc-position-table.scrollable {
+    min-width: 400px;
+}
+
+#btc-position-table.scrollable .position-table-header,
+#btc-position-table.scrollable .position-table-value {
+    min-width: 100px;
+    max-width: 120px;
+}
+
+/* 交易對居中顯示邏輯 */
+#btc-position-table.single-pair .position-table-header:not(:first-child),
+#btc-position-table.single-pair .position-table-value:not(:first-child) {
+    width: auto;
+    text-align: center;
+}
+
+#btc-position-table.dual-pair .position-table-header:not(:first-child),
+#btc-position-table.dual-pair .position-table-value:not(:first-child) {
+    width: 50%;
+}
+
+#btc-position-table.triple-pair .position-table-header:not(:first-child),
+#btc-position-table.triple-pair .position-table-value:not(:first-child) {
+    width: 33.33%;
 }
 
 .position-table-content {

@@ -427,7 +427,7 @@ async function checkBtcLoginButton() {
 
         // 必填欄位
         const requiredFields = [
-            'CHAT_ID_BTC', 'BINANCE_API_KEY', 'BINANCE_SECRET_KEY', 'BINANCE_USER_ID', 'TRADING_PAIR', 'LEVERAGE', 'CONTRACT_TYPE'
+            'CHAT_ID_BTC', 'BINANCE_API_KEY', 'BINANCE_SECRET_KEY', 'BINANCE_USER_ID', 'TRADING_PAIR', 'LEVERAGE', 'POSITION_SIZE', 'MARGIN_TYPE', 'CONTRACT_TYPE'
         ];
         let allFilled = true;
         for (const key of requiredFields) {
@@ -440,6 +440,13 @@ async function checkBtcLoginButton() {
 
         if (allFilled) {
             loginBtn.disabled = false;
+        } else {
+            // 如果有空值，確保用戶已登出
+            if (sessionStorage.getItem('isBtcLoggedIn') === '1') {
+                sessionStorage.removeItem('isBtcLoggedIn');
+                window.isBtcLoggedIn = false;
+                showPanel('btc-settings');
+            }
         }
     } catch (error) {
         console.error('檢查BTC登入按鈕狀態失敗:', error);
@@ -597,6 +604,8 @@ window.onload = function() {
         document.getElementById('binance_user_id').value = btcEnv.BINANCE_USER_ID || '';
         document.getElementById('trading_pair').value = btcEnv.TRADING_PAIR || 'BTCUSDT';
         document.getElementById('leverage').value = btcEnv.LEVERAGE || '5';
+        document.getElementById('position_size').value = btcEnv.POSITION_SIZE || '10';
+        document.getElementById('margin_type').value = btcEnv.MARGIN_TYPE || 'CROSS';
         document.getElementById('contract_type').value = btcEnv.CONTRACT_TYPE || 'PERPETUAL';
         
         // 同步sessionStorage，確保空值也被正確處理
@@ -966,7 +975,7 @@ function logout() {
             // 更新永豐API狀態
             updateSinopacApiStatus();
             
-            alert('已成功登出！');
+            alert('已成功登出TX帳戶！');
         } else {
             alert('登出失敗！');
         }
@@ -3261,7 +3270,7 @@ function loadTunnelTokens() {
 
 let selectedDomainMode = 'temporary'; // 預設為免費臨時域名（最可靠）
 
-function setDomainMode(mode) {
+function setDomainMode(mode, event = null) {
     selectedDomainMode = mode;
     const instructionsDiv = document.getElementById('setup-instructions');
     const tokenInput = document.getElementById('cloudflare-token');
@@ -3270,7 +3279,17 @@ function setDomainMode(mode) {
     document.querySelectorAll('.domain-option').forEach(option => {
         option.style.borderColor = '#e0e0e0';
     });
-    event.target.parentElement.style.borderColor = '#2196F3';
+    
+    // 只有在有事件對象時才設定邊框顏色
+    if (event && event.target && event.target.parentElement) {
+        event.target.parentElement.style.borderColor = '#2196F3';
+    } else {
+        // 當直接調用時，根據模式找到對應的選項
+        const targetOption = document.querySelector(`[onclick*="${mode}"]`);
+        if (targetOption) {
+            targetOption.parentElement.style.borderColor = '#2196F3';
+        }
+    }
     
     switch(mode) {
         case 'workers':
@@ -3452,6 +3471,8 @@ function saveBtcEnv(e) {
         BINANCE_USER_ID: form.binance_user_id.value,
         TRADING_PAIR: form.trading_pair.value,
         LEVERAGE: form.leverage.value,
+        POSITION_SIZE: form.position_size.value,
+        MARGIN_TYPE: form.margin_type.value,
         CONTRACT_TYPE: form.contract_type.value
     };
     
@@ -3585,7 +3606,7 @@ function logoutBtc() {
         sessionStorage.removeItem('isBtcLoggedIn');
         sessionStorage.removeItem('btcLoginTime');
         showPanel('settings');
-        alert('已登出BTC帳戶');
+        alert('已成功登出BTC帳戶！');
         
         // 重置連線時長顯示
         updateBtcConnectionDuration();
@@ -3594,7 +3615,7 @@ function logoutBtc() {
         console.error('BTC登出請求失敗：', error);
         sessionStorage.removeItem('isBtcLoggedIn');
         showPanel('settings');
-        alert('已登出BTC帳戶');
+        alert('已成功登出BTC帳戶！');
     });
 }
 
@@ -3647,6 +3668,8 @@ function loadBtcConfig() {
                 'binance_user_id': config.BINANCE_USER_ID || '',
                 'trading_pair': config.TRADING_PAIR || 'BTCUSDT',
                 'leverage': config.LEVERAGE || '5',
+                'position_size': config.POSITION_SIZE || '10',
+                'margin_type': config.MARGIN_TYPE || 'CROSS',
                 'contract_type': config.CONTRACT_TYPE || 'PERPETUAL'
             };
             
@@ -3691,7 +3714,9 @@ function updateBtcTradingPairDisplay(config) {
     const elements = {
         'btc-trading-pair': config.TRADING_PAIR || '-',
         'btc-leverage': config.LEVERAGE ? `${config.LEVERAGE}x` : '-',
-        'btc-contract-type': config.CONTRACT_TYPE || '-'
+        'btc-position-size': config.POSITION_SIZE ? `${config.POSITION_SIZE}%` : '-',
+        'btc-margin-type': config.MARGIN_TYPE === 'CROSS' ? '全倉' : config.MARGIN_TYPE === 'ISOLATED' ? '逐倉' : '-',
+        'btc-contract-type': config.CONTRACT_TYPE === 'PERPETUAL' ? 'PERPETUAL 永續合約' : config.CONTRACT_TYPE || '-'
     };
     
     Object.entries(elements).forEach(([id, value]) => {
@@ -3986,53 +4011,124 @@ function refreshBtcPositionInfo() {
             let totalPnL = 0;
             
             if (positions.length > 0) {
-                const position = positions[0];
+                const position = positions[0]; // 只處理第一個持倉
                 
-                const positionElements = {
-                    'position-btc-symbol': position.symbol || '-',
-                    'position-btc-side': position.positionSide === 'LONG' ? '做多' : 
-                                         position.positionSide === 'SHORT' ? '做空' : '-',
-                    'position-btc-size': Math.abs(parseFloat(position.positionAmt || 0)).toFixed(4),
-                    'position-btc-entry-price': formatCurrency(position.entryPrice || 0, 'USDT'),
-                    'position-btc-mark-price': formatCurrency(position.markPrice || 0, 'USDT'),
-                    'position-btc-pnl': formatPnL(position.unRealizedProfit || 0),
-                    'position-btc-roe': position.percentage ? `${parseFloat(position.percentage).toFixed(2)}%` : '0.00%'
-                };
+                // 更新交易對表頭
+                const tradingPairHeader = document.getElementById('btc-trading-pair-header');
+                if (tradingPairHeader) {
+                    tradingPairHeader.textContent = position.symbol || 'BTCUSDT';
+                }
                 
-                Object.entries(positionElements).forEach(([id, value]) => {
-                    const element = document.getElementById(id);
-                    if (element) {
-                        element.textContent = value;
-                        
-                        if (id === 'position-btc-pnl' || id === 'position-btc-roe') {
-                            const numValue = parseFloat(position.unRealizedProfit || 0);
-                            element.className = element.className.replace(/(\\s|^)(profit|loss)(\\s|$)/, '');
-                            if (numValue > 0) {
-                                element.classList.add('profit');
-                            } else if (numValue < 0) {
-                                element.classList.add('loss');
-                            }
-                        }
+                // 動作：多單(紅字) 空單(綠字)
+                const sideElement = document.getElementById('position-btc-side');
+                if (sideElement) {
+                    if (position.positionSide === 'LONG') {
+                        sideElement.textContent = '多單';
+                        sideElement.className = 'position-table-value long';
+                    } else if (position.positionSide === 'SHORT') {
+                        sideElement.textContent = '空單';
+                        sideElement.className = 'position-table-value short';
+                    } else {
+                        sideElement.textContent = '-';
+                        sideElement.className = 'position-table-value';
                     }
-                });
+                }
+                
+                // 數量：0.1234 BTC
+                const sizeElement = document.getElementById('position-btc-size');
+                if (sizeElement) {
+                    const amount = Math.abs(parseFloat(position.positionAmt || 0));
+                    if (amount > 0) {
+                        // 從交易對中提取基礎貨幣（如BTCUSDT -> BTC）
+                        const baseCurrency = position.symbol ? position.symbol.replace(/USDT$|BUSD$|USDC$/, '') : 'BTC';
+                        sizeElement.textContent = `${amount.toFixed(4)} ${baseCurrency}`;
+                    } else {
+                        sizeElement.textContent = '-';
+                    }
+                    sizeElement.className = 'position-table-value';
+                }
+                
+                // 均價：112,000 USDT
+                const entryPriceElement = document.getElementById('position-btc-entry-price');
+                if (entryPriceElement) {
+                    const entryPrice = parseFloat(position.entryPrice || 0);
+                    if (entryPrice > 0) {
+                        entryPriceElement.textContent = `${entryPrice.toLocaleString('en-US', {minimumFractionDigits: 0, maximumFractionDigits: 2})} USDT`;
+                    } else {
+                        entryPriceElement.textContent = '-';
+                    }
+                    entryPriceElement.className = 'position-table-value';
+                }
+                
+                // 市價：111,000 USDT
+                const markPriceElement = document.getElementById('position-btc-mark-price');
+                if (markPriceElement) {
+                    const markPrice = parseFloat(position.markPrice || 0);
+                    if (markPrice > 0) {
+                        markPriceElement.textContent = `${markPrice.toLocaleString('en-US', {minimumFractionDigits: 0, maximumFractionDigits: 2})} USDT`;
+                    } else {
+                        markPriceElement.textContent = '-';
+                    }
+                    markPriceElement.className = 'position-table-value';
+                }
+                
+                // 盈虧：1,234 USDT (正數紅色 負數綠色 0灰色)
+                const pnlElement = document.getElementById('position-btc-pnl');
+                if (pnlElement) {
+                    const pnlValue = parseFloat(position.unRealizedProfit || 0);
+                    if (pnlValue !== 0) {
+                        const formattedPnl = Math.abs(pnlValue).toLocaleString('en-US', {minimumFractionDigits: 0, maximumFractionDigits: 2});
+                        pnlElement.textContent = `${pnlValue >= 0 ? '+' : '-'}${formattedPnl} USDT`;
+                        if (pnlValue > 0) {
+                            pnlElement.className = 'position-table-value profit';
+                        } else if (pnlValue < 0) {
+                            pnlElement.className = 'position-table-value loss';
+                        }
+                    } else {
+                        pnlElement.textContent = '0 USDT';
+                        pnlElement.className = 'position-table-value neutral';
+                    }
+                }
+                
+                // ROE (正數紅色 負數綠色 0灰色)
+                const roeElement = document.getElementById('position-btc-roe');
+                if (roeElement) {
+                    const roeValue = parseFloat(position.percentage || 0);
+                    if (roeValue !== 0) {
+                        roeElement.textContent = `${roeValue >= 0 ? '+' : ''}${roeValue.toFixed(2)}%`;
+                        if (roeValue > 0) {
+                            roeElement.className = 'position-table-value profit';
+                        } else if (roeValue < 0) {
+                            roeElement.className = 'position-table-value loss';
+                        }
+                    } else {
+                        roeElement.textContent = '0.00%';
+                        roeElement.className = 'position-table-value neutral';
+                    }
+                }
                 
                 totalPnL = parseFloat(position.unRealizedProfit || 0);
             } else {
-                const positionElements = {
-                    'position-btc-symbol': '-',
-                    'position-btc-side': '-',
-                    'position-btc-size': '-',
-                    'position-btc-entry-price': '-',
-                    'position-btc-mark-price': '-',
-                    'position-btc-pnl': '-',
-                    'position-btc-roe': '-'
-                };
+                // 無持倉時重置顯示
+                const tradingPairHeader = document.getElementById('btc-trading-pair-header');
+                if (tradingPairHeader) {
+                    tradingPairHeader.textContent = 'BTCUSDT';
+                }
                 
-                Object.entries(positionElements).forEach(([id, value]) => {
+                const resetElements = [
+                    { id: 'position-btc-side', value: '-' },
+                    { id: 'position-btc-size', value: '-' },
+                    { id: 'position-btc-entry-price', value: '-' },
+                    { id: 'position-btc-mark-price', value: '-' },
+                    { id: 'position-btc-pnl', value: '-' },
+                    { id: 'position-btc-roe', value: '-' }
+                ];
+                
+                resetElements.forEach(({ id, value }) => {
                     const element = document.getElementById(id);
                     if (element) {
                         element.textContent = value;
-                        element.className = element.className.replace(/(\\s|^)(profit|loss)(\\s|$)/, '');
+                        element.className = 'position-table-value';
                     }
                 });
             }
