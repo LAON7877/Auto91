@@ -720,8 +720,8 @@ def add_custom_request_log(method, uri, status, extra_info=None):
     """添加自定義請求記錄"""
     global custom_request_logs
     
-    # 過濾掉 webhook 相關日誌，避免前端顯示
-    if uri in ['/webhook', '/webhook/btc', '/api/btc/webhook']:
+    # 過濾掉 webhook 和系統日誌 API 相關日誌，避免前端顯示
+    if uri in ['/webhook', '/webhook/btc', '/api/btc/webhook', '/api/btc_system_log', '/api/system_log']:
         # 只在後端記錄，不添加到前端日誌
         print(f"[WEBHOOK] {method} {uri} - {status} - {extra_info}")
         return
@@ -908,7 +908,12 @@ def get_tunnel_requests():
 
 @app.route('/')
 def index():
-    return send_from_directory(app.static_folder, 'index.html')
+    response = send_from_directory(app.static_folder, 'index.html')
+    # 針對 WebView 設置不緩存頭
+    response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+    response.headers['Pragma'] = 'no-cache'
+    response.headers['Expires'] = '0'
+    return response
 
 @app.route('/api/save_env', methods=['POST'])
 def save_env():
@@ -1090,6 +1095,27 @@ def get_bot_username():
         return jsonify({'username': None})
     except Exception as e:
         return jsonify({'error': f'查詢失敗: {str(e)}'}), 500
+
+@app.route('/api/send-telegram', methods=['POST'])
+def api_send_telegram():
+    """發送Telegram通知的API端點"""
+    try:
+        data = request.get_json()
+        message = data.get('message', '')
+        
+        if not message:
+            return jsonify({'success': False, 'error': '訊息內容不能為空'}), 400
+        
+        # 發送Telegram訊息
+        success = send_telegram_message(message)
+        
+        if success:
+            return jsonify({'success': True, 'message': '訊息發送成功'})
+        else:
+            return jsonify({'success': False, 'error': '訊息發送失敗'})
+    
+    except Exception as e:
+        return jsonify({'success': False, 'error': f'發送失敗: {str(e)}'}), 500
 
 @app.route('/api/login', methods=['POST'])
 def api_login():
@@ -1437,17 +1463,34 @@ def api_btc_webhook():
     # 解析請求數據
     try:
         raw = request.data.decode('utf-8')
-        data = json.loads(raw) if raw.strip() else {}
-        action = data.get('action', '未知')
-    except:
+        print(f"BTC Webhook 收到原始數據: {raw}")
+        
+        # 嘗試解析 JSON 格式
+        try:
+            data = json.loads(raw) if raw.strip() else {}
+            action = data.get('action', '未知')
+            print(f"BTC Webhook JSON 解析成功: {data}")
+        except json.JSONDecodeError:
+            # 如果不是 JSON，處理為純文字訊息
+            print(f"BTC Webhook 收到純文字訊息，轉換為 JSON 格式")
+            data = {'message': raw.strip()}
+            action = '純文字訊號'
+            print(f"BTC Webhook 轉換後數據: {data}")
+        
+    except Exception as e:
+        print(f"BTC Webhook 處理失敗: {e}, 原始數據: {raw}")
         add_custom_request_log('POST', '/api/btc/webhook', 400, {
-            'reason': 'BTC API webhook解析失敗',
+            'reason': f'BTC API webhook處理失敗: {str(e)[:50]}',
+            'raw_data': raw[:100],
             'system': 'BTC'
         })
-        return jsonify({'success': False, 'message': '請求數據解析失敗'}), 400
+        return jsonify({'success': False, 'message': '請求數據處理失敗'}), 400
     
     if BTC_MODULE_AVAILABLE:
         try:
+            # 設置 Flask request 的數據，讓 btcmain.py 能正確處理
+            from flask import g
+            g.webhook_data = data
             result = btcmain.btc_webhook()
             # 檢查返回結果判斷是否成功
             if hasattr(result, 'get_json'):
@@ -2767,12 +2810,15 @@ def api_position_status():
                             if contract_type:
                                 opening_trades[contract_type] = {
                                     '開倉時間': trade.get('timestamp', ''),
+                                    '成交單號': order.get('id', ''),  # 真實成交單號
                                     '委託單號': order.get('ordno', ''),
-                                    '委託條件': order.get('order_type', ''),
+                                    '訂單類型': order.get('order_type', ''),  # IOC, ROD等
                                     '委託價格類型': order.get('price_type', ''),
                                     '商品名稱': trade.get('contract_name', ''),
                                     '到期月份': contract.get('delivery_month', ''),
-                                    '合約代號': contract_code
+                                    '交割日': contract.get('delivery_month', ''),  # 用於計算實際交割日
+                                    '合約代號': contract_code,
+                                    '開倉價格': trade.get('real_opening_price', order.get('price', 0))
                                 }
             except Exception as e:
                 print(f"讀取交易記錄失敗: {e}")
@@ -2822,12 +2868,16 @@ def api_position_status():
                         '未實現損益': f"{unrealized_pnl:,.0f}",
                         # 新增開倉詳細信息
                         '開倉時間': opening_info.get('開倉時間', ''),
+                        '成交單號': opening_info.get('成交單號', ''),  # 真實成交單號
                         '委託單號': opening_info.get('委託單號', ''),
-                        '委託條件': opening_info.get('委託條件', ''),
+                        '訂單類型': opening_info.get('訂單類型', ''),  # IOC, ROD等
+                        '委託條件': opening_info.get('訂單類型', ''),  # 兼容舊欄位名稱
                         '委託價格類型': opening_info.get('委託價格類型', ''),
                         '商品名稱': opening_info.get('商品名稱', ''),
                         '到期月份': opening_info.get('到期月份', ''),
-                        '合約代號': opening_info.get('合約代號', contract_code)
+                        '交割日': opening_info.get('交割日', ''),  # 交割日信息
+                        '合約代號': opening_info.get('合約代號', contract_code),
+                        '開倉價格': opening_info.get('開倉價格', position.price)  # 真實開倉價格
                     }
                     
                     # 累計總損益
@@ -2893,19 +2943,31 @@ def api_btc_system_log():
         message = data.get('message', '')
         log_type = data.get('type', 'info')
         
-        # 直接儲存為系統日誌，不顯示/api/btc_system_log請求日誌
-        # 與TX系統統一格式，直接使用message內容作為日誌
-        add_custom_request_log(
-            method='BTC_LOG',  # 使用特殊標識避免顯示為API請求
-            uri='system_log',  # 統一的系統日誌標識
-            status=200,
-            extra_info={
+        # 直接添加到自定義日誌，避免重複記錄
+        now = datetime.now()
+        time_str = now.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3] + ' CST'
+        display_time = now.strftime('%H:%M:%S')
+        
+        log_entry = {
+            'method': 'BTC_LOG',
+            'uri': 'system_log',
+            'status': 200,
+            'timestamp': time_str,
+            'display_timestamp': display_time,
+            'extra_info': {
                 'message': message,
                 'type': log_type,
-                'system': 'BTC',  # 標記為BTC系統日誌
-                'is_system_message': True  # 標記為系統訊息，前端特殊處理
+                'system': 'BTC',
+                'is_system_message': True
             }
-        )
+        }
+        
+        # 直接添加到日誌列表，避免通過 add_custom_request_log 產生重複
+        custom_request_logs.append(log_entry)
+        
+        # 限制日誌數量
+        if len(custom_request_logs) > MAX_LOGS:
+            custom_request_logs = custom_request_logs[-MAX_LOGS:]
         
         # 後端日誌記錄
         print_console("BTC", log_type.upper(), message)
@@ -3570,6 +3632,24 @@ def handle_futures_deal_callback(deal, octype_info):
         deal_price = deal.get('price', 0)
         deal_quantity = deal.get('quantity', 0)
         
+        # 增強數據收集用於XLSX生成
+        deal_number = deal.get('trade_id', deal.get('deal_id', deal.get('id', order_id)))  # 成交單號
+        ts = deal.get('ts', deal.get('timestamp', int(time.time() * 1000)))  # 成交時間戳
+        
+        # 收集所有可能的訂單類型資訊
+        original_order_type = deal.get('order_type', '')
+        original_price_type = deal.get('price_type', '')
+        
+        print(f"[數據收集] 成交數據完整性檢查:")
+        print(f"  - 成交單號: {deal_number}")
+        print(f"  - 訂單ID: {order_id}")
+        print(f"  - 合約代碼: {contract_code}")
+        print(f"  - 成交價格: {deal_price}")
+        print(f"  - 成交數量: {deal_quantity}")
+        print(f"  - 原始訂單類型: {original_order_type}")
+        print(f"  - 原始價格類型: {original_price_type}")
+        print(f"  - 時間戳: {ts}")
+        
         current_time = datetime.now().strftime('%Y/%m/%d %H:%M')
         
         # 修正：確保使用正確的訂單資訊
@@ -3701,7 +3781,7 @@ def handle_futures_deal_callback(deal, octype_info):
             import traceback
             traceback.print_exc()
         
-        # 保存成交記錄
+        # 保存成交記錄（增強版本，包含成交單號、交割日期等完整資訊）
         save_trade({
             'type': 'deal',
             'trade_category': 'normal',
@@ -3722,11 +3802,23 @@ def handle_futures_deal_callback(deal, octype_info):
                 },
                 'contract': {
                     'code': contract_code
+                },
+                'deal': {
+                    'deal_number': deal_number,  # 成交單號
+                    'original_order_type': original_order_type,  # 原始訂單類型
+                    'original_price_type': original_price_type,  # 原始價格類型
+                    'timestamp': ts,  # 原始時間戳
+                    'delivery_date': delivery_date_for_deal  # 交割日期
                 }
             },
             'deal_order_id': order_id,
+            'deal_number': deal_number,  # 頂層成交單號欄位供XLSX使用
             'contract_name': contract_name,
+            'contract_code': contract_code,  # 完整合約代碼
+            'delivery_date': delivery_date_for_deal,  # 頂層交割日期欄位供XLSX使用
+            'order_type_display': f"{price_type} ({order_type})" if price_type != 'MKT' else f"市價 ({order_type})",  # 格式化的訂單類型顯示
             'timestamp': datetime.now().isoformat(),
+            'deal_timestamp': ts,  # 實際成交時間戳
             'is_manual': is_manual,
             # 新增：真實開倉價格（來自永豐API的原成交均價）
             'real_opening_price': real_opening_price if real_opening_price else deal_price
@@ -4934,7 +5026,7 @@ def send_daily_startup_notification():
         try:
             requests.post(
                 f'http://127.0.0.1:{CURRENT_PORT}/api/system_log',
-                json={'message': 'Telegram［每日啟動］訊息發送成功！！！', 'type': 'success'},
+                json={'message': 'Telegram［啟動通知］訊息發送成功！！！', 'type': 'success'},
                 timeout=5
             )
         except:
@@ -4945,7 +5037,7 @@ def send_daily_startup_notification():
         try:
             requests.post(
                 f'http://127.0.0.1:{CURRENT_PORT}/api/system_log',
-                json={'message': f'Telegram［每日啟動］訊息發送失敗: {str(e)[:50]}', 'type': 'error'},
+                json={'message': f'Telegram［啟動通知］訊息發送失敗: {str(e)[:50]}', 'type': 'error'},
                 timeout=5
             )
         except:
@@ -5105,12 +5197,17 @@ def generate_trading_report(trades, account_data, position_data, cover_trades, t
                     ws[f'A{row}'] = ''
                 ws[f'A{row}'].alignment = center_alignment
                 
-                # 平倉單號
-                ws[f'B{row}'] = trade.get('order_id', '')
+                # 平倉單號 - 優先使用成交單號，回退到訂單ID
+                deal_number = trade.get('deal_number', '')
+                order_id = trade.get('order_id', '')
+                # 優先顯示成交單號，如果沒有則顯示訂單ID
+                display_id = deal_number if deal_number and deal_number != order_id else order_id
+                ws[f'B{row}'] = display_id
                 ws[f'B{row}'].alignment = center_alignment
                 
                 # 選用合約顯示英文代碼和實際交割日
                 contract_code = 'TXF' if trade['contract_name'] == '大台' else 'MXF' if trade['contract_name'] == '小台' else 'TMF'
+                # 優先使用增強數據中的交割日期
                 delivery_date = trade.get('delivery_date', '')
                 
                 # 如果沒有交割日，嘗試從全域合約對象獲取
@@ -5153,23 +5250,30 @@ def generate_trading_report(trades, account_data, position_data, cover_trades, t
                     ws[f'C{row}'] = contract_code
                 ws[f'C{row}'].alignment = center_alignment
                 
-                # 訂單類型中文顯示
-                price_type = trade.get('price_type', '')
-                order_type = trade.get('order_type', '')
-                if price_type == 'MKT':
-                    order_type_str = '市價單'
-                elif price_type == 'LMT':
-                    order_type_str = '限價單'
+                # 訂單類型中文顯示 - 優先使用格式化的訂單類型顯示
+                formatted_order_type = trade.get('order_type_display', '')
+                if formatted_order_type:
+                    # 使用增強數據中已格式化的訂單類型
+                    ws[f'D{row}'] = formatted_order_type
                 else:
-                    order_type_str = ''
-                if order_type_str and order_type:
-                    ws[f'D{row}'] = f"{order_type_str}（{order_type}）"
-                elif order_type_str:
-                    ws[f'D{row}'] = order_type_str
-                elif order_type:
-                    ws[f'D{row}'] = f"（{order_type}）"
-                else:
-                    ws[f'D{row}'] = ''
+                    # 回退到原始邏輯
+                    price_type = trade.get('price_type', '')
+                    order_type = trade.get('order_type', '')
+                    order_type_display = ''
+                    
+                    if price_type == 'MKT':
+                        order_type_display = '市價單'
+                    elif price_type == 'LMT':
+                        order_type_display = '限價單'
+                    
+                    if order_type_display and order_type:
+                        ws[f'D{row}'] = f"{order_type_display}（{order_type}）"
+                    elif order_type_display:
+                        ws[f'D{row}'] = order_type_display
+                    elif order_type:
+                        ws[f'D{row}'] = f"（{order_type}）"
+                    else:
+                        ws[f'D{row}'] = ''  # 沒有真實數據就留空
                 ws[f'D{row}'].alignment = center_alignment
                 
                 # 成交類型
@@ -5191,12 +5295,14 @@ def generate_trading_report(trades, account_data, position_data, cover_trades, t
                 ws[f'H{row}'] = f"{quantity_clean} 口"
                 ws[f'H{row}'].alignment = center_alignment
                 
-                # 開倉價格
-                ws[f'I{row}'] = trade['open_price']
+                # 開倉價格 - 使用真實數據，"未知"表示確實無法獲取開倉價格
+                open_price = trade.get('open_price', '')
+                ws[f'I{row}'] = open_price
                 ws[f'I{row}'].alignment = center_alignment
                 
-                # 平倉價格
-                ws[f'J{row}'] = trade['cover_price']
+                # 平倉價格 - 使用真實數據
+                cover_price = trade.get('cover_price', '')
+                ws[f'J{row}'] = cover_price
                 ws[f'J{row}'].alignment = center_alignment
                 
                 # 已實現損益（總是顯示）
@@ -5246,8 +5352,8 @@ def generate_trading_report(trades, account_data, position_data, cover_trades, t
                         ws[f'A{current_row + row_offset}'] = ''
                     ws[f'A{current_row + row_offset}'].alignment = center_alignment
                     
-                    # 平倉單號（應顯示開倉單號）
-                    ws[f'B{current_row + row_offset}'] = pos.get('委託單號', '')
+                    # 成交單號（真實成交單號）
+                    ws[f'B{current_row + row_offset}'] = pos.get('成交單號', pos.get('委託單號', ''))
                     ws[f'B{current_row + row_offset}'].alignment = center_alignment
                     
                     # 選用合約顯示英文代碼和實際交割日
@@ -5301,13 +5407,13 @@ def generate_trading_report(trades, account_data, position_data, cover_trades, t
                     
                     # 訂單類型（顯示開倉的訂單類型）
                     price_type = pos.get('委託價格類型', '')
-                    order_type = pos.get('委託條件', '')
+                    order_type = pos.get('訂單類型', pos.get('委託條件', ''))
                     if price_type == 'MKT':
-                        order_type_str = '市價單'
+                        order_type_str = f'市價單({order_type})' if order_type else '市價單'
                     elif price_type == 'LMT':
-                        order_type_str = '限價單'
+                        order_type_str = f'限價單({order_type})' if order_type else '限價單'
                     else:
-                        order_type_str = price_type
+                        order_type_str = order_type or price_type or '未知'
                     
                     if order_type_str and order_type:
                         ws[f'D{current_row + row_offset}'] = f"{order_type_str}（{order_type}）"
@@ -5352,8 +5458,9 @@ def generate_trading_report(trades, account_data, position_data, cover_trades, t
                     ws[f'H{current_row + row_offset}'] = f"{quantity_clean} 口"
                     ws[f'H{current_row + row_offset}'].alignment = center_alignment
                     
-                    # 開倉價格
-                    ws[f'I{current_row + row_offset}'] = pos.get('均價', '')
+                    # 開倉價格（優先使用真實開倉價格）
+                    opening_price = pos.get('開倉價格', pos.get('均價', ''))
+                    ws[f'I{current_row + row_offset}'] = opening_price
                     ws[f'I{current_row + row_offset}'].alignment = center_alignment
                     
                     # 平倉價格（持倉狀態顯示0）
@@ -5833,8 +5940,12 @@ def generate_monthly_trading_report():
                     ws[f'A{row}'] = ''
                 ws[f'A{row}'].alignment = center_alignment
                 
-                # 平倉單號
-                ws[f'B{row}'] = trade.get('order_id', '')
+                # 平倉單號 - 優先使用成交單號，回退到訂單ID
+                deal_number = trade.get('deal_number', '')
+                order_id = trade.get('order_id', '')
+                # 優先顯示成交單號，如果沒有則顯示訂單ID
+                display_id = deal_number if deal_number and deal_number != order_id else order_id
+                ws[f'B{row}'] = display_id
                 ws[f'B{row}'].alignment = center_alignment
                 
                 # 選用合約顯示英文代碼和交割日
@@ -5847,21 +5958,27 @@ def generate_monthly_trading_report():
                     ws[f'C{row}'] = contract_code
                 ws[f'C{row}'].alignment = center_alignment
                 
-                # 訂單類型中文顯示
-                price_type = trade.get('price_type', '')
-                order_type = trade.get('order_type', '')
-                if price_type == 'MKT':
-                    order_type_str = '市價單'
-                elif price_type == 'LMT':
-                    order_type_str = '限價單'
+                # 訂單類型中文顯示 - 優先使用格式化的訂單類型顯示
+                formatted_order_type = trade.get('order_type_display', '')
+                if formatted_order_type:
+                    # 使用增強數據中已格式化的訂單類型
+                    ws[f'D{row}'] = formatted_order_type
                 else:
-                    order_type_str = ''
-                if order_type_str and order_type:
-                    ws[f'D{row}'] = f"{order_type_str}（{order_type}）"
-                elif order_type_str:
-                    ws[f'D{row}'] = order_type_str
-                else:
-                    ws[f'D{row}'] = ''
+                    # 回退到原始邏輯
+                    price_type = trade.get('price_type', '')
+                    order_type = trade.get('order_type', '')
+                    if price_type == 'MKT':
+                        order_type_str = '市價單'
+                    elif price_type == 'LMT':
+                        order_type_str = '限價單'
+                    else:
+                        order_type_str = ''
+                    if order_type_str and order_type:
+                        ws[f'D{row}'] = f"{order_type_str}（{order_type}）"
+                    elif order_type_str:
+                        ws[f'D{row}'] = order_type_str
+                    else:
+                        ws[f'D{row}'] = ''
                 ws[f'D{row}'].alignment = center_alignment
                 
                 # 成交類型
@@ -5930,8 +6047,8 @@ def generate_monthly_trading_report():
                         ws[f'A{current_row + row_offset}'] = ''
                     ws[f'A{current_row + row_offset}'].alignment = center_alignment
                     
-                    # 平倉單號（應顯示開倉單號）
-                    ws[f'B{current_row + row_offset}'] = pos.get('委託單號', '')
+                    # 成交單號（真實成交單號）
+                    ws[f'B{current_row + row_offset}'] = pos.get('成交單號', pos.get('委託單號', ''))
                     ws[f'B{current_row + row_offset}'].alignment = center_alignment
                     
                     # 選用合約顯示英文代碼和實際交割日
@@ -5985,13 +6102,13 @@ def generate_monthly_trading_report():
                     
                     # 訂單類型（顯示開倉的訂單類型）
                     price_type = pos.get('委託價格類型', '')
-                    order_type = pos.get('委託條件', '')
+                    order_type = pos.get('訂單類型', pos.get('委託條件', ''))
                     if price_type == 'MKT':
-                        order_type_str = '市價單'
+                        order_type_str = f'市價單({order_type})' if order_type else '市價單'
                     elif price_type == 'LMT':
-                        order_type_str = '限價單'
+                        order_type_str = f'限價單({order_type})' if order_type else '限價單'
                     else:
-                        order_type_str = price_type
+                        order_type_str = order_type or price_type or '未知'
                     
                     if order_type_str and order_type:
                         ws[f'D{current_row + row_offset}'] = f"{order_type_str}（{order_type}）"
@@ -6036,8 +6153,9 @@ def generate_monthly_trading_report():
                     ws[f'H{current_row + row_offset}'] = f"{quantity_clean} 口"
                     ws[f'H{current_row + row_offset}'].alignment = center_alignment
                     
-                    # 開倉價格
-                    ws[f'I{current_row + row_offset}'] = pos.get('均價', '')
+                    # 開倉價格（優先使用真實開倉價格）
+                    opening_price = pos.get('開倉價格', pos.get('均價', ''))
+                    ws[f'I{current_row + row_offset}'] = opening_price
                     ws[f'I{current_row + row_offset}'].alignment = center_alignment
                     
                     # 平倉價格（持倉狀態顯示0）
@@ -6149,8 +6267,10 @@ def send_daily_trading_statistics():
                     total_cancels += 1
                 
             # 使用基本統計分析平倉口數（不重新計算損益，使用永豐API提供的數據）
-            print(f"正在統計 {len(trades)} 筆交易記錄...")
-            cover_trades, total_cover_quantity, contract_pnl = analyze_simple_trading_stats(trades)
+            # 只統計今天的平倉交易明細，但使用7天數據做開倉價格配對
+            today_str = today.strftime('%Y%m%d')
+            print(f"正在統計 {len(trades)} 筆交易記錄（篩選當天 {today_str} 的平倉明細）...")
+            cover_trades, total_cover_quantity, contract_pnl = analyze_simple_trading_stats(trades, filter_date=today_str)
             print(f"統計完成：平倉 {total_cover_quantity} 口，{len(cover_trades)} 筆交易")
         else:
             print("沒有找到交易記錄")
@@ -7395,32 +7515,51 @@ def send_telegram_file(file_path, caption=""):
         
         # 解析環境變數
         bot_token = None
-        chat_id = None
+        chat_id_raw = None
         
         for line in env_content.split('\n'):
             if line.strip().startswith('BOT_TOKEN='):
                 bot_token = line.split('=', 1)[1].strip().strip('"')
             elif line.strip().startswith('CHAT_ID='):
-                chat_id = line.split('=', 1)[1].strip().strip('"')
+                chat_id_raw = line.split('=', 1)[1].strip().strip('"')
         
-        if not bot_token or not chat_id:
+        if not bot_token or not chat_id_raw:
             print("Telegram設定不完整")
             return False
+        
+        # 支援多個CHAT_ID，用逗號分隔
+        chat_ids = [id.strip() for id in chat_id_raw.split(',') if id.strip()]
+        
+        print(f"準備發送檔案到 {len(chat_ids)} 個接收者")
         
         # 發送檔案
         url = f"https://api.telegram.org/bot{bot_token}/sendDocument"
         
-        with open(file_path, 'rb') as f:
-            files = {'document': f}
-            data = {
-                'chat_id': chat_id,
-                'caption': caption
-            }
+        # 記錄發送結果
+        success_count = 0
+        total_count = len(chat_ids)
+        
+        # 對每個CHAT_ID發送檔案
+        for chat_id in chat_ids:
+            with open(file_path, 'rb') as f:
+                files = {'document': f}
+                data = {
+                    'chat_id': chat_id,
+                    'caption': caption
+                }
+                
+                print(f"發送檔案到 Chat ID: {chat_id}")
+                response = requests.post(url, files=files, data=data, timeout=30)
+                
+                if response.status_code == 200:
+                    print(f"Telegram檔案發送成功 (Chat ID: {chat_id})")
+                    success_count += 1
+                else:
+                    print(f"Telegram檔案發送失敗 (Chat ID: {chat_id}): {response.status_code}")
             
-            response = requests.post(url, files=files, data=data, timeout=30)
-            
-        if response.status_code == 200:
-            print("Telegram檔案發送成功")
+        # 判斷整體發送結果
+        if success_count == total_count:
+            print(f"Telegram檔案發送完成！成功發送到 {success_count}/{total_count} 個接收者")
             
             # 記錄前端系統日誌（合併發送：生成報表 + 檔案發送）
             try:
@@ -7442,19 +7581,20 @@ def send_telegram_file(file_path, caption=""):
             
             return True
         else:
-            print(f"Telegram檔案發送失敗: {response.status_code}")
+            print(f"Telegram檔案部分發送失敗！成功發送到 {success_count}/{total_count} 個接收者")
             
             # 記錄失敗日誌
             try:
+                status_type = 'warning' if success_count > 0 else 'error'
                 requests.post(
                     f'http://127.0.0.1:{CURRENT_PORT}/api/system_log',
-                    json={'message': f'Telegram檔案發送失敗！錯誤代碼：{response.status_code}', 'type': 'error'},
+                    json={'message': f'Telegram檔案部分發送失敗！成功：{success_count}/{total_count}', 'type': status_type},
                     timeout=5
                 )
             except:
                 pass
             
-            return False
+            return success_count > 0  # 至少有一個成功就返回True
             
     except Exception as e:
         print(f"發送Telegram檔案失敗: {e}")
@@ -7470,32 +7610,49 @@ def send_telegram_message(message, log_type="info"):
         
         load_dotenv(ENV_PATH)
         bot_token = os.getenv('BOT_TOKEN')
-        chat_id = os.getenv('CHAT_ID')
+        chat_id_raw = os.getenv('CHAT_ID')
         
         if not bot_token:
             print("找不到 BOT_TOKEN")
             return False
-        if not chat_id:
+        if not chat_id_raw:
             print("找不到 CHAT_ID")
             return False
         
+        # 支援多個CHAT_ID，用逗號分隔
+        chat_ids = [id.strip() for id in chat_id_raw.split(',') if id.strip()]
+        
         print(f"BOT_TOKEN: {bot_token[:10]}...")
-        print(f"CHAT_ID: {chat_id}")
+        print(f"CHAT_IDs: {chat_ids}")
         
         url = f'https://api.telegram.org/bot{bot_token}/sendMessage'
-        payload = {
-            'chat_id': chat_id,
-            'text': message,
-            'parse_mode': 'HTML'
-        }
         
-        print(f"發送請求到 Telegram API...")
-        response = requests.post(url, json=payload, timeout=10)
+        # 記錄發送結果
+        success_count = 0
+        total_count = len(chat_ids)
         
-        print(f"Telegram API 回應: {response.status_code}")
+        # 對每個CHAT_ID發送訊息
+        for chat_id in chat_ids:
+            payload = {
+                'chat_id': chat_id,
+                'text': message,
+                'parse_mode': 'HTML'
+            }
+            
+            print(f"發送請求到 Telegram API (Chat ID: {chat_id})...")
+            response = requests.post(url, json=payload, timeout=10)
+            
+            print(f"Telegram API 回應 (Chat ID: {chat_id}): {response.status_code}")
+            
+            if response.status_code == 200:
+                print(f"Telegram 訊息發送成功 (Chat ID: {chat_id})！")
+                success_count += 1
+            else:
+                print(f"Telegram 訊息發送失敗 (Chat ID: {chat_id}): {response.text}")
         
-        if response.status_code == 200:
-            print("Telegram 訊息發送成功！")
+        # 判斷整體發送結果
+        if success_count == total_count:
+            print(f"Telegram 訊息發送完成！成功發送到 {success_count}/{total_count} 個接收者")
             
             # 根據訊息內容判斷發送狀態類型
             if "提交成功" in message:
@@ -7512,6 +7669,8 @@ def send_telegram_message(message, log_type="info"):
                 log_message = "Telegram［交易統計］訊息發送成功！！！"
             elif "交易日報" in message or "交易月報" in message:
                 log_message = "Telegram［生成報表］訊息發送成功！！！"
+            elif "保證金不足" in message:
+                log_message = "Telegram［保證金不足］訊息發送成功！！！"
             elif "保證金" in message or "轉倉" in message:
                 log_message = "Telegram［系統通知］訊息發送成功！！！"
             else:
@@ -7531,19 +7690,19 @@ def send_telegram_message(message, log_type="info"):
             
             return True
         else:
-            print(f"Telegram API 錯誤: {response.text}")
+            print(f"Telegram 訊息部分發送失敗！成功發送到 {success_count}/{total_count} 個接收者")
             # 發送失敗也要記錄日誌
             try:
-                error_log_message = f"Telegram 訊息發送失敗！錯誤代碼：{response.status_code}"
+                error_log_message = f"Telegram 訊息部分發送失敗！成功：{success_count}/{total_count}"
                 requests.post(
                     f'http://127.0.0.1:{CURRENT_PORT}/api/system_log',
-                    json={'message': error_log_message, 'type': 'error'},
+                    json={'message': error_log_message, 'type': 'warning'},
                     timeout=5
                 )
                 print(f"TX系統錯誤日誌已發送: {error_log_message}")
             except Exception as e:
                 print(f"發送TX系統錯誤日誌失敗: {e}")
-            return False
+            return success_count > 0  # 至少有一個成功就返回True
             
     except Exception as e:
         print(f"發送Telegram訊息失敗: {e}")
@@ -8363,8 +8522,146 @@ def load_historical_open_trades(close_trades):
     
     return historical_opens
 
-def analyze_simple_trading_stats(trades):
-    """簡單分析交易統計（簡單配對開平倉，計算單筆損益）"""
+def get_opening_price_from_profit_loss_api(contract_code):
+    """使用list_profit_loss + detail_id獲取真實開倉價格"""
+    try:
+        if not sinopac_connected or not sinopac_api:
+            print(f"[損益API查詢] 永豐API未連接，無法查詢{contract_code}開倉價格")
+            return None
+            
+        # 檢查是否有list_profit_loss API
+        if hasattr(sinopac_api, 'list_profit_loss'):
+            print(f"[損益API查詢] 使用list_profit_loss查詢{contract_code}損益明細")
+            profit_loss_data = sinopac_api.list_profit_loss(sinopac_api.futopt_account)
+            
+            if profit_loss_data:
+                print(f"[損益API查詢] 獲取到{len(profit_loss_data) if isinstance(profit_loss_data, list) else 1}筆損益記錄")
+                
+                # 查找與當前合約相關的記錄
+                for item in profit_loss_data:
+                    try:
+                        # 檢查合約代碼匹配
+                        item_contract = getattr(item, 'code', None) or getattr(item, 'contract', None) or getattr(item, 'symbol', None)
+                        if item_contract and contract_code in str(item_contract):
+                            print(f"[損益API查詢] 找到{contract_code}相關記錄")
+                            
+                            # 獲取detail_id用於進一步查詢
+                            detail_id = getattr(item, 'id', None) or getattr(item, 'detail_id', None) or getattr(item, 'trade_id', None)
+                            if detail_id and hasattr(sinopac_api, 'detail_id'):
+                                print(f"[損益API查詢] 使用detail_id: {detail_id}查詢詳細信息")
+                                detail_data = sinopac_api.detail_id(detail_id)
+                                
+                                if detail_data:
+                                    # 從詳細信息中提取開倉價格
+                                    entry_price = getattr(detail_data, 'entry_price', None) or getattr(detail_data, 'open_price', None) or getattr(detail_data, 'avg_price', None)
+                                    if entry_price:
+                                        print(f"[損益API查詢] ✅ 從detail_id獲取到{contract_code}真實開倉價格: {entry_price}")
+                                        return float(entry_price)
+                            
+                            # 如果無法使用detail_id，嘗試直接從損益記錄獲取
+                            entry_price = getattr(item, 'entry_price', None) or getattr(item, 'open_price', None) or getattr(item, 'avg_price', None)
+                            if entry_price:
+                                print(f"[損益API查詢] ✅ 從損益記錄獲取到{contract_code}開倉價格: {entry_price}")
+                                return float(entry_price)
+                                
+                    except Exception as item_error:
+                        print(f"[損益API查詢] 處理損益項目時出錯: {item_error}")
+                        continue
+                        
+        print(f"[損益API查詢] ❌ 未能從損益API獲取{contract_code}開倉價格")
+        return None
+        
+    except Exception as e:
+        print(f"[損益API查詢] 查詢{contract_code}開倉價格時發生錯誤: {e}")
+        return None
+
+def get_opening_price_from_api(contract_code):
+    """直接從永豐API查詢指定合約的開倉價格（原成交均價）"""
+    try:
+        if not sinopac_connected or not sinopac_api:
+            print(f"[API查詢] 永豐API未連接，無法查詢{contract_code}開倉價格")
+            return None
+            
+        # 優先使用list_profit_loss + detail_id方法
+        profit_loss_price = get_opening_price_from_profit_loss_api(contract_code)
+        if profit_loss_price:
+            return profit_loss_price
+        
+        # 檢查是否有list_profit_loss API可用（官方提及的端點）
+        if hasattr(sinopac_api, 'list_profit_loss'):
+            try:
+                print(f"[API探索] 發現list_profit_loss API，嘗試查詢損益明細")
+                profit_loss_data = sinopac_api.list_profit_loss(sinopac_api.futopt_account)
+                print(f"[API探索] list_profit_loss返回數據類型: {type(profit_loss_data)}")
+                if profit_loss_data:
+                    print(f"[API探索] list_profit_loss數據內容示例: {profit_loss_data[:2] if isinstance(profit_loss_data, list) else str(profit_loss_data)[:200]}")
+                    
+                    # 查看是否有與當前合約相關的數據
+                    for item in profit_loss_data:
+                        try:
+                            # 檢查各種可能的屬性名稱
+                            item_contract = getattr(item, 'code', None) or getattr(item, 'contract', None) or getattr(item, 'symbol', None)
+                            if item_contract and contract_code in str(item_contract):
+                                print(f"[API探索] 找到{contract_code}相關損益數據: {item}")
+                                
+                                # 查看是否有detail_id或id可用於進一步查詢
+                                detail_id = getattr(item, 'id', None) or getattr(item, 'detail_id', None) or getattr(item, 'trade_id', None)
+                                if detail_id:
+                                    print(f"[API探索] 發現detail_id: {detail_id}，可用於查詢詳細信息")
+                                    
+                                    # 嘗試查看是否有原成交價格信息
+                                    entry_price = getattr(item, 'entry_price', None) or getattr(item, 'open_price', None) or getattr(item, 'avg_price', None)
+                                    if entry_price:
+                                        print(f"[API探索] 發現原成交價格: {entry_price}")
+                                        return float(entry_price)
+                                
+                                break
+                        except Exception as item_error:
+                            print(f"[API探索] 處理損益項目時出錯: {item_error}")
+                            continue
+                            
+            except Exception as e:
+                print(f"[API探索] list_profit_loss查詢失敗: {e}")
+        else:
+            print(f"[API探索] 未發現list_profit_loss API，檢查其他可能的API方法")
+            
+            # 列出sinopac_api物件的所有方法，尋找其他可能的API端點
+            try:
+                api_methods = [method for method in dir(sinopac_api) if not method.startswith('_')]
+                profit_related_methods = [method for method in api_methods if 'profit' in method.lower() or 'loss' in method.lower() or 'trade' in method.lower() or 'deal' in method.lower()]
+                if profit_related_methods:
+                    print(f"[API探索] 發現可能相關的API方法: {profit_related_methods}")
+                else:
+                    print(f"[API探索] 未發現明顯的損益相關API方法")
+            except Exception as e:
+                print(f"[API探索] 列舉API方法失敗: {e}")
+        
+        # 查詢持倉
+        positions = sinopac_api.list_positions(sinopac_api.futopt_account)
+        for position in positions:
+            if hasattr(position, 'code') and position.code == contract_code:
+                if hasattr(position, 'price') and position.price:
+                    opening_price = float(position.price)
+                    print(f"[API查詢] 找到{contract_code}開倉價格: {opening_price}")
+                    return opening_price
+                else:
+                    print(f"[API查詢] {contract_code}持倉無價格信息")
+                    return None
+        
+        print(f"[API查詢] 未找到{contract_code}持倉記錄")
+        return None
+        
+    except Exception as e:
+        print(f"[API查詢] 查詢{contract_code}開倉價格失敗: {e}")
+        return None
+
+def analyze_simple_trading_stats(trades, filter_date=None):
+    """簡單分析交易統計（簡單配對開平倉，計算單筆損益）
+    
+    Args:
+        trades: 交易記錄列表
+        filter_date: 篩選日期（格式：YYYYMMDD），只統計該日期的平倉明細，None則不篩選
+    """
     cover_trades = []
     total_cover_quantity = 0
     
@@ -8423,14 +8720,25 @@ def analyze_simple_trading_stats(trades):
                 'real_opening_price': trade.get('real_opening_price', price)
             })
         elif oc_type.upper() == 'COVER':
-            close_trades.append({
-                'contract_code': contract_code,
-                'contract_name': contract_name,
-                'action': action,
-                'quantity': quantity,
-                'price': price,
-                'timestamp': timestamp
-            })
+            # 如果有日期篩選，只統計指定日期的平倉交易
+            # timestamp格式：2025-07-21T10:30:45.123456，filter_date格式：20250721
+            trade_date = None
+            if timestamp and len(timestamp) >= 10:
+                try:
+                    # 從ISO格式的timestamp提取日期部分
+                    trade_date = timestamp[:10].replace('-', '')  # 2025-07-21 -> 20250721
+                except:
+                    pass
+                    
+            if filter_date is None or (trade_date and trade_date == filter_date):
+                close_trades.append({
+                    'contract_code': contract_code,
+                    'contract_name': contract_name,
+                    'action': action,
+                    'quantity': quantity,
+                    'price': price,
+                    'timestamp': timestamp
+                })
     
     # 打印開倉和平倉記錄數量
     print(f"當天開倉交易數量: {len(open_trades)}")
@@ -8464,15 +8772,21 @@ def analyze_simple_trading_stats(trades):
         print(f"尋找平倉交易 {close_trade['contract_code']} {close_trade['action']} {close_trade['quantity']} 口 的開倉記錄...")
         print(f"需要找的開倉動作: {required_open_action}")
         
-        # 優先使用永豐API的真實開倉價格（原成交均價）
-        for open_trade in open_trades:
-            if (open_trade['contract_code'] == close_trade['contract_code'] and
-                open_trade['action'] == required_open_action):
-                print(f"檢查開倉記錄：{open_trade['contract_code']} {open_trade['action']}")
-                print(f"  原價格: {open_trade.get('price', 'N/A')}")
-                print(f"  真實開倉價格: {open_trade.get('real_opening_price', 'N/A')}")
-                
-                # 優先使用真實開倉價格
+        # 優先直接從永豐API查詢該合約的開倉價格（更快更準確）
+        api_opening_price = get_opening_price_from_api(close_trade['contract_code'])
+        if api_opening_price is not None:
+            open_price = api_opening_price
+            print(f"✅ 從永豐API直接獲取開倉價格：{close_trade['contract_code']} @ {open_price}")
+        else:
+            # 回退到本地記錄配對
+            for open_trade in open_trades:
+                if (open_trade['contract_code'] == close_trade['contract_code'] and
+                    open_trade['action'] == required_open_action):
+                    print(f"檢查開倉記錄：{open_trade['contract_code']} {open_trade['action']}")
+                    print(f"  原價格: {open_trade.get('price', 'N/A')}")
+                    print(f"  真實開倉價格: {open_trade.get('real_opening_price', 'N/A')}")
+                    
+                    # 優先使用真實開倉價格
                 if 'real_opening_price' in open_trade and open_trade['real_opening_price'] is not None:
                     open_price = float(open_trade['real_opening_price'])
                     print(f"✅ 使用永豐API真實開倉價格：{open_trade['contract_code']} {open_trade['action']} {open_trade['quantity']} 口 @ {open_price}（真實均價）")
@@ -8487,8 +8801,9 @@ def analyze_simple_trading_stats(trades):
                 if (open_trade['contract_code'] == close_trade['contract_code'] and
                     open_trade['action'] == required_open_action and
                     open_trade['quantity'] == close_trade['quantity']):
-                    open_price = open_trade['price']
-                    print(f"找到精確配對開倉記錄：{open_trade['contract_code']} {open_trade['action']} {open_trade['quantity']} 口 @ {open_price}")
+                    # 優先使用真實開倉價格
+                    open_price = open_trade.get('real_opening_price', open_trade['price'])
+                    print(f"找到精確配對開倉記錄：{open_trade['contract_code']} {open_trade['action']} {open_trade['quantity']} 口 @ {open_price} (real_price: {open_trade.get('real_opening_price', 'N/A')})")
                     break
         
         # 如果精確匹配失敗，嘗試只匹配合約和動作（忽略數量）
@@ -8497,8 +8812,9 @@ def analyze_simple_trading_stats(trades):
             for open_trade in open_trades:
                 if (open_trade['contract_code'] == close_trade['contract_code'] and
                     open_trade['action'] == required_open_action):
-                    open_price = open_trade['price']
-                    print(f"找到模糊配對開倉記錄：{open_trade['contract_code']} {open_trade['action']} {open_trade['quantity']} 口 @ {open_price}")
+                    # 優先使用真實開倉價格
+                    open_price = open_trade.get('real_opening_price', open_trade['price'])
+                    print(f"找到模糊配對開倉記錄：{open_trade['contract_code']} {open_trade['action']} {open_trade['quantity']} 口 @ {open_price} (real_price: {open_trade.get('real_opening_price', 'N/A')})")
                     break
         
         # 計算單筆損益（如果找到開倉價格）
@@ -8525,8 +8841,54 @@ def analyze_simple_trading_stats(trades):
                              t.get('raw_data', {}).get('order', {}).get('price') == close_trade['price']), None)
         
         order_info = {}
+        delivery_date = ''
+        real_order_id = ''
+        
         if original_trade:
             order_info = original_trade.get('raw_data', {}).get('order', {})
+            real_order_id = order_info.get('id', '')
+            
+            # 嘗試從合約信息中獲取交割日期
+            contract_data = original_trade.get('raw_data', {}).get('contract', {})
+            if isinstance(contract_data, dict):
+                delivery_date = contract_data.get('delivery_date', '')
+        
+        # 如果沒有找到原始交易記錄，嘗試從永豐API直接查詢該筆交易的詳細信息
+        if not real_order_id and sinopac_connected and sinopac_api:
+            try:
+                # 這裡可以加入更多的API查詢邏輯來獲取真實的訂單ID
+                print(f"[數據獲取] 嘗試從API查詢{close_trade['contract_code']}的訂單詳情")
+            except Exception as e:
+                print(f"[數據獲取] API查詢失敗: {e}")
+        
+        # 如果還是沒有交割日期，嘗試從全域合約對象獲取
+        if not delivery_date:
+            contract_code = close_trade['contract_code'][:3]  # TXF, MXF, TMF
+            try:
+                if contract_code == 'TXF' and 'contract_txf' in globals() and contract_txf:
+                    if hasattr(contract_txf, 'delivery_date'):
+                        delivery_date = contract_txf.delivery_date.strftime('%Y/%m/%d') if hasattr(contract_txf.delivery_date, 'strftime') else str(contract_txf.delivery_date)
+                elif contract_code == 'MXF' and 'contract_mxf' in globals() and contract_mxf:
+                    if hasattr(contract_mxf, 'delivery_date'):
+                        delivery_date = contract_mxf.delivery_date.strftime('%Y/%m/%d') if hasattr(contract_mxf.delivery_date, 'strftime') else str(contract_mxf.delivery_date)
+                elif contract_code == 'TMF' and 'contract_tmf' in globals() and contract_tmf:
+                    if hasattr(contract_tmf, 'delivery_date'):
+                        delivery_date = contract_tmf.delivery_date.strftime('%Y/%m/%d') if hasattr(contract_tmf.delivery_date, 'strftime') else str(contract_tmf.delivery_date)
+            except:
+                pass
+        
+        # 最後嘗試：如果還是沒有交割日期，從永豐API查詢當前合約
+        if not delivery_date and sinopac_connected and sinopac_api:
+            try:
+                contracts = sinopac_api.Contracts.Futures
+                contract_prefix = close_trade['contract_code'][:3]
+                for contract in contracts:
+                    if contract_prefix in contract.code:
+                        delivery_date = contract.delivery_date.strftime('%Y/%m/%d') if hasattr(contract.delivery_date, 'strftime') else str(contract.delivery_date)
+                        print(f"[數據獲取] 從API獲取到{contract.code}交割日: {delivery_date}")
+                        break
+            except Exception as e:
+                print(f"[數據獲取] 從API獲取交割日失敗: {e}")
         
         cover_trades.append({
             'contract_name': close_trade['contract_name'],
@@ -8536,10 +8898,11 @@ def analyze_simple_trading_stats(trades):
             'cover_price': f"{int(close_trade['price']):,}",
             'pnl': int(pnl),
             'timestamp': close_trade['timestamp'],
-            'order_id': order_info.get('id', ''),
+            'order_id': real_order_id or order_info.get('id', ''),  # 使用真實獲取的訂單ID
             'price_type': order_info.get('price_type', ''),
             'order_type': order_info.get('order_type', ''),
-            'delivery_date': order_info.get('delivery_date', '')
+            'delivery_date': delivery_date,  # 使用真實獲取的交割日期
+            'is_manual': original_trade.get('is_manual', True) if original_trade else True  # 真實的手動/自動標記
         })
     
     return cover_trades, total_cover_quantity, contract_pnl

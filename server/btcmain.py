@@ -16,6 +16,7 @@ import threading
 import glob
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlencode
+from collections import OrderedDict
 import openpyxl
 from openpyxl.styles import Alignment, PatternFill, Font
 from openpyxl.utils import get_column_letter
@@ -164,6 +165,30 @@ class BinanceClient:
         """獲取持倉信息"""
         return self._make_request('GET', '/fapi/v2/positionRisk')
     
+    def get_income_history(self, startTime=None, endTime=None, incomeType=None, limit=1000, **kwargs):
+        """獲取收入歷史 - 支援新舊參數名稱"""
+        params = {
+            'limit': limit
+        }
+        
+        # 支援舊參數名稱的兼容性
+        if 'start_time' in kwargs:
+            startTime = kwargs['start_time']
+        if 'end_time' in kwargs:
+            endTime = kwargs['end_time']
+        if 'income_type' in kwargs:
+            incomeType = kwargs['income_type']
+            
+        if startTime:
+            params['startTime'] = startTime
+        if endTime:
+            params['endTime'] = endTime
+        if incomeType:
+            params['incomeType'] = incomeType
+            
+        result = self._make_request('GET', '/fapi/v1/income', params)
+        return result
+    
     def get_server_time(self):
         """獲取服務器時間"""
         return self._make_request('GET', '/fapi/v1/time', signed=False)
@@ -181,10 +206,13 @@ class BinanceClient:
             'type': order_type,  # MARKET, LIMIT, STOP, TAKE_PROFIT等
             'quantity': str(quantity),
             'positionSide': position_side,  # BOTH, LONG, SHORT
-            'timeInForce': time_in_force,
             'reduceOnly': reduce_only,
             'closePosition': close_position
         }
+        
+        # 只有限價單等需要 timeInForce，市價單不需要
+        if order_type in ['LIMIT', 'STOP', 'TAKE_PROFIT', 'STOP_MARKET', 'TAKE_PROFIT_MARKET']:
+            params['timeInForce'] = time_in_force
         
         if order_type == 'LIMIT' and price:
             params['price'] = str(price)
@@ -340,10 +368,10 @@ TRADING_PAIR={data.get('TRADING_PAIR', 'BTCUSDT')}
 CONTRACT_TYPE={data.get('CONTRACT_TYPE', 'PERPETUAL')}
 
 # 槓桿倍數
-LEVERAGE={data.get('LEVERAGE', '5')}
+LEVERAGE={data.get('LEVERAGE', '20')}
 
 # 風險比例百分比
-POSITION_SIZE={data.get('POSITION_SIZE', '10')}
+POSITION_SIZE={data.get('POSITION_SIZE', '80')}
 
 # 保證金模式
 MARGIN_TYPE={data.get('MARGIN_TYPE', 'CROSS')}
@@ -609,9 +637,11 @@ def calculate_btc_quantity(signal_data, account_balance):
         # 計算數量 = 下單金額 / 價格
         quantity = order_value / current_price
         
-        # 幣安最小下單單位調整(通常是0.001)
+        # 幣安BTCUSDT最小下單單位(0.001)
         min_qty = 0.001
         quantity = max(min_qty, round(quantity, 3))
+        
+        print(f"BTC數量計算詳細: 理論數量={order_value/current_price:.6f}, 最小單位={min_qty}, 最終數量={quantity}")
         
         print(f"BTC倉位計算: 可用餘額={available_balance}, 槓桿={leverage}, 風險={position_size_pct*100}%, 價格={current_price}, 數量={quantity}")
         
@@ -633,7 +663,8 @@ def place_btc_futures_order(symbol, side, quantity, price=None, order_type="MARK
         action_type = '平倉' if reduce_only else '開倉'
         manual_type = '手動' if is_manual else '自動'
         
-        print(f"準備下BTC單: symbol={symbol}, side={side}, quantity={quantity}, type={order_type}, action={action_type}")
+        print(f"[BTC] 下單參數: symbol={symbol}, side={side}, quantity={quantity}, type={order_type}, reduce_only={reduce_only}")
+        print(f"[BTC] 動作判斷: action_type={action_type}, manual_type={manual_type}")
         # 記錄到系統日誌（僅後端顯示）
         
         # 執行下單
@@ -697,7 +728,7 @@ def place_btc_futures_order(symbol, side, quantity, price=None, order_type="MARK
                     action_type=action_type,
                     is_success=False  # 提交成功但未成交
                 )
-                log_btc_system_message(submit_log, "info")
+                log_btc_frontend_message(submit_log, "info")
             except:
                 pass
             
@@ -725,7 +756,7 @@ def place_btc_futures_order(symbol, side, quantity, price=None, order_type="MARK
     except Exception as e:
         print(f"BTC下單失敗: {e}")
         # 記錄到系統日誌
-        log_btc_system_message(f"下單失敗: {e}", "error")
+        log_btc_frontend_message(f"下單失敗: {e}", "error")
         # 發送提交失敗通知
         error_record = {
             'symbol': symbol,
@@ -805,7 +836,7 @@ def check_btc_order_fill(order_id, symbol):
                         action_type=trade_record.get('action_type', '開倉'),
                         is_success=True
                     )
-                    log_btc_system_message(success_log, "success")
+                    log_btc_frontend_message(success_log, "success")
                 except:
                     pass
                 
@@ -824,7 +855,7 @@ def check_btc_order_fill(order_id, symbol):
                 quantity = trade_record.get('quantity', '0')
                 
                 log_message = f"BTC訂單失效：{symbol}｜{side}｜{quantity}｜狀態：{status}"
-                log_btc_system_message(log_message, "warning")
+                log_btc_frontend_message(log_message, "warning")
                 
         # 從活躍交易中移除已完成的訂單
         if order_id in btc_active_trades:
@@ -844,8 +875,9 @@ def process_btc_entry_signal(signal_data, parsed_action=None):
         if action not in ['LONG', 'SHORT']:
             raise ValueError(f"無效的進場動作: {action}")
         
-        # 標準化方向
+        # 標準化方向（BTC期貨邏輯）
         side = 'BUY' if action == 'LONG' else 'SELL'
+        print(f"[BTC] 信號解析: {action} -> side={side}")
         
         # 獲取帳戶餘額計算數量
         if not binance_client:
@@ -1023,32 +1055,51 @@ def send_btc_telegram_message(message, chat_id=None, bot_token=None):
         env_data = load_btc_env_data()
         
         if not chat_id:
-            chat_id = env_data.get('CHAT_ID_BTC')
+            chat_id_raw = env_data.get('CHAT_ID_BTC')
+        else:
+            chat_id_raw = chat_id
         if not bot_token:
             bot_token = env_data.get('BOT_TOKEN_BTC')
         
-        if not chat_id or not bot_token:
+        if not chat_id_raw or not bot_token:
             print("BTC Telegram配置不完整，跳過通知")
-            log_btc_system_message("Telegram配置不完整", "error")
+            log_btc_frontend_message("Telegram配置不完整", "error")
             return False
         
+        # 支援多個CHAT_ID，用逗號分隔
+        chat_ids = [id.strip() for id in str(chat_id_raw).split(',') if id.strip()]
+        
         print(f"BTC BOT_TOKEN: {bot_token[:10]}...")
-        print(f"BTC CHAT_ID: {chat_id}")
+        print(f"BTC CHAT_IDs: {chat_ids}")
         
         url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
-        payload = {
-            'chat_id': chat_id,
-            'text': message,
-            'parse_mode': 'HTML'
-        }
         
-        print(f"發送請求到 BTC Telegram API...")
-        response = requests.post(url, json=payload, timeout=10)
+        # 記錄發送結果
+        success_count = 0
+        total_count = len(chat_ids)
         
-        print(f"BTC Telegram API 回應: {response.status_code}")
+        # 對每個CHAT_ID發送訊息
+        for chat_id in chat_ids:
+            payload = {
+                'chat_id': chat_id,
+                'text': message,
+                'parse_mode': 'HTML'
+            }
+            
+            print(f"發送請求到 BTC Telegram API (Chat ID: {chat_id})...")
+            response = requests.post(url, json=payload, timeout=10)
+            
+            print(f"BTC Telegram API 回應 (Chat ID: {chat_id}): {response.status_code}")
+            
+            if response.status_code == 200:
+                print(f"BTC Telegram 訊息發送成功 (Chat ID: {chat_id})！")
+                success_count += 1
+            else:
+                print(f"BTC Telegram 訊息發送失敗 (Chat ID: {chat_id}): {response.text}")
         
-        if response.status_code == 200:
-            print("BTC Telegram 訊息發送成功！")
+        # 判斷整體發送結果
+        if success_count == total_count:
+            print(f"BTC Telegram 訊息發送完成！成功發送到 {success_count}/{total_count} 個接收者")
             
             # 根據訊息內容判斷發送狀態類型（參考TX系統）
             if "訂單提交成功" in message or "提交成功" in message:
@@ -1065,24 +1116,25 @@ def send_btc_telegram_message(message, chat_id=None, bot_token=None):
                 log_message = "Telegram［交易統計］訊息發送成功！！！"
             elif "日報" in message or "月報" in message or "報表" in message:
                 log_message = "Telegram［生成報表］訊息發送成功！！！"
-            elif "系統啟動" in message or "啟動通知" in message:
-                log_message = "Telegram［系統通知］訊息發送成功！！！"
+            elif "系統啟動" in message or "啟動通知" in message or "正在啟動中" in message:
+                log_message = "Telegram［啟動通知］訊息發送成功！！！"
             else:
                 log_message = "Telegram 訊息發送成功！！！"
             
-            # 記錄到BTC系統日誌
+            # 記錄到BTC前端系統日誌
             log_type = 'warning' if 'API連線異常' in log_message else 'success'
-            log_btc_system_message(log_message, log_type)
+            log_btc_frontend_message(log_message, log_type)
             print(f"BTC系統日誌已發送: {log_message}")
             
             return True
         else:
-            print(f"BTC Telegram API 錯誤: {response.text}")
+            print(f"BTC Telegram 訊息部分發送失敗！成功發送到 {success_count}/{total_count} 個接收者")
             # 發送失敗也要記錄日誌
-            error_log_message = f"Telegram 訊息發送失敗！錯誤代碼：{response.status_code}"
-            log_btc_system_message(error_log_message, "error")
+            status_type = 'warning' if success_count > 0 else 'error'
+            error_log_message = f"Telegram 訊息部分發送失敗！成功：{success_count}/{total_count}"
+            log_btc_frontend_message(error_log_message, status_type)
             print(f"BTC系統錯誤日誌已發送: {error_log_message}")
-            return False
+            return success_count > 0  # 至少有一個成功就返回True
             
     except Exception as e:
         print(f"發送BTC Telegram訊息失敗: {e}")
@@ -1094,7 +1146,7 @@ def send_btc_telegram_message(message, chat_id=None, bot_token=None):
         
         # 記錄異常到系統日誌
         error_log_message = f"Telegram 訊息發送異常：{str(e)[:100]}"
-        log_btc_system_message(error_log_message, "error")
+        log_btc_frontend_message(error_log_message, "error")
         return False
 
 def send_btc_telegram_file(file_path, caption=""):
@@ -1108,41 +1160,61 @@ def send_btc_telegram_file(file_path, caption=""):
         env_data = load_btc_env_data()
         
         bot_token = env_data.get('BOT_TOKEN_BTC')
-        chat_id = env_data.get('CHAT_ID_BTC')
+        chat_id_raw = env_data.get('CHAT_ID_BTC')
         
-        if not bot_token or not chat_id:
+        if not bot_token or not chat_id_raw:
             print("BTC Telegram配置不完整，跳過檔案發送")
-            log_btc_system_message("Telegram配置不完整", "error")
+            log_btc_frontend_message("Telegram配置不完整", "error")
             return False
+        
+        # 支援多個CHAT_ID，用逗號分隔
+        chat_ids = [id.strip() for id in str(chat_id_raw).split(',') if id.strip()]
+        
+        print(f"準備發送BTC檔案到 {len(chat_ids)} 個接收者")
         
         # 發送檔案
         url = f"https://api.telegram.org/bot{bot_token}/sendDocument"
         
-        with open(file_path, 'rb') as f:
-            files = {'document': f}
-            data = {
-                'chat_id': chat_id,
-                'caption': caption
-            }
-            
-            response = requests.post(url, files=files, data=data, timeout=30)
-            
-        if response.status_code == 200:
-            print("BTC Telegram檔案發送成功")
+        # 記錄發送結果
+        success_count = 0
+        total_count = len(chat_ids)
+        
+        # 對每個CHAT_ID發送檔案
+        for chat_id in chat_ids:
+            with open(file_path, 'rb') as f:
+                files = {'document': f}
+                data = {
+                    'chat_id': chat_id,
+                    'caption': caption
+                }
+                
+                print(f"發送BTC檔案到 Chat ID: {chat_id}")
+                response = requests.post(url, files=files, data=data, timeout=30)
+                
+                if response.status_code == 200:
+                    print(f"BTC Telegram檔案發送成功 (Chat ID: {chat_id})")
+                    success_count += 1
+                else:
+                    print(f"BTC Telegram檔案發送失敗 (Chat ID: {chat_id}): {response.status_code}")
+        
+        # 判斷整體發送結果
+        if success_count == total_count:
+            print(f"BTC Telegram檔案發送完成！成功發送到 {success_count}/{total_count} 個接收者")
             
             # 記錄前端系統日誌（合併發送：生成報表 + 檔案發送）
-            log_btc_system_message("Telegram［生成報表］訊息發送成功！！！", "success")
-            log_btc_system_message("Telegram［檔案發送］訊息發送成功！！！", "success")
+            log_btc_frontend_message("Telegram［生成報表］訊息發送成功！！！", "success")
+            log_btc_frontend_message("Telegram［檔案發送］訊息發送成功！！！", "success")
             
             return True
         else:
-            print(f"BTC Telegram檔案發送失敗: {response.status_code}")
-            log_btc_system_message(f"Telegram檔案發送失敗！錯誤代碼：{response.status_code}", "error")
-            return False
+            print(f"BTC Telegram檔案部分發送失敗！成功發送到 {success_count}/{total_count} 個接收者")
+            status_type = 'warning' if success_count > 0 else 'error'
+            log_btc_frontend_message(f"Telegram檔案部分發送失敗！成功：{success_count}/{total_count}", status_type)
+            return success_count > 0  # 至少有一個成功就返回True
             
     except Exception as e:
         print(f"發送BTC Telegram檔案失敗: {e}")
-        log_btc_system_message(f"Telegram檔案發送失敗！異常錯誤：{str(e)[:50]}", "error")
+        log_btc_frontend_message(f"Telegram檔案發送失敗！異常錯誤：{str(e)[:50]}", "error")
         return False
 
 def get_btc_order_log_message(symbol, side, quantity, price, order_id, order_type, is_manual, action_type, is_success=False):
@@ -1185,24 +1257,35 @@ def get_btc_order_log_message(symbol, side, quantity, price, order_id, order_typ
         
         # 格式化訂單類型（與TX一致）
         if order_type.upper() == 'MARKET':
-            order_info = "市價"
+            order_info = "市價單"
         else:
-            order_info = "限價"
+            order_info = "限價單"
         
         # 返回格式（與TX格式完全一致）
         if is_success:
-            # 成交成功格式
-            return f"{action_type}成功：{simple_symbol}｜{direction_display}｜{quantity_display}｜{order_info}"
+            # 成交成功格式 - 顯示成交價格
+            return f"{action_type}成功：{simple_symbol}｜{direction_display}｜{quantity_display}｜{price_display}｜{order_info}"
         else:
-            # 掛單格式
-            return f"{manual_type}{action_type}：{simple_symbol}｜{direction_display}｜{quantity_display}｜{order_info}"
+            # 掛單格式 - 市價單顯示"市價"作為價格，限價單顯示實際價格
+            if order_type.upper() == 'MARKET':
+                return f"{manual_type}{action_type}：{simple_symbol}｜{direction_display}｜{quantity_display}｜市價｜{order_info}"
+            else:
+                return f"{manual_type}{action_type}：{simple_symbol}｜{direction_display}｜{quantity_display}｜{price_display}｜{order_info}"
             
     except Exception as e:
         print(f"生成BTC日誌訊息失敗: {e}")
         return f"日誌生成失敗: {order_id}"
 
 def log_btc_system_message(message, log_type="info"):
-    """記錄BTC系統日誌到前端"""
+    """記錄BTC系統日誌（僅後端控制台，不發送到前端）"""
+    try:
+        # 只在後端控制台顯示，不發送到前端
+        print(f"[BTC系統日誌] {log_type.upper()}: {message}")
+    except:
+        pass
+
+def log_btc_frontend_message(message, log_type="info"):
+    """記錄BTC前端系統日誌"""
     try:
         # 動態獲取當前端口
         current_port = 5000  # 預設端口
@@ -1214,10 +1297,10 @@ def log_btc_system_message(message, log_type="info"):
         except:
             pass
             
-        # 使用BTC專用的日誌端點，避免混淆TX系統日誌
+        # 使用BTC專用的日誌端點
         requests.post(
             f'http://127.0.0.1:{current_port}/api/btc_system_log',
-            json={'message': message, 'type': log_type},
+            json={'message': message, 'type': log_type, 'system': 'BTC'},
             timeout=5
         )
     except:
@@ -1276,23 +1359,23 @@ def send_btc_order_submit_notification(trade_record, success=True):
         
         if success:
             msg = (f"⭕ 提交成功（{current_date}）\n"
-                   f"交易幣種：{symbol}\n"
                    f"選用合約：{contract_display}\n"
                    f"訂單類型：{order_type_display}\n"
                    f"提交單號：{order_id}\n"
                    f"提交類型：{submit_type}\n"
                    f"提交動作：{direction_display}\n"
+                   f"提交幣種：{symbol}\n"
                    f"提交數量：{quantity} BTC\n"
                    f"提交價格：{price_display}")
         else:
             error = trade_record.get('error', '未知錯誤')
             msg = (f"❌ 提交失敗（{current_date}）\n"
-                   f"交易幣種：{symbol}\n"
                    f"選用合約：{contract_display}\n"
                    f"訂單類型：{order_type_display}\n"
                    f"提交單號：{order_id}\n"
                    f"提交類型：{submit_type}\n"
                    f"提交動作：{direction_display}\n"
+                   f"提交幣種：{symbol}\n"
                    f"提交數量：{quantity} BTC\n"
                    f"提交價格：{price_display}\n"
                    f"原因：{error}")
@@ -1357,12 +1440,12 @@ def send_btc_trade_notification(trade_record):
         contract_display = f"{contract_type}（永續）" if contract_type == 'PERPETUAL' else contract_type
         
         msg = (f"✅ 成交通知（{current_date}）\n"
-               f"交易幣種：{symbol}\n"
                f"選用合約：{contract_display}\n"
                f"訂單類型：{order_type_display}\n"
                f"成交單號：{order_id}\n"
                f"成交類型：{trade_type}\n"
                f"成交動作：{direction_display}\n"
+               f"成交幣種：{symbol}\n"
                f"成交數量：{quantity} BTC\n"
                f"成交價格：{price_display}")
         
@@ -1485,97 +1568,219 @@ def send_btc_trading_statistics():
                         print(f"[BTC] {symbol} 使用{price_source}: 開倉{open_price}, 平倉{fill_price}, 損益{pnl:.2f}")
                         break
         
-        # 組織訊息
+        # 獲取Binance API交易量數據
+        buy_volume = 0
+        sell_volume = 0
+        avg_buy_price = 0
+        avg_sell_price = 0
+        total_buy_amount = 0
+        total_sell_amount = 0
+        
+        # 從今日交易計算買賣統計
+        for trade in today_trades:
+            if trade.get('type') == 'deal':
+                side = trade.get('side', '')
+                quantity = float(trade.get('quantity', 0))
+                price = float(trade.get('fill_price', 0))
+                amount = quantity * price
+                
+                if side == 'BUY':
+                    buy_volume += quantity
+                    total_buy_amount += amount
+                elif side == 'SELL':
+                    sell_volume += quantity
+                    total_sell_amount += amount
+        
+        # 計算平均價格
+        if buy_volume > 0:
+            avg_buy_price = total_buy_amount / buy_volume
+        if sell_volume > 0:
+            avg_sell_price = total_sell_amount / sell_volume
+        
+        # 從幣安API獲取交易統計數據
+        binance_stats = {}
+        if binance_client:
+            try:
+                # 獲取當日開始和結束時間戳
+                today_start = int(datetime.strptime(current_date, '%Y-%m-%d').timestamp() * 1000)
+                today_end = int((datetime.strptime(current_date, '%Y-%m-%d') + timedelta(days=1)).timestamp() * 1000)
+                
+                # 從幣安獲取當日交易數據
+                trades_data = binance_client._make_request('GET', '/fapi/v1/userTrades', {
+                    'startTime': today_start,
+                    'endTime': today_end,
+                    'limit': 1000
+                })
+                
+                # 從幣安獲取當日訂單數據
+                orders_data = binance_client._make_request('GET', '/fapi/v1/allOrders', {
+                    'startTime': today_start,
+                    'endTime': today_end,
+                    'limit': 1000
+                })
+                
+                # 分析幣安數據
+                total_orders = len(orders_data) if orders_data else 0
+                total_cancels = len([o for o in orders_data if o.get('status') == 'CANCELED']) if orders_data else 0
+                total_deals = len(trades_data) if trades_data else 0
+                
+                buy_volume = sum(float(t.get('qty', 0)) for t in trades_data if t.get('side') == 'BUY') if trades_data else 0
+                sell_volume = sum(float(t.get('qty', 0)) for t in trades_data if t.get('side') == 'SELL') if trades_data else 0
+                buy_amount = sum(float(t.get('quoteQty', 0)) for t in trades_data if t.get('side') == 'BUY') if trades_data else 0
+                sell_amount = sum(float(t.get('quoteQty', 0)) for t in trades_data if t.get('side') == 'SELL') if trades_data else 0
+                
+                avg_buy_price = buy_amount / buy_volume if buy_volume > 0 else 0
+                avg_sell_price = sell_amount / sell_volume if sell_volume > 0 else 0
+                
+                # 計算已實現盈虧
+                realized_pnl = sum(float(t.get('realizedPnl', 0)) for t in trades_data) if trades_data else 0
+                commission = sum(float(t.get('commission', 0)) for t in trades_data) if trades_data else 0
+                
+                binance_stats = {
+                    'total_orders': total_orders,
+                    'total_cancels': total_cancels,
+                    'total_deals': total_deals,
+                    'buy_amount': buy_amount,
+                    'sell_amount': sell_amount,
+                    'avg_buy_price': avg_buy_price,
+                    'avg_sell_price': avg_sell_price,
+                    'realized_pnl': realized_pnl,
+                    'commission': commission,
+                    'trades_data': trades_data or []
+                }
+            except Exception as e:
+                print(f"獲取幣安交易數據失敗: {e}")
+                binance_stats = {
+                    'total_orders': total_orders,
+                    'total_cancels': total_cancels,
+                    'total_deals': total_deals,
+                    'buy_amount': 0,
+                    'sell_amount': 0,
+                    'avg_buy_price': 0,
+                    'avg_sell_price': 0,
+                    'realized_pnl': 0,
+                    'commission': 0,
+                    'trades_data': []
+                }
+        
+        # 獲取前端帳戶資訊 API 數據
+        account_data = {}
+        try:
+            import requests
+            response = requests.get('http://localhost:5000/api/btc/account_info', timeout=10)
+            if response.status_code == 200:
+                api_data = response.json()
+                if api_data.get('success') and api_data.get('account'):
+                    account_data = api_data['account']
+        except Exception as e:
+            print(f"獲取前端帳戶API資訊失敗: {e}")
+            account_data = {}
+        
+        # 按照用戶要求的格式構建訊息
         msg = f"📊 交易統計（{current_date}）\n"
-        msg += f"委託次數：{total_orders} 筆\n"
-        msg += f"取消次數：{total_cancels} 筆\n"
-        msg += f"成交次數：{total_deals} 筆\n"
-        msg += f"買入次數：{buy_count} 筆\n"
-        msg += f"賣出次數：{sell_count} 筆\n"
+        msg += f"委託次數：{binance_stats.get('total_orders', 0)} 筆（委託單數量）\n"
+        msg += f"取消次數：{binance_stats.get('total_cancels', 0)} 筆（取消單數量）\n"
+        msg += f"成交次數：{binance_stats.get('total_deals', 0)} 筆（成交單數量）\n"
+        msg += f"買入總量 {binance_stats.get('buy_amount', 0):.2f} (從幣安U本位裡的幣種分析取得數據，顯示小數點後兩位 單位USDT)\n"
+        msg += f"賣出總量 {binance_stats.get('sell_amount', 0):.2f} (從幣安U本位裡的幣種分析取得數據，顯示小數點後兩位 單位USDT)\n"
+        msg += f"平均買價 {binance_stats.get('avg_buy_price', 0):.2f} (從幣安U本位裡的幣種分析取得數據，顯示小數點後兩位 單位USDT)\n"
+        msg += f"平均賣價 {binance_stats.get('avg_sell_price', 0):.2f} (從幣安U本位裡的幣種分析取得數據，顯示小數點後兩位 單位USDT)\n"
+        msg += f"已實現獲利 {binance_stats.get('realized_pnl', 0):.2f} (從幣安U本位裡的幣種分析取得數據，顯示小數點後兩位 單位USDT)\n"
+        msg += f"已實現盈虧 {binance_stats.get('realized_pnl', 0):.2f} (從幣安U本位裡的幣種分析取得數據，顯示小數點後兩位 單位USDT)\n"
+        msg += f"總計已實現盈虧 {binance_stats.get('realized_pnl', 0):.2f} (從幣安U本位裡的幣種分析取得數據，顯示小數點後兩位 單位USDT)\n"
+        msg += "  ═════ 帳戶狀態 ═════ (數據來源取置前端的帳戶資訊)\n"
+        msg += f"錢包餘額 {account_data.get('walletBalance', 0):.8f} USDT \n"
+        msg += f"可供轉帳 {account_data.get('availableBalance', 0):.8f} USDT \n"
+        msg += f"保證金餘額 {account_data.get('marginBalance', 0):.8f} USDT \n"
+        msg += f"未實現盈虧 {account_data.get('unrealizedProfit', 0):+.8f} USDT \n"
+        msg += f"交易手續費 {account_data.get('todayCommission', 0):.8f} USDT\n"
+        msg += f"保證金比率 {account_data.get('marginRatio', 0):.2f}% \n"
+        msg += f"槓桿使用率 {account_data.get('leverageUsage', 0):.2f}% \n"
+        msg += f"本日盈虧 {float(account_data.get('todayPnl', 0)):+.8f} USDT {account_data.get('todayPnlPercent', '0.00%')}\n"
+        msg += f"7天盈虧 {float(account_data.get('weekPnl', 0)):+.8f} USDT {account_data.get('weekPnlPercent', '0.00%')}\n"
+        msg += f"30天盈虧 {float(account_data.get('monthPnl', 0)):+.8f} USDT {account_data.get('monthPnlPercent', '0.00%')}\n"
+        msg += "  ═════ 交易明細 ═════(這個看幣安能不能取值)\n"
         
-        # 各交易對盈虧統計（有平倉才顯示）
-        if symbol_pnl:
-            for symbol, pnl in symbol_pnl.items():
-                msg += f"{symbol}＄{pnl:,.2f} USDT\n"
+        # 從幣安交易數據分析平倉交易
+        closed_trades_from_binance = []
+        trades_data = binance_stats.get('trades_data', [])
         
-        # 獲取帳戶狀態
-        msg += "═════ 帳戶狀態 ═════\n"
-        if binance_client:
-            try:
-                account_info = binance_client.get_account_info()
-                if account_info:
-                    wallet_balance = float(account_info.get('totalWalletBalance', 0))
-                    available_balance = float(account_info.get('availableBalance', 0))
-                    total_margin = float(account_info.get('totalInitialMargin', 0))
-                    margin_balance = float(account_info.get('totalMarginBalance', 0))
-                    maintenance_margin = float(account_info.get('totalMaintMargin', 0))
-                    
-                    # 計算保證金率
-                    margin_ratio = 0
-                    if maintenance_margin > 0:
-                        margin_ratio = (margin_balance / maintenance_margin) * 100
-                    
-                    # 獲取實際的手續費和已實現盈虧
-                    today_commission = get_today_commission()
-                    today_realized_pnl = get_today_realized_pnl()
-                    
-                    msg += f"錢包餘額：{wallet_balance:,.2f} USDT\n"
-                    msg += f"可用餘額：{available_balance:,.2f} USDT\n"
-                    msg += f"總保證金：{total_margin:,.2f} USDT\n"
-                    msg += f"保證金餘額：{margin_balance:,.2f} USDT\n"
-                    msg += f"維持保證金：{maintenance_margin:,.2f} USDT\n"
-                    msg += f"保證金率：{margin_ratio:,.1f}%\n"
-                    msg += f"手續費：{today_commission:,.2f} USDT\n"
-                    msg += f"本日已實現盈虧：{today_realized_pnl:,.2f} USDT\n"
-            except Exception as e:
-                print(f"獲取BTC帳戶信息失敗: {e}")
-                msg += "帳戶信息獲取失敗\n"
-        
-        # 交易明細（已平倉的交易）
-        msg += "═════ 交易明細 ═════\n"
-        if closed_trades:
-            for trade in closed_trades:
-                msg += f"{trade['symbol']}｜{trade['direction']}｜{trade['quantity']}｜{trade['open_price']:.2f}｜{trade['close_price']:.2f}\n"
-                msg += f"＄{trade['pnl']:,.2f} USDT\n"
-        else:
-            msg += "❌ 無平倉交易\n"
-        
-        # 持倉狀態
-        msg += "═════ 持倉狀態 ═════\n"
-        total_unrealized_pnl = 0
-        if binance_client:
-            try:
-                position_info = binance_client.get_position_info()
-                active_positions = []
+        # 分析交易數據，配對開倉和平倉
+        for trade in trades_data:
+            if trade.get('realizedPnl') != '0':  # 有已實現盈虧的交易
+                symbol = trade.get('symbol', 'BTCUSDT')
+                side = "多" if trade.get('side') == 'BUY' else "空"
+                qty = float(trade.get('qty', 0))
+                price = float(trade.get('price', 0))
+                realized_pnl = float(trade.get('realizedPnl', 0))
                 
-                if position_info:
-                    for pos in position_info:
-                        if float(pos.get('positionAmt', 0)) != 0:
-                            symbol = pos.get('symbol')
-                            amount = float(pos.get('positionAmt', 0))
-                            pnl = float(pos.get('unRealizedProfit', 0))
+                # 這裡簡化顯示，實際上需要更複雜的配對邏輯
+                closed_trades_from_binance.append({
+                    'symbol': symbol,
+                    'side': side,
+                    'quantity': qty,
+                    'price': price,
+                    'pnl': realized_pnl
+                })
+        
+        if closed_trades_from_binance:
+            for trade in closed_trades_from_binance:
+                msg += f"{trade['symbol']}｜{trade['side']}｜{trade['quantity']:.6f}｜{trade['price']:.2f}｜{trade['price']:.2f}\n"
+                msg += f"盈虧 {trade['pnl']:+.2f} USDT\n"
+        else:
+            msg += "本日無平倉交易明細\n"
+        msg += "  ═════ 持倉狀態 ═════(基本上都是從幣安裡的U本位合約取值)\n"
+        msg += "交易對｜持倉方向｜持倉數量｜開倉價格｜標記價格｜強平價格｜未實現盈虧｜收益率｜保證金｜保證金比例\n"
+        
+        # 獲取持倉資訊
+        try:
+            import requests
+            response = requests.get('http://localhost:5000/api/btc/positions', timeout=10)
+            if response.status_code == 200:
+                api_data = response.json()
+                if api_data.get('success') and api_data.get('positions'):
+                    positions = api_data['positions']
+                    has_positions = False
+                    for pos in positions:
+                        position_amt = float(pos.get('positionAmt', 0))
+                        if position_amt != 0:
+                            has_positions = True
+                            symbol = pos.get('symbol', 'BTCUSDT')
+                            side = "多" if position_amt > 0 else "空"
+                            size = abs(position_amt)
                             entry_price = float(pos.get('entryPrice', 0))
-                            direction = "多單" if amount > 0 else "空單"
-                            total_unrealized_pnl += pnl
-                            active_positions.append(f"{symbol}｜{direction}｜{abs(amount)}｜{entry_price:.2f}｜＄{pnl:,.2f} USDT")
-                
-                if active_positions:
-                    for pos in active_positions:
-                        msg += f"{pos}\n"
-                    msg += f"未實現總盈虧＄{total_unrealized_pnl:,.2f} USDT"
+                            mark_price = float(pos.get('markPrice', 0))
+                            liquidation_price = float(pos.get('liquidationPrice', 0))
+                            unrealized = float(pos.get('unRealizedProfit', 0))
+                            
+                            # 計算收益率
+                            if entry_price > 0 and size > 0:
+                                position_value = size * entry_price
+                                roe = (unrealized / position_value) * 100 if position_value > 0 else 0
+                            else:
+                                roe = 0
+                            
+                            # 獲取保證金信息
+                            isolated_margin = float(pos.get('isolatedMargin', 0))
+                            margin_ratio = float(pos.get('marginRatio', 0)) * 100  # 轉為百分比
+                            
+                            msg += f"{symbol}｜{side}｜{size:.6f} BTC ({(size * mark_price):.2f} USDT)｜"
+                            msg += f"{entry_price:.2f}｜{mark_price:.2f}｜{liquidation_price:.2f}｜"
+                            msg += f"{unrealized:+.2f} <small>USDT</small> ({roe:+.2f}%)｜"
+                            msg += f"{isolated_margin:.2f} <small>USDT</small> ({margin_ratio:.2f}%)\n"
+                    
+                    if not has_positions:
+                        msg += "無持倉\n"
                 else:
-                    msg += "❌ 無持倉部位"
-            except Exception as e:
-                print(f"獲取BTC持倉信息失敗: {e}")
-                msg += "持倉信息獲取失敗"
-        else:
-            msg += "❌ 無持倉部位"
+                    msg += "無持倉\n"
+            else:
+                msg += "持倉資訊獲取失敗\n"
+        except Exception as e:
+            print(f"獲取持倉API資訊失敗: {e}")
+            msg += "持倉資訊獲取失敗\n"
         
         send_btc_telegram_message(msg)
         print(f"BTC每日交易統計已發送")
-        
-        # 記錄BTC系統日誌
-        log_btc_system_message("BTC交易統計已發送", "success")
         
     except Exception as e:
         print(f"發送BTC每日交易統計失敗: {e}")
@@ -1623,7 +1828,12 @@ def is_last_day_of_month():
 def btc_webhook():
     """BTC交易策略接收端點"""
     try:
-        data = request.get_json()
+        # 優先使用預處理的數據，避免 Content-Type 問題
+        from flask import g
+        if hasattr(g, 'webhook_data') and g.webhook_data:
+            data = g.webhook_data
+        else:
+            data = request.get_json(force=True)  # 強制解析，忽略 Content-Type
         
         # 驗證請求格式
         if not data:
@@ -1654,11 +1864,14 @@ def btc_webhook():
             # 英文訊號
             'LONG': 'LONG', 'SHORT': 'SHORT', 'BUY': 'LONG', 'SELL': 'SHORT',
             'CLOSE': 'CLOSE', 'EXIT': 'CLOSE', 'CLOSE_LONG': 'CLOSE_LONG', 'CLOSE_SHORT': 'CLOSE_SHORT',
+            # 數字訊號支援
+            'signal: +1': 'LONG', 'signal: -1': 'SHORT', 'signal: 0': 'CLOSE',
+            '+1': 'LONG', '-1': 'SHORT', '0': 'CLOSE',
             # 中文訊號支援
-            '開多': 'LONG', '開多單': 'LONG', 'BTC 開多單': 'LONG',
-            '開空': 'SHORT', '開空單': 'SHORT', 'BTC 開空單': 'SHORT',
-            '平多': 'CLOSE_LONG', '平多單': 'CLOSE_LONG', 'BTC 平多單': 'CLOSE_LONG',
-            '平空': 'CLOSE_SHORT', '平空單': 'CLOSE_SHORT', 'BTC 平空單': 'CLOSE_SHORT',
+            '開多': 'LONG', '開多單': 'LONG', '多單': 'LONG', 'BTC 開多單': 'LONG',
+            '開空': 'SHORT', '開空單': 'SHORT', '空單': 'SHORT', 'BTC 開空單': 'SHORT',
+            '平多': 'CLOSE_LONG', '平多單': 'CLOSE_LONG', '多單平倉': 'CLOSE_LONG', '平多倉': 'CLOSE_LONG', 'BTC 平多單': 'CLOSE_LONG',
+            '平空': 'CLOSE_SHORT', '平空單': 'CLOSE_SHORT', '空單平倉': 'CLOSE_SHORT', '平空倉': 'CLOSE_SHORT', 'BTC 平空單': 'CLOSE_SHORT',
             '平倉': 'CLOSE', '全平': 'CLOSE'
         }
         
@@ -1666,16 +1879,25 @@ def btc_webhook():
         original_action = action
         raw_message = str(data.get('message', '')) + str(data.get('action', ''))
         
+        print(f"[BTC] 原始 action: '{original_action}', 訊息內容: '{raw_message}'")
+        
         # 檢查原始訊號
         if action in action_mapping:
             action = action_mapping[action]
+            print(f"[BTC] 直接匹配到動作: '{original_action}' -> '{action}'")
         else:
             # 從完整訊息中解析中文訊號
+            action_found = False
             for key, value in action_mapping.items():
                 if key in raw_message:
                     action = value
+                    action_found = True
                     print(f"[BTC] 從訊息解析到動作: '{key}' -> '{action}'")
                     break
+            
+            if not action_found:
+                print(f"[BTC] 未能解析動作，保持原始值: '{original_action}'")
+                action = 'UNKNOWN'
         
         # 執行交易
         order_result = None
@@ -1690,7 +1912,7 @@ def btc_webhook():
             order_result = process_btc_exit_signal(data, action)
         else:
             print(f"BTC未知的動作類型: {original_action} (解析後: {action})")
-            log_btc_system_message(f"BTC未知的動作類型: {original_action}", "warning")
+            log_btc_frontend_message(f"BTC未知的動作類型: {original_action}", "warning")
         
         # 處理交易策略信號記錄
         strategy_data = {
@@ -1829,14 +2051,29 @@ def get_btc_position():
         for position in position_info:
             position_amt = float(position.get('positionAmt', 0))
             if position_amt != 0:
+                # 調試：打印所有可用的position字段
+                print(f"[調試] Position API字段: {list(position.keys())}")
+                print(f"[調試] maintMargin: {position.get('maintMargin')}")
+                print(f"[調試] isolatedMargin: {position.get('isolatedMargin')}")
+                print(f"[調試] isolatedWallet: {position.get('isolatedWallet')}")
+                print(f"[調試] marginRatio: {position.get('marginRatio')}")
+                print(f"[調試] marginType: {position.get('marginType')}")
+                
                 active_positions.append({
                     'symbol': position.get('symbol'),
-                    'position_amt': position.get('positionAmt'),
-                    'entry_price': position.get('entryPrice'),
-                    'unrealized_pnl': position.get('unRealizedProfit'),
+                    'positionAmt': position.get('positionAmt'),
+                    'entryPrice': position.get('entryPrice'),
+                    'markPrice': position.get('markPrice'),
+                    'liquidationPrice': position.get('liquidationPrice'),
+                    'unRealizedProfit': position.get('unRealizedProfit'),
                     'percentage': position.get('percentage'),
                     'side': 'LONG' if position_amt > 0 else 'SHORT',
-                    'leverage': position.get('leverage')
+                    'leverage': position.get('leverage'),
+                    'maintMargin': position.get('maintMargin'),
+                    'isolatedMargin': position.get('isolatedMargin'),
+                    'isolatedWallet': position.get('isolatedWallet'),
+                    'marginRatio': position.get('marginRatio'),
+                    'marginType': position.get('marginType')
                 })
         
         return jsonify({
@@ -2075,7 +2312,7 @@ def send_btc_daily_startup_notification():
                         pnl = float(pos.get('unRealizedProfit', 0))
                         total_unrealized_pnl += pnl
                         # 每個持倉單獨一行
-                        position_info += f"{symbol}｜{side}｜{size}｜{entry_price:.2f}｜＄{pnl:,.2f} USDT\n"
+                        position_info += f"{symbol}｜{side}｜{size:.6f} BTC ({(size * mark_price):.2f} USDT)｜{entry_price:.2f}｜＄{pnl:,.2f} USDT\n"
                     
                     # 最後顯示未實現總盈虧
                     position_info += f"未實現總盈虧＄{total_unrealized_pnl:,.2f} USDT"
@@ -2085,38 +2322,112 @@ def send_btc_daily_startup_notification():
         else:
             position_info = "❌ 無持倉部位"
         
-        # 構建訊息 - 按照用戶要求的格式
-        message = "✅ 自動交易BTC正在啟動中.....\n"
-        message += "═════ 系統資訊 ═════\n"
-        message += f"交易平台：{exchange_name}\n"
-        message += f"綁定帳戶：{user_id}\n"
-        message += f"API 狀態：{api_status}\n"
+        # 獲取前端帳戶資訊 API 數據
+        account_data = {}
+        try:
+            # 從本地 Flask API 獲取帳戶資訊
+            import requests
+            response = requests.get('http://localhost:5000/api/btc/account_info', timeout=10)
+            if response.status_code == 200:
+                api_data = response.json()
+                if api_data.get('success') and api_data.get('account'):
+                    account_data = api_data['account']
+        except Exception as e:
+            print(f"獲取前端帳戶API資訊失敗: {e}")
+            # 如果無法獲取前端API資訊，使用現有的數據
+            account_data = {
+                'walletBalance': wallet_balance,
+                'availableBalance': available_balance,
+                'marginBalance': margin_balance,
+                'unrealizedProfit': unrealized_pnl,
+                'marginRatio': margin_ratio if margin_ratio > 0 else 0,
+                'leverageUsage': (total_margin/wallet_balance*100) if wallet_balance > 0 else 0,
+                'todayCommission': fee_paid,
+                'todayPnl': realized_pnl,
+                'todayPnlPercent': 0,
+            }
         
-        message += "═════ 選用合約 ═════\n"
+        # 構建訊息 - 按照用戶要求的格式
+        message = "✅ 自動交易比特幣正在啟動中.....\n"
+        message += "  ═════ 系統資訊 ═════\n"
+        message += f"  交易平台：{exchange_name}\n"
+        message += f"  綁定帳戶：{user_id}\n"
+        message += f"  API 狀態：{api_status}\n"
+        message += "  ═════ 選用合約 ═════\n"
         # 獲取保證金模式和風險比例
         margin_type_display = "全倉" if env_data.get('MARGIN_TYPE', 'CROSS') == 'CROSS' else "逐倉"
         position_size = env_data.get('POSITION_SIZE', '10')
         
         # 格式化合約信息：交易對 合約類型（槓桿x 風險% 保證金模式）
-        contract_display = f"{trading_pair} {contract_type}（{leverage}x {position_size}% {margin_type_display}）"
+        contract_display = f"  {trading_pair} {contract_type}（{leverage}x {position_size}% {margin_type_display}）"
         message += f"{contract_display}\n"
         
-        message += "═════ 帳戶狀態 ═════\n"
-        # 按照用戶要求的順序：錢包餘額, 可用餘額, 總保證金, 保證金餘額, 維持保證金, 保證金率, 手續費, 本日已實現盈虧
-        message += f"錢包餘額：{wallet_balance:,.2f} USDT\n"
-        message += f"可用餘額：{available_balance:,.2f} USDT\n"
-        message += f"總保證金：{total_margin:,.2f} USDT\n"
-        message += f"保證金餘額：{margin_balance:,.2f} USDT\n"
-        message += f"維持保證金：{maintenance_margin:,.2f} USDT\n"
-        message += f"保證金率：{margin_ratio:,.1f}%\n"
-        message += f"手續費：{fee_paid:,.2f} USDT\n"
-        message += f"本日已實現盈虧：{realized_pnl:,.2f} USDT\n"
+        message += "  ═════ 帳戶狀態 ═════（數據來源取置前端的帳戶資訊）\n"
+        message += f"錢包餘額 {account_data.get('walletBalance', 0):.8f} USDT \n"
+        message += f"可供轉帳 {account_data.get('availableBalance', 0):.8f} USDT \n"
+        message += f"保證金餘額 {account_data.get('marginBalance', 0):.8f} USDT \n"
+        message += f"未實現盈虧 {account_data.get('unrealizedProfit', 0):+.8f} USDT \n"
+        message += f"交易手續費 {account_data.get('todayCommission', 0):.8f} USDT\n"
+        message += f"保證金比率 {account_data.get('marginRatio', 0):.2f}% \n"
+        message += f"槓桿使用率 {account_data.get('leverageUsage', 0):.2f}% \n"
+        message += f"本日盈虧 {float(account_data.get('todayPnl', 0)):+.8f} USDT {account_data.get('todayPnlPercent', '0.00%')}\n"
+        message += f"7天盈虧 {float(account_data.get('weekPnl', 0)):+.8f} USDT {account_data.get('weekPnlPercent', '0.00%')}\n"
+        message += f"30天盈虧 {float(account_data.get('monthPnl', 0)):+.8f} USDT {account_data.get('monthPnlPercent', '0.00%')}\n"
+        # 獲取持倉資訊
+        try:
+            import requests
+            response = requests.get('http://localhost:5000/api/btc/positions', timeout=10)
+            if response.status_code == 200:
+                api_data = response.json()
+                if api_data.get('success') and api_data.get('positions'):
+                    positions = api_data['positions']
+                else:
+                    positions = []
+            else:
+                positions = []
+        except Exception as e:
+            print(f"獲取持倉API資訊失敗: {e}")
+            positions = []
         
-        message += "═════ 持倉狀態 ═════\n"
-        message += position_info.rstrip('\n')  # 移除最後的換行符
+        message += "  ═════ 持倉狀態 ═════\n"
+        message += "交易對｜持倉方向｜持倉數量｜開倉價格｜標記價格｜強平價格｜未實現盈虧｜收益率｜保證金｜保證金比例\n"
         
+        has_positions = False
+        if positions:
+            for pos in positions:
+                position_amt = float(pos.get('positionAmt', 0))
+                if position_amt != 0:
+                    has_positions = True
+                    symbol = pos.get('symbol', 'BTCUSDT')
+                    side = "多" if position_amt > 0 else "空"
+                    size = abs(position_amt)
+                    entry_price = float(pos.get('entryPrice', 0))
+                    mark_price = float(pos.get('markPrice', 0))
+                    liquidation_price = float(pos.get('liquidationPrice', 0))
+                    unrealized = float(pos.get('unRealizedProfit', 0))
+                    
+                    # 計算收益率
+                    if entry_price > 0 and size > 0:
+                        position_value = size * entry_price
+                        roe = (unrealized / position_value) * 100 if position_value > 0 else 0
+                    else:
+                        roe = 0
+                    
+                    # 獲取保證金信息
+                    isolated_margin = float(pos.get('isolatedMargin', 0))
+                    margin_ratio = float(pos.get('marginRatio', 0)) * 100  # 轉為百分比
+                    
+                    message += f"{symbol}｜{side}｜{size:.6f} BTC ({(size * mark_price):.2f} USDT)｜"
+                    message += f"{entry_price:.2f}｜{mark_price:.2f}｜{liquidation_price:.2f}｜"
+                    message += f"{unrealized:+.2f} <small>USDT</small> ({roe:+.2f}%)｜"
+                    message += f"{isolated_margin:.2f} <small>USDT</small> ({margin_ratio:.2f}%)\n"
+        
+        if not has_positions:
+            message += "無持倉\n"
+        
+        # 發送 Telegram 訊息
         if send_btc_telegram_message(message):
-            pass
+            print(f"BTC啟動通知已發送: {current_time}")
         
     except Exception as e:
         pass
@@ -2197,6 +2508,11 @@ def generate_btc_trading_report():
             if trade.get('reduceOnly', False):  # 只計算平倉交易的盈虧
                 btcusdt_pnl += trade.get('realized_pnl', 0)
         
+        # 獲取多期間盈虧數據 - 使用幣安正確公式（已實現+未實現-資金費用）
+        today_pnl, today_pnl_percent = get_period_total_pnl_binance_formula(1)
+        week_pnl, week_pnl_percent = get_period_total_pnl_binance_formula(7)
+        month_pnl, month_pnl_percent = get_period_total_pnl_binance_formula(30)
+        
         # 獲取帳戶信息
         account_data = {}
         if binance_client:
@@ -2224,7 +2540,7 @@ def generate_btc_trading_report():
             cell.alignment = center_alignment
         
         # 交易總覽標題（橫向）
-        titles = ['委託次數', '取消次數', '成交次數', '買入次數', '賣出次數', 'BTCUSDT']
+        titles = ['委託次數', '取消次數', '成交次數', '買入次數', '賣出次數']
         for i, title in enumerate(titles):
             col = get_column_letter(i + 1)
             ws[f'{col}2'] = title
@@ -2238,7 +2554,6 @@ def generate_btc_trading_report():
             f"{total_deals} 筆",
             f"{buy_count} 筆",
             f"{sell_count} 筆",
-            f"＄{btcusdt_pnl:,.2f} USDT"
         ]
         for i, value in enumerate(values):
             col = get_column_letter(i + 1)
@@ -2256,7 +2571,7 @@ def generate_btc_trading_report():
             cell.alignment = center_alignment
         
         # 帳戶狀態標題（橫向）- 按新順序排列
-        account_titles = ['錢包餘額', '可用餘額', '保證金總額', '保證金餘額', '維持保證金', '保證金率', '手續費', '本日已實現盈虧']
+        account_titles = ['錢包餘額', '可用餘額', '保證金總額', '保證金餘額', '維持保證金', '保證金率', '手續費', '本日盈虧', '7天盈虧', '30天盈虧']
         for i, title in enumerate(account_titles):
             col = get_column_letter(i + 1)
             ws[f'{col}{current_row + 1}'] = title
@@ -2276,12 +2591,14 @@ def generate_btc_trading_report():
         account_values = [
             f"＄{account_data.get('totalWalletBalance', 0):,.2f}",      # 錢包餘額
             f"＄{account_data.get('availableBalance', 0):,.2f}",       # 可用餘額
-            f"＄{account_data.get('totalInitialMargin', 0):,.2f}",     # 總保證金
+            f"＄{account_data.get('totalInitialMargin', 0):,.2f}",     # 保證金總額
             f"＄{account_data.get('totalMarginBalance', 0):,.2f}",     # 保證金餘額
             f"＄{account_data.get('totalMaintMargin', 0):,.2f}",       # 維持保證金
             f"{margin_ratio:.2f}%",                                    # 保證金率
             f"＄{today_commission:,.2f}",                              # 手續費
-            f"＄{today_realized_pnl:,.2f}"                             # 本日已實現盈虧
+            f"＄{today_pnl:,.2f} ({today_pnl_percent})",              # 本日盈虧
+            f"＄{week_pnl:,.2f} ({week_pnl_percent})",                 # 7天盈虧
+            f"＄{month_pnl:,.2f} ({month_pnl_percent})"                # 30天盈虧
         ]
         for i, value in enumerate(account_values):
             col = get_column_letter(i + 1)
@@ -2357,19 +2674,19 @@ def generate_btc_trading_report():
                     ws[f'{col}{row}'] = value
                     ws[f'{col}{row}'].alignment = center_alignment
         
-        # 持倉狀態區塊（四大區塊用藍色，A-K欄位）
+        # 持倉狀態區塊（四大區塊用藍色，A-L欄位）
         current_row = current_row + (len(trades) if trades else 0) + 3
-        ws.merge_cells(f'A{current_row}:K{current_row}')
+        ws.merge_cells(f'A{current_row}:L{current_row}')
         ws[f'A{current_row}'] = '持倉狀態'
-        # 應用藍色背景到A:K
-        for col in range(1, 12):  # A到K
+        # 應用藍色背景到A:L
+        for col in range(1, 13):  # A到L
             cell = ws[f'{get_column_letter(col)}{current_row}']
             cell.fill = blue_fill
             cell.alignment = center_alignment
         
         # 持倉狀態標題（動態位置）
         position_titles = ['成交時間', '成交單號', '選用合約', '訂單類型', '成交類型', '成交動作', 
-                          '成交數量', '開倉價格', '平倉價格', '未實現盈虧']
+                          '持倉數量', '開倉價格', '標記價格', '強平價格', '未實現盈虧', '保證金']
         for i, title in enumerate(position_titles):
             col = get_column_letter(i + 1)
             ws[f'{col}{current_row + 1}'] = title
@@ -2398,6 +2715,22 @@ def generate_btc_trading_report():
                         margin_balance = float(pos.get('isolatedMargin', 0)) if pos.get('marginType') == 'isolated' else float(account_data.get('totalMarginBalance', 0))
                         margin_ratio = (margin_balance / maint_margin * 100) if maint_margin > 0 else 0
                         
+                        # 計算收益率和保證金比例
+                        position_amt = float(pos.get('positionAmt', 0))
+                        entry_price = float(pos.get('entryPrice', 0))
+                        unrealized_pnl = float(pos.get('unRealizedProfit', 0))
+                        mark_price = float(pos.get('markPrice', 0))
+                        liquidation_price = float(pos.get('liquidationPrice', 0))
+                        isolated_margin = float(pos.get('isolatedMargin', 0))
+                        margin_ratio = float(pos.get('marginRatio', 0)) * 100
+                        
+                        # 計算收益率
+                        if entry_price > 0 and abs(position_amt) > 0:
+                            position_value = abs(position_amt) * entry_price
+                            roe = (unrealized_pnl / position_value) * 100 if position_value > 0 else 0
+                        else:
+                            roe = 0
+
                         # 持倉狀態數據（按照新格式）
                         position_data = [
                             ('A', _format_time_btc(pos.get('updateTime', '')) if pos.get('updateTime') else '-'),  # 成交時間
@@ -2405,11 +2738,13 @@ def generate_btc_trading_report():
                             ('C', pos.get('symbol', 'BTCUSDT')),                               # 選用合約
                             ('D', '市價單'),                                                   # 訂單類型
                             ('E', '自動交易'),                                                 # 成交類型
-                            ('F', '多單' if float(pos.get('positionAmt', 0)) > 0 else '空單'),  # 成交動作
-                            ('G', f"{abs(float(pos.get('positionAmt', 0)))}"),                 # 成交數量
-                            ('H', f"＄{float(pos.get('entryPrice', 0)):,.2f}"),               # 開倉價格
-                            ('I', f"＄{float(pos.get('markPrice', 0)):,.2f}"),                # 平倉價格（使用標記價格）
-                            ('J', f"＄{float(pos.get('unRealizedProfit', 0)):,.2f}")          # 未實現盈虧
+                            ('F', '多單' if position_amt > 0 else '空單'),                     # 成交動作
+                            ('G', f"{abs(position_amt):.1f} USDT"),                           # 成交數量
+                            ('H', f"＄{entry_price:,.2f}"),                                   # 開倉價格
+                            ('I', f"＄{mark_price:,.2f}"),                                    # 標記價格
+                            ('J', f"＄{liquidation_price:,.2f}"),                             # 強平價格
+                            ('K', f"＄{unrealized_pnl:,.2f} ({roe:+.2f}%)"),                 # 未實現盈虧與收益率
+                            ('L', f"＄{isolated_margin:,.2f} ({margin_ratio:.2f}%)")          # 保證金與比例
                         ]
                         
                         # 設置所有儲存格的內容和置中對齊
@@ -2439,7 +2774,7 @@ def generate_btc_trading_report():
         print(f"交易日報已生成: {filepath}")
         
         # 添加BTC系統日誌記錄
-        log_btc_system_message(f"{filename} 生成成功！！！", "success")
+        log_btc_frontend_message(f"{filename} 生成成功！！！", "success")
         
         # 發送 Telegram 通知並附上檔案（合併發送）
         caption = f"{filename} 交易日報已生成！！！"
@@ -2454,7 +2789,7 @@ def generate_btc_trading_report():
         
         # 記錄錯誤到系統日誌
         try:
-            log_btc_system_message(f"交易日報生成失敗：{str(e)[:100]}", "error")
+            log_btc_frontend_message(f"交易日報生成失敗：{str(e)[:100]}", "error")
         except:
             pass
         
@@ -2571,7 +2906,7 @@ def generate_btc_monthly_report():
         
         # 帳戶狀態標題行 - 按新順序排列
         row = 8
-        account_titles = ['錢包餘額', '可用餘額', '總保證金', '保證金餘額', '維持保證金', '保證金率', '手續費', '本月已實現盈虧']
+        account_titles = ['錢包餘額', '可用餘額', '保證金總額', '保證金餘額', '維持保證金', '保證金率', '手續費', '本月已實現盈虧']
         for col, title in enumerate(account_titles, 1):
             cell = ws.cell(row=row, column=col, value=title)
             cell.fill = gray_fill
@@ -2601,7 +2936,7 @@ def generate_btc_monthly_report():
                     
                     ws.cell(row=row, column=1, value=f"{wallet_balance:.2f}").alignment = center_alignment      # 錢包餘額
                     ws.cell(row=row, column=2, value=f"{available_balance:.2f}").alignment = center_alignment   # 可用餘額
-                    ws.cell(row=row, column=3, value=f"{total_initial_margin:.2f}").alignment = center_alignment # 總保證金
+                    ws.cell(row=row, column=3, value=f"{total_initial_margin:.2f}").alignment = center_alignment # 保證金總額
                     ws.cell(row=row, column=4, value=f"{total_margin_balance:.2f}").alignment = center_alignment # 保證金餘額
                     ws.cell(row=row, column=5, value=f"{total_maint_margin:.2f}").alignment = center_alignment   # 維持保證金
                     ws.cell(row=row, column=6, value=f"{margin_ratio:.2f}%").alignment = center_alignment       # 保證金率
@@ -2685,7 +3020,7 @@ def generate_btc_monthly_report():
         print(f"交易月報已生成: {filepath}")
         
         # 添加BTC系統日誌記錄
-        log_btc_system_message(f"{filename} 生成成功！！！", "success")
+        log_btc_frontend_message(f"{filename} 生成成功！！！", "success")
         
         # 發送 Telegram 通知並附上檔案（合併發送）
         caption = f"{filename} 交易月報已生成！！！"
@@ -2784,38 +3119,328 @@ def get_btc_config():
         })
 
 def get_today_realized_pnl():
-    """獲取本日已實現盈虧"""
+    """舊版函數 - 已棄用，請使用 get_today_realized_pnl_from_trades()"""
     try:
         if not binance_client:
             return 0.0
         
-        
-        # 獲取今日00:00的時間戳
+        # 獲取今日00:00的時間戳（UTC時間）
         today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
         start_time = int(today.timestamp() * 1000)
         
-        # 獲取收益歷史，只獲取已實現盈虧
-        income_data = binance_client.get_income_history(
-            income_type='REALIZED_PNL',
-            limit=100
-        )
+        # 使用幣安官方 /fapi/v1/income API 獲取已實現盈虧
+        # 這是幣安API的原始數據，不經過任何系統計算
+        income_data = binance_client._make_request('GET', '/fapi/v1/income', {
+            'startTime': start_time,
+            'incomeType': 'REALIZED_PNL',  # 僅獲取已實現盈虧類型
+            'limit': 1000
+        })
         
         if not income_data:
             return 0.0
         
-        # 計算本日已實現盈虧總和
-        today_pnl = 0.0
+        # 累計所有已實現盈虧 - 直接使用幣安API返回的原始值
+        total_realized_pnl = 0.0
+        valid_records = 0
+        
         for income in income_data:
             income_time = int(income.get('time', 0))
+            
+            # 確保記錄在今日範圍內
             if income_time >= start_time:
                 income_amount = float(income.get('income', 0))
-                today_pnl += income_amount
+                total_realized_pnl += income_amount
+                valid_records += 1
         
-        return today_pnl
+        return total_realized_pnl
         
     except Exception as e:
         print(f"獲取本日已實現盈虧失敗: {e}")
         return 0.0
+
+def get_period_realized_pnl(days=1):
+    """獲取指定天數的已實現盈虧總計
+    Args:
+        days (int): 天數，1=本日，7=七天，30=三十天
+    Returns:
+        tuple: (已實現盈虧, 盈虧百分比)
+    """
+    try:
+        if not binance_client:
+            return 0.0, 0.0
+        
+        # 獲取指定天數的時間範圍（使用UTC+0時間，與幣安統一）
+        utc_now = datetime.now(timezone.utc)
+        if days == 1:
+            # 本日：今天00:00開始到現在
+            start_date = utc_now.replace(hour=0, minute=0, second=0, microsecond=0)
+        elif days == 7:
+            # 7天：7天前00:00開始到現在 (完整7天)
+            start_date = (utc_now - timedelta(days=7)).replace(hour=0, minute=0, second=0, microsecond=0)
+        elif days == 30:
+            # 30天：30天前00:00開始到現在 (完整30天)
+            start_date = (utc_now - timedelta(days=30)).replace(hour=0, minute=0, second=0, microsecond=0)
+        else:
+            # 其他天數：N天前00:00開始到現在
+            start_date = (utc_now - timedelta(days=days-1)).replace(hour=0, minute=0, second=0, microsecond=0)
+        
+        start_time = int(start_date.timestamp() * 1000)
+        
+        # 方法1: 先嘗試從income API獲取已實現盈虧（更準確）
+        try:
+            income_data = binance_client._make_request('GET', '/fapi/v1/income', {
+                'startTime': start_time,
+                'incomeType': 'REALIZED_PNL',
+                'limit': 1000
+            })
+            
+            if income_data:
+                income_total = 0.0
+                for income in income_data:
+                    if int(income.get('time', 0)) >= start_time:
+                        income_total += float(income.get('income', 0))
+                
+                # 計算盈虧百分比 - 使用期初餘額作為基準
+                percentage = 0.0
+                try:
+                    # 獲取期初餘額（期間開始時的錢包餘額）
+                    period_start_balance = get_period_start_balance(start_time)
+                    if period_start_balance > 0:
+                        percentage = (income_total / period_start_balance) * 100
+                except Exception as calc_e:
+                    print(f"百分比計算失敗: {calc_e}")
+                    pass
+                
+                return income_total, percentage
+        except Exception as e:
+            print(f"收入API失敗，改用交易記錄API: {e}")
+        
+        # 方法2: 備用方案 - 使用配置的交易對獲取交易記錄
+        try:
+            with open(BTC_ENV_PATH, 'r', encoding='utf-8') as f:
+                content = f.read()
+                trading_pair = 'BTCUSDT'  # 默認值
+                for line in content.split('\n'):
+                    if line.startswith('TRADING_PAIR='):
+                        trading_pair = line.split('=')[1].strip()
+                        break
+        except:
+            trading_pair = 'BTCUSDT'  # 備用默認值
+        
+        # 透過 GET /fapi/v1/userTrades 的 realizedPnl 欄位直接獲取已實現盈虧
+        trade_data = binance_client._make_request('GET', '/fapi/v1/userTrades', {
+            'symbol': trading_pair,
+            'startTime': start_time,
+            'limit': 1000
+        })
+        
+        if not trade_data:
+            return 0.0, 0.0
+        
+        # 累計所有交易的已實現盈虧
+        total_realized_pnl = 0.0
+        trade_count = 0
+        
+        for trade in trade_data:
+            trade_time = int(trade.get('time', 0))
+            
+            # 確保交易在指定期間範圍內
+            if trade_time >= start_time:
+                # 直接使用 GET /fapi/v1/userTrades 的 realizedPnl 字段
+                # 注意：需要累計所有交易的 realizedPnl，包括0值
+                realized_pnl = float(trade.get('realizedPnl', 0))
+                total_realized_pnl += realized_pnl
+                trade_count += 1
+        
+        # 計算盈虧百分比（備用方案）- 使用期初餘額作為基準
+        percentage = 0.0
+        try:
+            period_start_balance = get_period_start_balance(start_time)
+            if period_start_balance > 0:
+                percentage = (total_realized_pnl / period_start_balance) * 100
+        except:
+            pass
+        
+        return total_realized_pnl, percentage
+        
+    except Exception as e:
+        print(f"從交易記錄獲取期間已實現盈虧失敗: {e}")
+        return 0.0, 0.0
+
+def get_period_start_balance(timestamp):
+    """獲取期間開始時的錢包餘額
+    Args:
+        timestamp (int): 期間開始時間的毫秒時間戳
+    Returns:
+        float: 期間開始時的錢包餘額
+    """
+    try:
+        if not binance_client:
+            return 0.0
+        
+        # 獲取從期間開始到現在的所有收入記錄
+        income_data = binance_client._make_request('GET', '/fapi/v1/income', {
+            'startTime': timestamp,
+            'limit': 1000
+        })
+        
+        # 獲取當前錢包餘額
+        account_info = binance_client.get_account_info()
+        if not account_info:
+            return 0.0
+            
+        current_balance = float(account_info.get('totalWalletBalance', 0))
+        
+        if not income_data:
+            return current_balance  # 如果沒有收入記錄，返回當前餘額
+        
+        # 計算從期間開始到現在的總收入變化
+        total_income_change = 0.0
+        income_count = 0
+        for income in income_data:
+            if int(income.get('time', 0)) >= timestamp:
+                # 累計所有類型的收入變化（包括已實現盈虧、手續費、資金費率等）
+                income_value = float(income.get('income', 0))
+                total_income_change += income_value
+                income_count += 1
+        
+        print(f"期初餘額計算 - 當前餘額: {current_balance:.8f}, 期間收入變化: {total_income_change:.8f} ({income_count}筆記錄)")
+        
+        # 期初餘額 = 當前餘額 - 期間收入變化
+        period_start_balance = current_balance - total_income_change
+        
+        print(f"計算出的期初餘額: {period_start_balance:.8f}")
+        
+        # 確保期初餘額為正數且合理
+        if period_start_balance <= 0 or abs(period_start_balance) < 0.01:
+            print(f"期初餘額異常 ({period_start_balance:.8f})，使用當前餘額作為備用方案")
+            return current_balance
+        
+        # 如果期初餘額和當前餘額差距過大（超過90%），可能計算有誤
+        if abs(period_start_balance - current_balance) / current_balance > 0.9:
+            print(f"期初餘額與當前餘額差距過大 ({period_start_balance:.8f} vs {current_balance:.8f})，使用當前餘額")
+            return current_balance
+        
+        return period_start_balance
+        
+    except Exception as e:
+        print(f"獲取期初餘額失敗: {e}")
+        # 如果無法獲取期初餘額，返回當前餘額
+        try:
+            account_info = binance_client.get_account_info()
+            if account_info:
+                return float(account_info.get('totalWalletBalance', 0))
+        except:
+            pass
+        return 0.0
+
+def get_period_total_pnl_binance_formula(days=1):
+    """使用幣安公式獲取期間總盈虧：已實現盈虧 + 未實現盈虧 - 資金費用
+    Args:
+        days (int): 天數，1=本日，7=七天，30=三十天
+    Returns:
+        tuple: (總盈虧, 盈虧百分比)
+    """
+    try:
+        if not binance_client:
+            return 0.0, 0.0
+        
+        # 獲取指定天數的時間範圍（使用UTC+0時間，與幣安統一）
+        utc_now = datetime.now(timezone.utc)
+        if days == 1:
+            # 本日：今天00:00開始到現在
+            start_date = utc_now.replace(hour=0, minute=0, second=0, microsecond=0)
+        elif days == 7:
+            # 7天：7天前00:00開始到現在 (完整7天)
+            start_date = (utc_now - timedelta(days=7)).replace(hour=0, minute=0, second=0, microsecond=0)
+        elif days == 30:
+            # 30天：30天前00:00開始到現在 (完整30天)
+            start_date = (utc_now - timedelta(days=30)).replace(hour=0, minute=0, second=0, microsecond=0)
+        else:
+            start_date = (utc_now - timedelta(days=days-1)).replace(hour=0, minute=0, second=0, microsecond=0)
+        
+        start_time = int(start_date.timestamp() * 1000)
+        
+        # 1. 獲取期間已實現盈虧
+        realized_pnl = 0.0
+        try:
+            income_data = binance_client._make_request('GET', '/fapi/v1/income', {
+                'startTime': start_time,
+                'incomeType': 'REALIZED_PNL',
+                'limit': 1000
+            })
+            
+            if income_data:
+                for income in income_data:
+                    if int(income.get('time', 0)) >= start_time:
+                        realized_pnl += float(income.get('income', 0))
+        except Exception as e:
+            print(f"獲取已實現盈虧失敗: {e}")
+        
+        # 2. 獲取當前未實現盈虧
+        unrealized_pnl = 0.0
+        try:
+            account_info = binance_client.get_account_info()
+            if account_info:
+                unrealized_pnl = float(account_info.get('totalUnrealizedProfit', 0))
+        except Exception as e:
+            print(f"獲取未實現盈虧失敗: {e}")
+        
+        # 3. 獲取期間資金費用
+        funding_fee = 0.0
+        try:
+            funding_data = binance_client._make_request('GET', '/fapi/v1/income', {
+                'startTime': start_time,
+                'incomeType': 'FUNDING_FEE',
+                'limit': 1000
+            })
+            
+            if funding_data:
+                for fee in funding_data:
+                    if int(fee.get('time', 0)) >= start_time:
+                        funding_fee += float(fee.get('income', 0))
+        except Exception as e:
+            print(f"獲取資金費用失敗: {e}")
+        
+        # 計算總盈虧：已實現盈虧 + 未實現盈虧 - 資金費用
+        total_pnl = realized_pnl + unrealized_pnl - funding_fee
+        
+        # 計算盈虧百分比
+        percentage = 0.0
+        try:
+            period_start_balance = get_period_start_balance(start_time)
+            print(f"{days}天期初餘額計算結果: {period_start_balance:.8f}")
+            
+            if period_start_balance > 0:
+                percentage = (total_pnl / period_start_balance) * 100
+                print(f"{days}天盈虧百分比: {total_pnl:.8f} / {period_start_balance:.8f} * 100 = {percentage:.2f}%")
+            else:
+                print(f"{days}天期初餘額為零或負數，無法計算百分比")
+                # 使用當前餘額作為備用方案
+                try:
+                    account_info = binance_client.get_account_info()
+                    if account_info:
+                        current_balance = float(account_info.get('totalWalletBalance', 0))
+                        if current_balance > 0:
+                            percentage = (total_pnl / current_balance) * 100
+                            print(f"{days}天使用當前餘額計算百分比: {total_pnl:.8f} / {current_balance:.8f} * 100 = {percentage:.2f}%")
+                except:
+                    pass
+        except Exception as e:
+            print(f"百分比計算失敗: {e}")
+        
+        print(f"{days}天盈虧計算 - 已實現: {realized_pnl:.8f}, 未實現: {unrealized_pnl:.8f}, 資金費用: {funding_fee:.8f}, 總計: {total_pnl:.8f}, 百分比: {percentage:.2f}%")
+        
+        return total_pnl, percentage
+        
+    except Exception as e:
+        print(f"獲取{days}天總盈虧失敗: {e}")
+        return 0.0, 0.0
+
+def get_today_realized_pnl_from_trades():
+    """舊函數包裝器 - 向後兼容"""
+    pnl, _ = get_period_realized_pnl(1)
+    return pnl
 
 def get_today_commission():
     """獲取本日手續費"""
@@ -2829,10 +3454,11 @@ def get_today_commission():
         start_time = int(today.timestamp() * 1000)
         
         # 獲取收益歷史，只獲取手續費
-        income_data = binance_client.get_income_history(
-            income_type='COMMISSION',
-            limit=100
-        )
+        income_data = binance_client._make_request('GET', '/fapi/v1/income', {
+            'startTime': start_time,
+            'incomeType': 'COMMISSION',
+            'limit': 100
+        })
         
         if not income_data:
             return 0.0
@@ -2851,8 +3477,214 @@ def get_today_commission():
         print(f"獲取本日手續費失敗: {e}")
         return 0.0
 
+def get_period_pnl(days=1):
+    """獲取指定天數的總盈虧 - 使用正確的幣安API"""
+    try:
+        if not binance_client:
+            return 0.0, 0.0  # (總盈虧, 收益率%)
+        
+        
+        # 計算起始時間
+        now = datetime.now(timezone.utc)
+        start_time = now - timedelta(days=days)
+        start_timestamp = int(start_time.timestamp() * 1000)
+        end_timestamp = int(now.timestamp() * 1000)
+        
+        
+        # 使用幣安收入歷史API - 只獲取已實現盈虧
+        total_pnl = 0.0
+        
+        # 1. 獲取已實現盈虧 (REALIZED_PNL)
+        try:
+            realized_pnl_data = binance_client._make_request('GET', '/fapi/v1/income', {
+                'incomeType': 'REALIZED_PNL',
+                'startTime': start_timestamp,
+                'endTime': end_timestamp,
+                'limit': 1000
+            })
+            
+            if realized_pnl_data:
+                realized_total = sum(float(item.get('income', 0)) for item in realized_pnl_data)
+                total_pnl += realized_total
+        except Exception as e:
+            pass
+        
+        # 2. 獲取資金費用 (FUNDING_FEE)
+        try:
+            funding_data = binance_client._make_request('GET', '/fapi/v1/income', {
+                'incomeType': 'FUNDING_FEE',
+                'startTime': start_timestamp,
+                'endTime': end_timestamp,
+                'limit': 1000
+            })
+            
+            if funding_data:
+                funding_total = sum(float(item.get('income', 0)) for item in funding_data)
+                total_pnl += funding_total
+        except Exception as e:
+            pass
+        
+        # 3. 對於本日數據，額外添加當前未實現盈虧
+        if days == 1:
+            try:
+                account_info = binance_client.get_account_info()
+                if account_info:
+                    unrealized_pnl = float(account_info.get('totalUnrealizedProfit', 0))
+                    # 注意：不要將未實現盈虧加入總盈虧，因為這是動態變化的
+            except Exception as e:
+                pass
+        
+        
+        # 計算收益率 - 基於歷史錢包餘額
+        percentage = 0.0
+        try:
+            # 獲取當前錢包餘額
+            account_info = binance_client.get_account_info()
+            if account_info:
+                current_balance = float(account_info.get('totalWalletBalance', 0))
+                
+                # 計算期初餘額（當前餘額 - 期間盈虧）
+                initial_balance = current_balance - total_pnl
+                if initial_balance > 0:
+                    percentage = (total_pnl / initial_balance) * 100
+                else:
+                    pass
+        except Exception as e:
+            pass
+        
+        return total_pnl, percentage
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return 0.0, 0.0
+
+def test_income_api():
+    """測試income API是否工作"""
+    try:
+        if not binance_client:
+            return False
+            
+        
+        # 最簡單的調用 - 不帶任何參數
+        result = binance_client.get_income_history(limit=5)
+        
+        if result:
+            return True
+        else:
+            return False
+            
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return False
+
+def get_binance_stats_pnl():
+    """從幣安統計接口獲取準確的盈虧數據"""
+    try:
+        if not binance_client:
+            return None
+            
+        
+        # 方法1: 嘗試使用24hr ticker統計API
+        try:
+            ticker_24hr = binance_client._make_request('GET', '/fapi/v1/ticker/24hr')
+        except Exception as e:
+            pass
+        
+        # 方法2: 嘗試獲取帳戶快照
+        try:
+            # 這個API可能不存在，但值得嘗試
+            snapshot = binance_client._make_request('GET', '/fapi/v1/accountSnapshot')
+        except Exception as e:
+            pass
+        
+        # 方法3: 嘗試獲取資產流水
+        try:
+            asset_flow = binance_client._make_request('GET', '/fapi/v1/assetFlow')
+        except Exception as e:
+            pass
+        
+        # 方法4: 使用用戶交易記錄計算
+        try:
+            user_trades = binance_client._make_request('GET', '/fapi/v1/userTrades', {
+                'limit': 500
+            })
+            
+            if user_trades:
+                # 分析交易記錄，計算盈虧
+                return analyze_trades_for_pnl(user_trades)
+                
+        except Exception as e:
+            pass
+            
+        return None
+        
+    except Exception as e:
+        return None
+
+def analyze_trades_for_pnl(trades):
+    """分析交易記錄計算真實盈虧"""
+    try:
+        
+        # 按時間分組計算不同期間的盈虧
+        now = datetime.now(timezone.utc)
+        periods = {
+            'today': now.replace(hour=0, minute=0, second=0, microsecond=0),
+            'week': now - timedelta(days=7),
+            'month': now - timedelta(days=30),
+            'quarter': now - timedelta(days=90)
+        }
+        
+        period_pnl = {}
+        
+        for period_name, start_time in periods.items():
+            start_timestamp = int(start_time.timestamp() * 1000)
+            period_total = 0.0
+            trade_count = 0
+            
+            for trade in trades:
+                trade_time = int(trade.get('time', 0))
+                if trade_time >= start_timestamp:
+                    realized_pnl = float(trade.get('realizedPnl', 0))
+                    period_total += realized_pnl
+                    trade_count += 1
+            
+            period_pnl[period_name] = {
+                'pnl': period_total,
+                'trades': trade_count
+            }
+        
+        return period_pnl
+        
+    except Exception as e:
+        return None
+
+def get_today_pnl():
+    """獲取本日總盈虧 - 使用本日已實現盈虧"""
+    try:
+        if not binance_client:
+            return 0.0, 0.0
+            
+        # 本日盈虧就是本日已實現盈虧
+        total_pnl = get_today_realized_pnl()
+        
+        # 獲取錢包餘額計算百分比
+        account_info = binance_client.get_account_info()
+        percentage = 0.0
+        if account_info:
+            wallet_balance = float(account_info.get('totalWalletBalance', 0))
+            if wallet_balance > 0:
+                percentage = (total_pnl / wallet_balance) * 100
+        
+        return total_pnl, percentage
+        
+    except Exception as e:
+        return 0.0, 0.0
+
+
 def get_btc_account_info():
-    """獲取BTC帳戶資訊"""
+    """獲取BTC帳戶資訊 - 新版本支援完整字段"""
     try:
         if not binance_client:
             return jsonify({
@@ -2868,44 +3700,71 @@ def get_btc_account_info():
                 'error': '無法獲取帳戶資訊'
             })
         
-        # 獲取本日已實現盈虧
-        today_realized_pnl = get_today_realized_pnl()
         
-        # 獲取本日手續費
+        # 基礎數據 - 從assets數組中提取USDT數據
+        usdt_asset = None
+        assets = account_data.get('assets', [])
+        for asset in assets:
+            if asset.get('asset') == 'USDT':
+                usdt_asset = asset
+                break
+        
+        if usdt_asset:
+            # 使用USDT資產的具體數據
+            wallet_balance = float(usdt_asset.get('walletBalance', 0))
+            available_balance = float(usdt_asset.get('availableBalance', 0))
+            margin_balance = float(usdt_asset.get('marginBalance', 0))
+            unrealized_pnl = float(usdt_asset.get('unrealizedProfit', 0))
+            initial_margin = float(usdt_asset.get('initialMargin', 0))
+            maint_margin = float(usdt_asset.get('maintMargin', 0))
+        else:
+            # 備用：使用頂層總計數據
+            wallet_balance = float(account_data.get('totalWalletBalance', 0))
+            available_balance = float(account_data.get('availableBalance', 0))
+            margin_balance = float(account_data.get('totalMarginBalance', 0))
+            unrealized_pnl = float(account_data.get('totalUnrealizedProfit', 0))
+            initial_margin = float(account_data.get('totalInitialMargin', 0))
+            maint_margin = float(account_data.get('totalMaintMargin', 0))
+        
+        # 獲取本日手續費和已實現盈虧
         today_commission = get_today_commission()
         
-        # 按照指定順序重新組織帳戶資訊（使用有序字典確保順序）
-        from collections import OrderedDict
+        # 計算多期間盈虧統計 - 使用幣安正確公式（已實現+未實現-資金費用）
+        today_pnl, today_pnl_percent = get_period_total_pnl_binance_formula(1)      # 本日盈虧
+        week_pnl, week_pnl_percent = get_period_total_pnl_binance_formula(7)        # 7天盈虧  
+        month_pnl, month_pnl_percent = get_period_total_pnl_binance_formula(30)     # 30天盈虧
         
-        # 幣安API字段正確映射：
-        # totalWalletBalance: 錢包餘額
-        # availableBalance: 可用餘額  
-        # totalInitialMargin: 保證金總額（原始保證金）
-        # totalMarginBalance: 保證金餘額（可用保證金，錢包餘額 + 未實現盈虧）
+        
+        # 計算保證金比率（預設0.00%）
+        margin_ratio = 0.0
+        if maint_margin > 0:
+            margin_ratio = (margin_balance / maint_margin) * 100
+        
+        # 計算槓桿使用率（預設0.00%）
+        leverage_usage = 0.0
+        if wallet_balance > 0:
+            leverage_usage = (initial_margin / wallet_balance) * 100
+        
         # totalMaintMargin: 維持保證金
         
         organized_account = OrderedDict([
-            ('walletBalance', account_data.get('totalWalletBalance', '0')),          # 錢包餘額
-            ('availableBalance', account_data.get('availableBalance', '0')),         # 可用餘額  
-            ('totalMarginBalance', account_data.get('totalInitialMargin', '0')),     # 保證金總額（原始保證金）
-            ('marginBalance', account_data.get('totalMarginBalance', '0')),          # 保證金餘額（可用保證金）
-            ('maintMargin', account_data.get('totalMaintMargin', '0')),              # 維持保證金
-            ('marginRatio', '無限大'),                                                # 保證金率
-            ('todayCommission', str(today_commission)),                              # 手續費
-            ('todayRealizedPnl', str(today_realized_pnl)),                          # 本日已實現盈虧
+            ('walletBalance', f"{wallet_balance:.8f}"),                              # 錢包餘額
+            ('availableBalance', f"{available_balance:.8f}"),                        # 可用餘額  
+            ('marginBalance', f"{margin_balance:.8f}"),                              # 保證金餘額
+            ('unrealizedProfit', f"{unrealized_pnl:.8f}"),                          # 未實現盈虧
+            ('initialMargin', f"{initial_margin:.8f}"),                              # 原始保證金（已使用）
+            ('maintMargin', f"{maint_margin:.8f}"),                                  # 維持保證金
+            ('marginRatio', f"{margin_ratio:.2f}%"),                                    # 保證金率（預設0.00%）
+            ('leverageUsage', f"{leverage_usage:.2f}%"),                             # 槓桿使用率（預設0.00%）
+            ('todayCommission', f"{today_commission:.8f}"),                          # 手續費
+            ('todayPnl', f"{today_pnl:.8f}"),                                        # 本日盈虧
+            ('todayPnlPercent', f"{today_pnl_percent:.2f}%"),                       # 本日盈虧百分比
+            ('weekPnl', f"{week_pnl:.8f}"),                                          # 7天盈虧
+            ('weekPnlPercent', f"{week_pnl_percent:.2f}%"),                         # 7天盈虧百分比
+            ('monthPnl', f"{month_pnl:.8f}"),                                        # 30天盈虧
+            ('monthPnlPercent', f"{month_pnl_percent:.2f}%"),                       # 30天盈虧百分比
         ])
         
-        # 計算保證金率（保證金餘額 / 維持保證金 × 100%）
-        try:
-            maint_margin = float(organized_account['maintMargin'])
-            margin_balance = float(organized_account['marginBalance'])
-            if maint_margin > 0:
-                margin_ratio = (margin_balance / maint_margin) * 100
-                organized_account['marginRatio'] = f"{margin_ratio:.1f}%"
-            else:
-                organized_account['marginRatio'] = "無限大"
-        except:
-            organized_account['marginRatio'] = "無法計算"
         
         return jsonify({
             'success': True,
@@ -2935,10 +3794,43 @@ def get_btc_positions():
                 'error': '無法獲取持倉資訊'
             })
         
-        # 篩選有效持倉（數量不為0的）
+        
+        # 篩選有效持倉（數量不為0的）並計算真實值
         valid_positions = []
         for pos in positions:
-            if float(pos.get('positionAmt', 0)) != 0:
+            position_amt = float(pos.get('positionAmt', 0))
+            if position_amt != 0:
+                
+                # 計算真實收益率 (unRealizedProfit / isolatedMargin) * 100
+                unrealized_pnl = float(pos.get('unRealizedProfit', 0))
+                isolated_margin = float(pos.get('isolatedMargin', 0))
+                isolated_wallet = float(pos.get('isolatedWallet', 0))
+                notional = float(pos.get('notional', 0))
+                
+                
+                # 根據保證金類型選擇保證金值
+                if pos.get('marginType') == 'isolated':
+                    margin_value = isolated_margin if isolated_margin > 0 else isolated_wallet
+                else:
+                    margin_value = isolated_wallet
+                
+                # 計算真實收益率
+                if margin_value > 0:
+                    percentage = (unrealized_pnl / margin_value) * 100
+                else:
+                    percentage = 0
+                
+                # 計算保證金比例
+                if margin_value > 0:
+                    margin_ratio = (unrealized_pnl / margin_value) * 100
+                else:
+                    margin_ratio = 0
+                
+                # 添加計算欄位
+                pos['percentage'] = percentage
+                pos['marginRatio'] = margin_ratio
+                pos['isolatedMargin'] = margin_value
+                
                 valid_positions.append(pos)
         
         return jsonify({
@@ -3417,6 +4309,7 @@ def start_btc_connection_monitor():
     """啟動BTC連接監控線程"""
     def connection_monitor():
         global btc_last_connection_check
+        btc_connection_notified = False  # 追蹤是否已發送斷線通知
         
         while not btc_shutdown_flag.is_set():
             try:
@@ -3428,8 +4321,21 @@ def start_btc_connection_monitor():
                 
                 # 檢查連接狀態
                 if not check_btc_api_connection():
+                    # 檢測到斷線，發送TG通知（只發送一次）
+                    if not btc_connection_notified:
+                        print("檢測到BTC API斷線，發送TG通知...")
+                        send_btc_telegram_message("⚠️ API連線異常！！！\n正在嘗試重新連線．．．")
+                        btc_connection_notified = True
+                    
                     print("檢測到BTC API斷線，開始重連...")
-                    btc_reconnect_api()
+                    if btc_reconnect_api():
+                        # 重連成功，發送TG通知
+                        print("BTC API重連成功，發送TG通知...")
+                        send_btc_telegram_message("✅ API連線成功！！！")
+                        btc_connection_notified = False  # 重置通知狀態
+                else:
+                    # 連線正常，重置通知狀態
+                    btc_connection_notified = False
                 
                 # 等待下次檢查
                 time.sleep(btc_connection_check_interval)

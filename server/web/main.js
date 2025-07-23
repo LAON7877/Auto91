@@ -1,3 +1,28 @@
+// 通用工具函數
+function getPnLColorClass(value) {
+    const numValue = parseFloat(value) || 0;
+    if (numValue > 0) return 'pnl-positive';
+    if (numValue < 0) return 'pnl-negative';
+    return 'pnl-neutral';
+}
+
+function updateDOMElement(id, value, useInnerHTML = false) {
+    const element = document.getElementById(id);
+    if (element) {
+        if (useInnerHTML) {
+            element.innerHTML = value;
+        } else {
+            element.textContent = value;
+        }
+    }
+}
+
+function updateDOMElements(elements, useInnerHTML = false) {
+    Object.entries(elements).forEach(([id, value]) => {
+        updateDOMElement(id, value, useInnerHTML);
+    });
+}
+
 function showPanel(panel) {
     if (panel === 'trade' && sessionStorage.getItem('isLoggedIn') !== '1') {
         // 未登入，強制回到設置面板
@@ -1393,9 +1418,9 @@ function updateBtcSystemLogsFromBackend() {
                 // 過濾 BTC 系統日誌
                 const btcCustomLogs = data.requests
                     .filter(log => {
+                        // 只接受明確標記為 BTC 系統日誌的記錄
                         const isBtcLog = log.uri === '/api/btc_system_log' ||
-                                       (log.extra_info && log.extra_info.message && 
-                                        (log.extra_info.message.includes('BTC') || log.extra_info.message.includes('比特幣')));
+                                       (log.extra_info && log.extra_info.system === 'BTC');
                         return isBtcLog;
                     })
                     .map(log => {
@@ -1410,6 +1435,9 @@ function updateBtcSystemLogsFromBackend() {
                         } else if (log.message) {
                             message = log.message;
                             type = 'info';
+                        } else if (log.uri === '/api/btc_system_log') {
+                            // 跳過沒有訊息內容的 API 請求日誌
+                            return null;
                         } else {
                             message = log.uri || '';
                             type = log.status >= 400 ? 'error' : (log.status >= 300 ? 'warning' : 'info');
@@ -1497,8 +1525,7 @@ function updateSystemLogsFromBackend() {
                         
                         // 排除 BTC 相關日誌
                         const isBtcLog = log.uri === '/api/btc_system_log' ||
-                                       (log.extra_info && log.extra_info.message && 
-                                        (log.extra_info.message.includes('BTC') || log.extra_info.message.includes('比特幣')));
+                                       (log.extra_info && log.extra_info.system === 'BTC');
                         
                         // 排除 webhook 相關日誌
                         const isWebhookLog = log.uri === '/webhook' || 
@@ -2368,13 +2395,7 @@ document.addEventListener('DOMContentLoaded', () => {
     setInterval(updateSinopacApiStatus, 5000); // 每5秒更新一次永豐API狀態
     setInterval(updateBinanceApiStatus, 300000); // 每5分鐘更新一次幣安API狀態
     
-    // BTC帳戶資訊和持倉狀態定期更新 - 與TX相同的5分鐘間隔
-    setInterval(() => {
-        if (sessionStorage.getItem('isBtcLoggedIn') === '1') {
-            refreshBtcAccountInfo();
-            refreshBtcPositionInfo();
-        }
-    }, 300000); // 每5分鐘更新一次
+    // BTC帳戶資訊和持倉狀態定期更新 - 已移至智能更新機制
     setInterval(updateCurrentTime, 1000); // 每秒更新一次本地時間
     setInterval(updateTradingStatus, 30000); // 每30秒更新一次交易狀態
     
@@ -2382,19 +2403,13 @@ document.addEventListener('DOMContentLoaded', () => {
     updateBtcConnectionDuration(); // 立即更新一次
     setInterval(updateBtcConnectionDuration, 60000); // 每分鐘更新一次
     
-    // BTC實時數據更新
+    // BTC實時數據更新 - 與TX相同的更新頻率
     setInterval(() => {
         if (sessionStorage.getItem('isBtcLoggedIn') === '1') {
             updateBtcRealtimeData();
         }
-    }, 5000); // 每5秒更新一次實時數據
+    }, 300000); // 每5分鐘更新一次實時數據
     
-    // BTC風險監控更新
-    setInterval(() => {
-        if (sessionStorage.getItem('isBtcLoggedIn') === '1') {
-            updateBtcRiskStatus();
-        }
-    }, 30000); // 每30秒檢查一次風險狀態
     
     
     // 設置定時更新（每分鐘檢查一次是否需要定時更新）
@@ -2432,12 +2447,21 @@ document.addEventListener('DOMContentLoaded', () => {
     // 智能更新機制：只在登入後且在交易時段內的交易日每五分鐘自動更新
     // 將定時器ID存儲在全局變數中，以便登出時停止
     window.accountUpdateInterval = null;
+    window.btcAccountUpdateInterval = null;
     
     // 檢查是否已登入，如果已登入則啟動智能更新
     if (window.isLoggedIn) {
         // 如果已登入，延遲啟動自動更新，讓API有時間連接
         setTimeout(() => {
             startAccountAutoUpdate();
+        }, 3000);
+    }
+    
+    // 檢查BTC是否已登入，如果已登入則啟動BTC智能更新
+    if (sessionStorage.getItem('isBtcLoggedIn') === '1') {
+        // 如果已登入，延遲啟動BTC自動更新，讓API有時間連接
+        setTimeout(() => {
+            startBtcAccountAutoUpdate();
         }, 3000);
     }
     
@@ -2474,6 +2498,29 @@ function stopAccountAutoUpdate() {
     if (window.accountUpdateInterval) {
         clearInterval(window.accountUpdateInterval);
         window.accountUpdateInterval = null;
+    }
+}
+
+// 啟動BTC帳戶自動更新
+function startBtcAccountAutoUpdate() {
+    // 如果已經有定時器在運行，先停止它
+    stopBtcAccountAutoUpdate();
+    
+    // 啟動新的定時器 - BTC是24小時交易，不需要交易時段限制
+    // 使用內部函數進行靜默更新（不顯示loading）
+    window.btcAccountUpdateInterval = setInterval(() => {
+        if (sessionStorage.getItem('isBtcLoggedIn') === '1') {
+            updateBtcAccountInfo(); // 靜默更新，無UI反饋
+            updateBtcPositionInfo(); // 靜默更新，無UI反饋
+        }
+    }, 300000); // 每五分鐘檢查一次
+}
+
+// 停止BTC帳戶自動更新
+function stopBtcAccountAutoUpdate() {
+    if (window.btcAccountUpdateInterval) {
+        clearInterval(window.btcAccountUpdateInterval);
+        window.btcAccountUpdateInterval = null;
     }
 }
 
@@ -2582,6 +2629,9 @@ function updateAccountStatus() {
             updateField('account-fee', accountData['手續費']);
             updateField('account-tax', accountData['期交稅']);
             
+            // 檢查帳戶總值是否低於維持保證金
+            checkMarginRequirement(accountData);
+            
             // 處理未實現盈虧
             if (accountData['未實現盈虧'] !== undefined) {
                 updateField('account-unrealized-pnl', accountData['未實現盈虧']);
@@ -2590,19 +2640,19 @@ function updateAccountStatus() {
             // 本日平倉損益 - 根據數值設置顏色，可隱藏
             const profitElement = document.getElementById('account-settle-profit');
             const profitValue = parseFloat(accountData['本日平倉損益']);
-            const profitDisplay = formatNumber(accountData['本日平倉損益']) + ' TWD';
+            const profitDisplay = formatNumber(accountData['本日平倉損益']) + ' <span class="unit">TWD</span>';
             
             profitElement.className = 'account-value';
             profitElement.dataset.originalValue = profitDisplay;
             
             // 直接更新數值，隱藏效果由CSS blur處理
-            profitElement.textContent = profitDisplay;
+            profitElement.innerHTML = profitDisplay;
             if (profitValue > 0) {
-                profitElement.classList.add('positive');
+                profitElement.classList.add('tx-positive');
             } else if (profitValue < 0) {
-                profitElement.classList.add('negative');
+                profitElement.classList.add('tx-negative');
             } else {
-                profitElement.classList.add('neutral');
+                profitElement.classList.add('tx-neutral');
             }
             
             // 更新固定顯示項目
@@ -2664,6 +2714,55 @@ function refreshAccountStatus() {
     setTimeout(() => {
         refreshBtn.disabled = false;
     }, 10000);
+}
+
+// 檢查保證金要求並發送TG通知
+function checkMarginRequirement(accountData) {
+    const equity = parseFloat(accountData['權益總值']) || 0;
+    const maintenanceMargin = parseFloat(accountData['維持保證金']) || 0;
+    const initialMargin = parseFloat(accountData['原始保證金']) || 0;
+    
+    // 檢查帳戶總值是否低於維持保證金
+    if (equity > 0 && maintenanceMargin > 0 && equity < maintenanceMargin) {
+        // 檢查是否在短時間內已發送過通知（避免重複發送）
+        const lastNotifyTime = sessionStorage.getItem('lastMarginNotifyTime');
+        const currentTime = new Date().getTime();
+        
+        // 10分鐘內不重複發送
+        if (!lastNotifyTime || (currentTime - parseInt(lastNotifyTime)) > 600000) {
+            sendMarginInsufficientNotification(equity, initialMargin, maintenanceMargin);
+            sessionStorage.setItem('lastMarginNotifyTime', currentTime.toString());
+        }
+    }
+}
+
+// 發送保證金不足TG通知
+function sendMarginInsufficientNotification(equity, initialMargin, maintenanceMargin) {
+    const message = `⚠️ 帳戶總值低於維持保證金！！！
+帳戶總值$${formatNumber(equity)}
+原始保證金$${formatNumber(initialMargin)}
+維持保證金$${formatNumber(maintenanceMargin)}
+請儘速補足至原始保證金並注意權益數變化！！！`;
+
+    // 發送TG通知
+    fetch('/api/send-telegram', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: message })
+    })
+    .then(res => res.json())
+    .then(data => {
+        if (data.success) {
+            // 記錄到前端日誌
+            addSystemLog('Telegram［保證金不足］訊息發送成功！！！', 'success');
+        } else {
+            addSystemLog('Telegram［保證金不足］訊息發送失敗', 'error');
+        }
+    })
+    .catch(error => {
+        console.error('發送TG通知失敗:', error);
+        addSystemLog('Telegram［保證金不足］訊息發送失敗', 'error');
+    });
 }
 
 // 格式化數字顯示（添加千分位分隔符）
@@ -2745,18 +2844,18 @@ function updatePositionStatus() {
                     
                     if (pnlText && pnlText !== '-' && pnlText !== undefined) {
                         const pnlValue = parseFloat(pnlText.replace(/,/g, ''));
-                        const pnlDisplay = formatNumber(pnlValue) + ' TWD';
+                        const pnlDisplay = formatNumber(pnlValue) + ' <span class="unit">TWD</span>';
                         
                         pnlElement.dataset.originalValue = pnlDisplay;
                         pnlElement.className = 'position-table-value';
-                        pnlElement.textContent = pnlDisplay;
+                        pnlElement.innerHTML = pnlDisplay;
                         
                         if (pnlValue > 0) {
-                            pnlElement.classList.add('positive');
+                            pnlElement.classList.add('tx-positive');
                         } else if (pnlValue < 0) {
-                            pnlElement.classList.add('negative');
+                            pnlElement.classList.add('tx-negative');
                         } else if (pnlValue === 0) {
-                            pnlElement.classList.add('neutral');
+                            pnlElement.classList.add('tx-neutral');
                         }
                     } else {
                         pnlElement.textContent = '-';
@@ -2775,17 +2874,17 @@ function updatePositionStatus() {
             const totalPnlDisplay = data.total_pnl || '-';
             const totalPnlValue = data.total_pnl_value || 0;
             
-            totalPnlElement.textContent = totalPnlDisplay;
+            totalPnlElement.innerHTML = totalPnlDisplay;
             totalPnlElement.className = 'position-total-value';
             totalPnlElement.dataset.originalValue = totalPnlDisplay;
             
             if (data.has_positions && totalPnlValue !== 0) {
                 if (totalPnlValue > 0) {
-                    totalPnlElement.classList.add('positive');
+                    totalPnlElement.classList.add('tx-positive');
                 } else if (totalPnlValue < 0) {
-                    totalPnlElement.classList.add('negative');
+                    totalPnlElement.classList.add('tx-negative');
                 } else {
-                    totalPnlElement.classList.add('neutral');
+                    totalPnlElement.classList.add('tx-neutral');
                 }
             }
         } else {
@@ -3546,9 +3645,12 @@ function loginBtc() {
             sessionStorage.setItem('isBtcLoggedIn', '1');
             sessionStorage.setItem('btcLoginTime', new Date().toISOString());
             
-            // 刷新帳戶和持倉信息
-            refreshBtcAccountInfo();
-            refreshBtcPositionInfo();
+            // 刷新帳戶和持倉信息（登入時使用靜默更新）
+            updateBtcAccountInfo();
+            updateBtcPositionInfo();
+            
+            // 啟動BTC帳戶自動更新
+            startBtcAccountAutoUpdate();
             
             // 立即更新API狀態和交易對顯示
             setTimeout(() => {
@@ -3605,6 +3707,10 @@ function logoutBtc() {
     .then(data => {
         sessionStorage.removeItem('isBtcLoggedIn');
         sessionStorage.removeItem('btcLoginTime');
+        
+        // 停止BTC帳戶自動更新
+        stopBtcAccountAutoUpdate();
+        
         showPanel('settings');
         alert('已成功登出BTC帳戶！');
         
@@ -3614,6 +3720,10 @@ function logoutBtc() {
     .catch(error => {
         console.error('BTC登出請求失敗：', error);
         sessionStorage.removeItem('isBtcLoggedIn');
+        
+        // 停止BTC帳戶自動更新
+        stopBtcAccountAutoUpdate();
+        
         showPanel('settings');
         alert('已成功登出BTC帳戶！');
     });
@@ -3772,62 +3882,6 @@ function updateBtcRealtimeData() {
     });
 }
 
-// BTC風險狀態更新函數
-function updateBtcRiskStatus() {
-    fetch('/api/btc/risk/status')
-    .then(res => res.json())
-    .then(data => {
-        if (data.success && data.risk_metrics) {
-            const risk = data.risk_metrics;
-            
-            // 更新風險等級顯示
-            const riskElement = document.getElementById('btc-risk-level');
-            if (riskElement) {
-                let riskText = '';
-                let riskColor = '';
-                
-                switch(risk.risk_level) {
-                    case 'SAFE':
-                        riskText = '安全';
-                        riskColor = '#27ae60';
-                        break;
-                    case 'MEDIUM':
-                        riskText = '中等';
-                        riskColor = '#f39c12';
-                        break;
-                    case 'HIGH':
-                        riskText = '高風險';
-                        riskColor = '#e74c3c';
-                        break;
-                    default:
-                        riskText = '未知';
-                        riskColor = '#6c757d';
-                }
-                
-                riskElement.textContent = riskText;
-                riskElement.style.color = riskColor;
-            }
-            
-            // 更新保證金比率
-            updateElementIfExists('btc-margin-ratio', risk.margin_ratio, ratio => 
-                ratio > 0 ? `${ratio.toFixed(1)}%` : '-'
-            );
-            
-            // 更新槓桿使用率
-            updateElementIfExists('btc-leverage-usage', risk.leverage_usage, usage => 
-                `${usage.toFixed(1)}%`
-            );
-            
-            // 檢查是否需要顯示風險警告
-            if (risk.risk_level === 'HIGH') {
-                showBtcRiskWarning(risk);
-            }
-        }
-    })
-    .catch(error => {
-        console.error('更新BTC風險狀態失敗:', error);
-    });
-}
 
 // 輔助函數：更新元素內容
 function updateElementIfExists(elementId, value, formatter) {
@@ -3837,43 +3891,12 @@ function updateElementIfExists(elementId, value, formatter) {
     }
 }
 
-// 顯示BTC風險警告
-function showBtcRiskWarning(riskMetrics) {
-    const warningShown = sessionStorage.getItem('btcRiskWarningShown');
-    const currentTime = new Date().getTime();
-    
-    // 每10分鐘最多顯示一次警告
-    if (warningShown && (currentTime - parseInt(warningShown)) < 600000) {
-        return;
-    }
-    
-    let warningMessage = '⚠️ BTC交易風險警告\n\n';
-    
-    if (riskMetrics.margin_ratio > 0 && riskMetrics.margin_ratio < 120) {
-        warningMessage += `強制平倉風險：保證金比率僅 ${riskMetrics.margin_ratio.toFixed(1)}%\n`;
-    }
-    
-    if (riskMetrics.leverage_usage > 90) {
-        warningMessage += `槓桿使用率過高：${riskMetrics.leverage_usage.toFixed(1)}%\n`;
-    }
-    
-    if (riskMetrics.total_unrealized_pnl < -1000) {
-        warningMessage += `大額未實現虧損：${riskMetrics.total_unrealized_pnl.toFixed(2)} USDT\n`;
-    }
-    
-    warningMessage += '\n建議立即檢查持倉並考慮風險控制措施！';
-    
-    if (confirm(warningMessage)) {
-        // 用戶確認後，記錄警告已顯示
-        sessionStorage.setItem('btcRiskWarningShown', currentTime.toString());
-        
-        // 可以在這裡添加跳轉到風險管理頁面的邏輯
-        showPanel('btc-trade');
-    }
-}
 
-// BTC帳戶資訊函數
-function refreshBtcAccountInfo() {
+// Complex calculation functions removed - all calculations moved to backend
+
+// BTC帳戶資訊函數 - 新版本支援完整格式化
+// BTC帳戶信息更新 - 恢復原始格式化樣式
+function updateBtcAccountInfo() {
     if (sessionStorage.getItem('isBtcLoggedIn') !== '1') {
         return;
     }
@@ -3883,44 +3906,205 @@ function refreshBtcAccountInfo() {
     .then(data => {
         if (data.success && data.account) {
             const account = data.account;
+            console.log('BTC Account updated (with formatting):', account);
             
-            // 更新帳戶資訊顯示 - 使用新的後端字段映射
-            const accountElements = {
-                'btc-wallet-balance': formatCurrency(account.walletBalance || 0, 'USDT'),
-                'btc-available-balance': formatCurrency(account.availableBalance || 0, 'USDT'),
-                'btc-total-margin': formatCurrency(account.totalMarginBalance || 0, 'USDT'),
-                'btc-margin-balance': formatCurrency(account.marginBalance || 0, 'USDT'),
-                'btc-maintenance-margin': formatCurrency(account.maintMargin || 0, 'USDT'),
-                'btc-margin-ratio': account.marginRatio || '無限大',
-                'btc-today-commission': formatCurrency(account.todayCommission || 0, 'USDT'),
-                'btc-today-realized-pnl': formatPnL(account.todayRealizedPnl || 0)
-            };
-            
-            Object.entries(accountElements).forEach(([id, value]) => {
+            // 指定小數位數的欄位更新函數
+            const updateFieldWithDecimals = (id, value, unit = '', decimals = 2, isPnL = false, isPercentage = false) => {
                 const element = document.getElementById(id);
-                if (element) {
-                    element.textContent = value;
-                    
-                    // 損益顏色
-                    if (id === 'btc-today-realized-pnl') {
-                        const numValue = parseFloat(account.todayRealizedPnl || 0);
-                        element.className = element.className.replace(/(\\s|^)(profit|loss)(\\s|$)/, '');
-                        if (numValue > 0) {
-                            element.classList.add('profit');
-                        } else if (numValue < 0) {
-                            element.classList.add('loss');
-                        }
+                if (!element) return;
+                
+                let numValue = parseFloat(value) || 0;
+                let displayValue = numValue.toFixed(decimals);
+                
+                // 重置className
+                element.className = 'account-value';
+                
+                if (isPnL) {
+                    // 盈虧類欄位添加顏色
+                    if (numValue > 0) {
+                        element.classList.add('positive');
+                        displayValue = '+' + displayValue;
+                    } else if (numValue < 0) {
+                        element.classList.add('negative');
+                    } else {
+                        element.classList.add('neutral');
                     }
                 }
-            });
+                
+                if (isPercentage) {
+                    // 百分比類欄位
+                    if (numValue === 0) {
+                        element.classList.add('neutral'); // 0.00% 顯示灰色
+                    } else if (numValue > 0) {
+                        element.classList.add('positive'); // 正數顯示綠色
+                    } else {
+                        element.classList.add('negative'); // 負數顯示紅色
+                    }
+                    displayValue = displayValue + '%';
+                } else if (unit) {
+                    // 帶單位的欄位
+                    element.innerHTML = `${displayValue} <span class="unit">${unit}</span>`;
+                    return;
+                }
+                
+                element.textContent = displayValue;
+            };
             
-        } else {
-            console.error('獲取BTC帳戶資訊失敗：', data.error);
+            // 指定小數位數的盈虧欄位更新函數
+            const updatePnLFieldWithDecimals = (id, amount, percentage, decimals = 2) => {
+                const element = document.getElementById(id);
+                if (!element) return;
+                
+                let numValue = parseFloat(amount) || 0;
+                let percentValue = parseFloat(percentage) || 0;
+                let displayAmount = numValue.toFixed(decimals);
+                
+                // 重置className
+                element.className = 'account-value';
+                
+                // 盈虧顏色邏輯
+                if (numValue > 0) {
+                    element.classList.add('positive');
+                    displayAmount = '+' + displayAmount;
+                } else if (numValue < 0) {
+                    element.classList.add('negative');
+                } else {
+                    element.classList.add('neutral');
+                }
+                
+                // 組合顯示：金額 (百分比)
+                let displayText = `${displayAmount} USDT`;
+                if (Math.abs(percentValue) > 0.01) { // 百分比大於0.01%才顯示
+                    const percentSign = percentValue >= 0 ? '+' : '';
+                    displayText += ` (${percentSign}${percentValue.toFixed(2)}%)`;
+                }
+                
+                element.innerHTML = `${displayText.replace('USDT', '<span class="unit">USDT</span>')}`;
+            };
+            
+            // 恢復完整格式化，與TX版本保持一致的樣式
+            const updateField = (id, value, unit = '', isPnL = false, isPercentage = false) => {
+                const element = document.getElementById(id);
+                if (!element) return;
+                
+                let numValue = parseFloat(value) || 0;
+                let displayValue = formatNumber(numValue);
+                
+                // 重置className
+                element.className = 'account-value';
+                
+                if (isPnL) {
+                    // 盈虧類欄位添加顏色
+                    if (numValue > 0) {
+                        element.classList.add('positive');
+                        displayValue = '+' + displayValue;
+                    } else if (numValue < 0) {
+                        element.classList.add('negative');
+                    } else {
+                        element.classList.add('neutral');
+                    }
+                }
+                
+                if (isPercentage) {
+                    // 百分比類欄位 - 修正邏輯：初始0.00%是灰色，有值才有顏色
+                    if (numValue === 0) {
+                        element.classList.add('neutral'); // 0.00% 顯示灰色
+                    } else if (numValue > 0) {
+                        element.classList.add('positive'); // 正數顯示綠色
+                    } else {
+                        element.classList.add('negative'); // 負數顯示紅色
+                    }
+                    displayValue = displayValue + '%';
+                } else if (unit) {
+                    // 帶單位的欄位
+                    element.innerHTML = `${displayValue} <span class="unit">${unit}</span>`;
+                    return;
+                }
+                
+                element.textContent = displayValue;
+            };
+            
+            // 盈虧欄位更新函數 - 同時顯示金額和百分比
+            const updatePnLField = (id, amount, percentage) => {
+                const element = document.getElementById(id);
+                if (!element) return;
+                
+                let numValue = parseFloat(amount) || 0;
+                let percentValue = parseFloat(percentage) || 0;
+                let displayAmount = formatNumber(numValue);
+                
+                // 重置className
+                element.className = 'account-value';
+                
+                // 盈虧顏色邏輯
+                if (numValue > 0) {
+                    element.classList.add('positive');
+                    displayAmount = '+' + displayAmount;
+                } else if (numValue < 0) {
+                    element.classList.add('negative');
+                } else {
+                    element.classList.add('neutral');
+                }
+                
+                // 組合顯示：金額 (百分比)
+                let displayText = `${displayAmount} USDT`;
+                if (Math.abs(percentValue) > 0.01) { // 百分比大於0.01%才顯示
+                    const percentSign = percentValue >= 0 ? '+' : '';
+                    displayText += ` (${percentSign}${percentValue.toFixed(2)}%)`;
+                }
+                
+                element.innerHTML = `${displayText.replace('USDT', '<span class="unit">USDT</span>')}`;
+            };
+            
+            // 更新各欄位，使用指定的小數位數格式
+            // 錢包餘額、可供轉帳、保證金餘額、未實現盈虧、交易手續費：小數點後8位
+            updateFieldWithDecimals('btc-wallet-balance', account.walletBalance, 'USDT', 8);
+            updateFieldWithDecimals('btc-available-balance', account.availableBalance, 'USDT', 8);
+            updateFieldWithDecimals('btc-margin-balance', account.marginBalance, 'USDT', 8);
+            updateFieldWithDecimals('btc-unrealized-pnl', account.unrealizedProfit, 'USDT', 8, true);
+            updateFieldWithDecimals('btc-today-commission', account.todayCommission, 'USDT', 8);
+            
+            // 保證金比率、槓桿使用率：小數點後2位
+            updateFieldWithDecimals('btc-margin-ratio', account.marginRatio, '', 2, false, true);
+            updateFieldWithDecimals('btc-leverage-usage', account.leverageUsage, '', 2, false, true);
+            
+            // 本日盈虧、7天盈虧、30天盈虧：小數點後2位
+            updatePnLFieldWithDecimals('btc-today-pnl', account.todayPnl, account.todayPnlPercent, 2);
+            updatePnLFieldWithDecimals('btc-week-pnl', account.weekPnl, account.weekPnlPercent, 2);
+            updatePnLFieldWithDecimals('btc-month-pnl', account.monthPnl, account.monthPnlPercent, 2);
         }
     })
     .catch(error => {
-        console.error('BTC帳戶資訊請求失敗：', error);
+        console.error('BTC帳戶資訊更新失敗：', error);
     });
+}
+
+// BTC手動重新整理帳戶信息（與TX一致，無loading動畫）
+function refreshBtcAccountInfo() {
+    if (sessionStorage.getItem('isBtcLoggedIn') !== '1') {
+        return;
+    }
+    
+    // 防止重複點擊，設置10秒緩衝期（與TX完全相同）
+    const refreshBtn = document.getElementById('refresh-account-btn-btc');
+    if (refreshBtn) {
+        // 防止重複點擊，設置10秒緩衝期
+        if (refreshBtn.disabled) return;
+        
+        refreshBtn.disabled = true;
+        // 不添加loading效果，與TX保持一致
+    }
+    
+    // 調用內部更新函數
+    updateBtcAccountInfo();
+    
+    // 10秒後恢復按鈕（與TX相同）
+    setTimeout(() => {
+        const refreshBtn = document.getElementById('refresh-account-btn-btc');
+        if (refreshBtn) {
+            refreshBtn.disabled = false;
+        }
+    }, 10000);
 }
 
 function toggleBtcAccountInfo() {
@@ -3997,160 +4181,276 @@ function updateBtcPinnedItemsBorder() {
     }
 }
 
-// BTC持倉資訊函數
+// BTC持倉信息更新 - 內部函數（無UI反饋，簡化版本）
+function updateBtcPositionInfo() {
+    if (sessionStorage.getItem('isBtcLoggedIn') !== '1') {
+        return;
+    }
+    
+    // 獲取帳戶信息和持倉信息
+    Promise.all([
+        fetch('/api/btc/positions').then(res => {
+            if (!res.ok) {
+                console.error('BTC positions API failed:', res.status, res.statusText);
+                return { success: false, error: `HTTP ${res.status}` };
+            }
+            return res.json();
+        }),
+        fetch('/api/btc/account_info').then(res => {
+            if (!res.ok) {
+                console.error('BTC account API failed:', res.status, res.statusText);
+                return { success: false, error: `HTTP ${res.status}` };
+            }
+            return res.json();
+        })
+    ])
+    .then(([positionData, accountData]) => {
+        console.log('API responses:', { positionData, accountData });
+        console.log('AccountData structure:', Object.keys(accountData));
+        console.log('AccountData maintMargin:', accountData.maintMargin);
+        console.log('AccountData marginBalance:', accountData.marginBalance);
+        
+        if (positionData.success && positionData.positions) {
+            console.log('BTC Position updated (silent):', positionData.positions);
+            
+            const positions = positionData.positions;
+            if (positions.length > 0 && accountData.success) {
+                const position = positions[0];
+                const account = accountData.account || accountData;
+                const positionAmt = parseFloat(position.positionAmt || 0);
+                
+                // 更新多空徽章
+                const directionBadge = document.getElementById('position-direction-badge');
+                if (directionBadge) {
+                    if (positionAmt > 0) {
+                        directionBadge.textContent = '多';
+                        directionBadge.className = 'position-direction-badge long';
+                    } else if (positionAmt < 0) {
+                        directionBadge.textContent = '空';
+                        directionBadge.className = 'position-direction-badge short';
+                    } else {
+                        directionBadge.textContent = '無';
+                        directionBadge.className = 'position-direction-badge';
+                    }
+                }
+                
+                // 更新交易對主要信息
+                const tradingPairMain = document.getElementById('trading-pair-main');
+                if (tradingPairMain) {
+                    tradingPairMain.textContent = position.symbol || 'BTCUSDT';
+                }
+                
+                // 更新合約類型和保證金模式
+                const tradingPairType = document.getElementById('trading-pair-type');
+                const tradingPairMargin = document.getElementById('trading-pair-margin');
+                const tradingPairInfo = document.getElementById('trading-pair-info');
+                
+                if (tradingPairType) {
+                    tradingPairType.textContent = '永續';
+                }
+                
+                if (tradingPairMargin) {
+                    // 從配置或API獲取槓桿信息
+                    const leverage = position.leverage || '20';
+                    tradingPairMargin.textContent = `全倉${leverage}x`;
+                }
+                
+                if (tradingPairInfo) {
+                    tradingPairInfo.style.display = 'block';
+                }
+                
+                // 獲取幣安API的真實數據
+                const entryPrice = parseFloat(position.entryPrice || 0);
+                const markPrice = parseFloat(position.markPrice || 0);
+                const liquidationPrice = parseFloat(position.liquidationPrice || 0);
+                const unrealizedPnl = parseFloat(position.unRealizedProfit || 0);
+                const leverage = parseFloat(position.leverage || 20); // 預設20倍槓桿
+                
+                // 持倉數量：直接顯示幣安API的真實BTC持倉數量
+                const positionSize = Math.abs(positionAmt);
+                
+                // 持倉價值（用於保證金計算，使用開倉價格）
+                const positionValueForMargin = positionSize * entryPrice;
+                
+                // 動態持倉價值（用於顯示，使用標記價格）
+                const currentPositionValue = positionSize * markPrice;
+                
+                // 保證金計算：持倉數量 ÷ 槓桿倍數 (USDT價值)
+                const margin = currentPositionValue / leverage;
+                
+                // 保證金比例：維持保證金 / 保證金餘額 × 100%
+                // 保證金比例越低風險越小，100%時強平
+                // 使用帳戶API的維持保證金和保證金餘額
+                const maintMargin = parseFloat(account.maintMargin || 0);
+                const marginBalance = parseFloat(account.marginBalance || 0);
+                
+                // 計算保證金比例
+                const marginRatio = marginBalance > 0 ? (maintMargin / marginBalance) * 100 : 0;
+                
+                // 調試：輸出API字段值
+                console.log('Margin calculation with account data:', {
+                    account_maintMargin: account.maintMargin,
+                    account_marginBalance: account.marginBalance,
+                    calculated_margin: margin,
+                    marginRatio_calculated: marginRatio,
+                    maintMargin_parsed: maintMargin,
+                    marginBalance_parsed: marginBalance
+                });
+                
+                // 計算收益率：未實現盈虧 ÷ 初始保證金 × 100%
+                // 初始保證金 = 標記價格計算的保證金 = 當前持倉價值 ÷ 槓桿倍數
+                const initialMargin = currentPositionValue / leverage;
+                const roe = initialMargin > 0 ? (unrealizedPnl / initialMargin) * 100 : 0;
+                
+                console.log('ROE calculation:', {
+                    unrealizedPnl: unrealizedPnl,
+                    initialMargin: initialMargin,
+                    currentPositionValue: currentPositionValue,
+                    leverage: leverage,
+                    roe_calculated: roe
+                });
+                
+                // 更新持倉數量 - 顯示BTC數量和動態USDT價值
+                const sizeElement = document.getElementById('position-btc-size');
+                if (sizeElement) {
+                    sizeElement.innerHTML = `${positionSize.toFixed(8)} <small>BTC</small><div class="position-amount-separator"></div>${currentPositionValue.toFixed(8)} <small>USDT</small>`;
+                }
+                
+                // 更新保證金比例 - 保證金保持灰色，比例根據風險變色
+                const marginElement = document.getElementById('position-btc-margin-ratio');
+                if (marginElement) {
+                    if (margin > 0) {
+                        // 決定保證金比例的風險顏色類別
+                        let ratioColorClass = 'neutral'; // 預設灰色
+                        if (marginRatio <= 0) {
+                            ratioColorClass = 'neutral';  // 0.00% 灰色
+                        } else if (marginRatio <= 50) {
+                            ratioColorClass = 'safe';     // 0.01~50.00% 綠色
+                        } else if (marginRatio <= 75) {
+                            ratioColorClass = 'warning';  // 50.01~75.00% 橙色
+                        } else {
+                            ratioColorClass = 'danger';   // 75.01~100.00% 紅色
+                        }
+                        
+                        // 分別設置保證金(灰色)和比例(風險顏色)
+                        const marginDisplay = `${margin.toFixed(2)} <small>USDT</small> (<span class="${ratioColorClass}">${marginRatio.toFixed(2)}%</span>)`;
+                        marginElement.innerHTML = marginDisplay;
+                        marginElement.className = 'position-table-value';
+                    } else {
+                        marginElement.innerHTML = '-';
+                        marginElement.className = 'position-table-value neutral';
+                    }
+                }
+                
+                // 更新未實現盈虧 - 按照要求的格式顯示
+                const pnlElement = document.getElementById('position-total-pnl-btc');
+                if (pnlElement) {
+                    let pnlDisplay = '';
+                    if (unrealizedPnl > 0) {
+                        pnlDisplay = `+${unrealizedPnl.toFixed(2)} <small>USDT</small> (+${roe.toFixed(2)}%)`;
+                    } else if (unrealizedPnl < 0) {
+                        pnlDisplay = `${unrealizedPnl.toFixed(2)} <small>USDT</small> (${roe.toFixed(2)}%)`;
+                    } else {
+                        pnlDisplay = `0.00 <small>USDT</small> (0.00%)`;
+                    }
+                    
+                    pnlElement.innerHTML = pnlDisplay;
+                    
+                    // 添加顏色樣式
+                    pnlElement.className = 'position-table-value';
+                    if (unrealizedPnl > 0) {
+                        pnlElement.classList.add('positive');
+                    } else if (unrealizedPnl < 0) {
+                        pnlElement.classList.add('negative');
+                    } else {
+                        pnlElement.classList.add('neutral');
+                    }
+                }
+                
+                // 更新價格欄位 - 使用HTML格式讓單位比數字小
+                const priceElements = {
+                    'position-btc-entry-price': entryPrice.toFixed(2),
+                    'position-btc-mark-price': markPrice.toFixed(2),
+                    'position-btc-liquidation-price': liquidationPrice.toFixed(2)
+                };
+                
+                Object.keys(priceElements).forEach(id => {
+                    const element = document.getElementById(id);
+                    if (element) {
+                        element.innerHTML = `${priceElements[id]} <small>USDT</small>`;
+                    }
+                });
+                
+                // 更新動作（多空方向）
+                const sideElement = document.getElementById('position-btc-side');
+                if (sideElement) {
+                    sideElement.textContent = position.side || '-';
+                }
+            } else {
+                // 無持倉時重置顯示
+                const directionBadge = document.getElementById('position-direction-badge');
+                const tradingPairMain = document.getElementById('trading-pair-main');
+                const tradingPairInfo = document.getElementById('trading-pair-info');
+                
+                if (directionBadge) {
+                    directionBadge.textContent = '無';
+                    directionBadge.className = 'position-direction-badge';
+                }
+                
+                if (tradingPairMain) {
+                    tradingPairMain.textContent = 'BTCUSDT';
+                }
+                
+                if (tradingPairInfo) {
+                    tradingPairInfo.style.display = 'none';
+                }
+                
+                const resetElements = [
+                    'position-btc-side', 'position-btc-size', 'position-btc-margin-ratio', 
+                    'position-total-pnl-btc', 'position-btc-entry-price', 'position-btc-mark-price', 
+                    'position-btc-liquidation-price'
+                ];
+                
+                resetElements.forEach(id => {
+                    const element = document.getElementById(id);
+                    if (element) {
+                        element.textContent = '-';
+                    }
+                });
+            }
+        }
+    })
+    .catch(error => {
+        console.error('BTC持倉資訊更新失敗：', error);
+    });
+}
+
+// BTC手動重新整理持倉信息（與TX一致，無loading動畫）
 function refreshBtcPositionInfo() {
     if (sessionStorage.getItem('isBtcLoggedIn') !== '1') {
         return;
     }
     
-    fetch('/api/btc/positions')
-    .then(res => res.json())
-    .then(data => {
-        if (data.success && data.positions) {
-            const positions = data.positions;
-            let totalPnL = 0;
-            
-            if (positions.length > 0) {
-                const position = positions[0]; // 只處理第一個持倉
-                
-                // 更新交易對表頭
-                const tradingPairHeader = document.getElementById('btc-trading-pair-header');
-                if (tradingPairHeader) {
-                    tradingPairHeader.textContent = position.symbol || 'BTCUSDT';
-                }
-                
-                // 動作：多單(紅字) 空單(綠字)
-                const sideElement = document.getElementById('position-btc-side');
-                if (sideElement) {
-                    if (position.positionSide === 'LONG') {
-                        sideElement.textContent = '多單';
-                        sideElement.className = 'position-table-value long';
-                    } else if (position.positionSide === 'SHORT') {
-                        sideElement.textContent = '空單';
-                        sideElement.className = 'position-table-value short';
-                    } else {
-                        sideElement.textContent = '-';
-                        sideElement.className = 'position-table-value';
-                    }
-                }
-                
-                // 數量：0.1234 BTC
-                const sizeElement = document.getElementById('position-btc-size');
-                if (sizeElement) {
-                    const amount = Math.abs(parseFloat(position.positionAmt || 0));
-                    if (amount > 0) {
-                        // 從交易對中提取基礎貨幣（如BTCUSDT -> BTC）
-                        const baseCurrency = position.symbol ? position.symbol.replace(/USDT$|BUSD$|USDC$/, '') : 'BTC';
-                        sizeElement.textContent = `${amount.toFixed(4)} ${baseCurrency}`;
-                    } else {
-                        sizeElement.textContent = '-';
-                    }
-                    sizeElement.className = 'position-table-value';
-                }
-                
-                // 均價：112,000 USDT
-                const entryPriceElement = document.getElementById('position-btc-entry-price');
-                if (entryPriceElement) {
-                    const entryPrice = parseFloat(position.entryPrice || 0);
-                    if (entryPrice > 0) {
-                        entryPriceElement.textContent = `${entryPrice.toLocaleString('en-US', {minimumFractionDigits: 0, maximumFractionDigits: 2})} USDT`;
-                    } else {
-                        entryPriceElement.textContent = '-';
-                    }
-                    entryPriceElement.className = 'position-table-value';
-                }
-                
-                // 市價：111,000 USDT
-                const markPriceElement = document.getElementById('position-btc-mark-price');
-                if (markPriceElement) {
-                    const markPrice = parseFloat(position.markPrice || 0);
-                    if (markPrice > 0) {
-                        markPriceElement.textContent = `${markPrice.toLocaleString('en-US', {minimumFractionDigits: 0, maximumFractionDigits: 2})} USDT`;
-                    } else {
-                        markPriceElement.textContent = '-';
-                    }
-                    markPriceElement.className = 'position-table-value';
-                }
-                
-                // 盈虧：1,234 USDT (正數紅色 負數綠色 0灰色)
-                const pnlElement = document.getElementById('position-btc-pnl');
-                if (pnlElement) {
-                    const pnlValue = parseFloat(position.unRealizedProfit || 0);
-                    if (pnlValue !== 0) {
-                        const formattedPnl = Math.abs(pnlValue).toLocaleString('en-US', {minimumFractionDigits: 0, maximumFractionDigits: 2});
-                        pnlElement.textContent = `${pnlValue >= 0 ? '+' : '-'}${formattedPnl} USDT`;
-                        if (pnlValue > 0) {
-                            pnlElement.className = 'position-table-value profit';
-                        } else if (pnlValue < 0) {
-                            pnlElement.className = 'position-table-value loss';
-                        }
-                    } else {
-                        pnlElement.textContent = '0 USDT';
-                        pnlElement.className = 'position-table-value neutral';
-                    }
-                }
-                
-                // ROE (正數紅色 負數綠色 0灰色)
-                const roeElement = document.getElementById('position-btc-roe');
-                if (roeElement) {
-                    const roeValue = parseFloat(position.percentage || 0);
-                    if (roeValue !== 0) {
-                        roeElement.textContent = `${roeValue >= 0 ? '+' : ''}${roeValue.toFixed(2)}%`;
-                        if (roeValue > 0) {
-                            roeElement.className = 'position-table-value profit';
-                        } else if (roeValue < 0) {
-                            roeElement.className = 'position-table-value loss';
-                        }
-                    } else {
-                        roeElement.textContent = '0.00%';
-                        roeElement.className = 'position-table-value neutral';
-                    }
-                }
-                
-                totalPnL = parseFloat(position.unRealizedProfit || 0);
-            } else {
-                // 無持倉時重置顯示
-                const tradingPairHeader = document.getElementById('btc-trading-pair-header');
-                if (tradingPairHeader) {
-                    tradingPairHeader.textContent = 'BTCUSDT';
-                }
-                
-                const resetElements = [
-                    { id: 'position-btc-side', value: '-' },
-                    { id: 'position-btc-size', value: '-' },
-                    { id: 'position-btc-entry-price', value: '-' },
-                    { id: 'position-btc-mark-price', value: '-' },
-                    { id: 'position-btc-pnl', value: '-' },
-                    { id: 'position-btc-roe', value: '-' }
-                ];
-                
-                resetElements.forEach(({ id, value }) => {
-                    const element = document.getElementById(id);
-                    if (element) {
-                        element.textContent = value;
-                        element.className = 'position-table-value';
-                    }
-                });
-            }
-            
-            const totalPnLElement = document.getElementById('position-total-pnl-btc');
-            if (totalPnLElement) {
-                totalPnLElement.textContent = formatPnL(totalPnL);
-                totalPnLElement.className = totalPnLElement.className.replace(/(\\s|^)(profit|loss)(\\s|$)/, '');
-                if (totalPnL > 0) {
-                    totalPnLElement.classList.add('profit');
-                } else if (totalPnL < 0) {
-                    totalPnLElement.classList.add('loss');
-                }
-            }
-            
-        } else {
-            console.error('獲取BTC持倉資訊失敗：', data.error);
+    // 防止重複點擊，設置10秒緩衝期（與TX完全相同）
+    const refreshBtn = document.getElementById('refresh-position-btn-btc');
+    if (refreshBtn) {
+        // 防止重複點擊，設置10秒緩衝期
+        if (refreshBtn.disabled) return;
+        
+        refreshBtn.disabled = true;
+        // 不添加loading效果，與TX保持一致
+    }
+    
+    // 調用內部更新函數
+    updateBtcPositionInfo();
+    
+    // 10秒後恢復按鈕（與TX相同）
+    setTimeout(() => {
+        const refreshBtn = document.getElementById('refresh-position-btn-btc');
+        if (refreshBtn) {
+            refreshBtn.disabled = false;
         }
-    })
-    .catch(error => {
-        console.error('BTC持倉資訊請求失敗：', error);
-    });
+    }, 10000);
 }
 
 function toggleBtcPositionInfo() {
@@ -4184,7 +4484,10 @@ function toggleBtcPositionAmountVisibility() {
         eyeOpen.style.display = 'none';
         eyeClosed.style.display = '';
         positionValues.forEach(element => {
-            element.style.filter = 'blur(4px)';
+            // 不模糊持倉方向欄位
+            if (element.id !== 'position-btc-side') {
+                element.style.filter = 'blur(4px)';
+            }
         });
         if (totalPnL) totalPnL.style.filter = 'blur(4px)';
     }
@@ -4217,4 +4520,3 @@ function formatPnL(amount) {
     const sign = num >= 0 ? '+' : '';
     return `${sign}${num.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USDT`;
 }
-

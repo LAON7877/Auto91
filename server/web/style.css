@@ -7,6 +7,45 @@
     --panel-radius: 0 12px 12px 12px;
     --shadow: 0 2px 12px #0002;
 }
+
+/* 盈虧顏色樣式 - BTC使用 */
+.positive {
+    color: #27ae60 !important; /* 綠色 - 正數 */
+}
+
+.negative {
+    color: #e74c3c !important; /* 紅色 - 負數 */
+}
+
+.neutral {
+    color: #6c757d !important; /* 灰色 - 零值 */
+}
+
+/* 保證金比例風險顏色樣式 */
+.safe {
+    color: #27ae60 !important; /* 綠色 - 0.01~50.00% */
+}
+
+.warning {
+    color: #ff9800 !important; /* 橙色 - 50.01~75.00% */
+}
+
+.danger {
+    color: #e74c3c !important; /* 紅色 - 75.01~100.00% */
+}
+
+/* TX專用盈虧顏色樣式 - 與BTC相反 */
+.tx-positive {
+    color: #e74c3c !important; /* 紅色 - 正數 */
+}
+
+.tx-negative {
+    color: #27ae60 !important; /* 綠色 - 負數 */
+}
+
+.tx-neutral {
+    color: #6c757d !important; /* 灰色 - 零值 */
+}
 body {
     font-family: 'Segoe UI', Arial, sans-serif;
     background: linear-gradient(120deg, #e0eafc 0%, #cfdef3 100%);
@@ -1888,6 +1927,82 @@ button[type="submit"]:hover {
     color: #28a745; /* 綠色 - 空單 */
 }
 
+/* 金額顯示樣式 - 支援小字體單位 */
+.amount-with-unit {
+    display: inline-block;
+}
+
+.amount-with-unit .unit {
+    font-size: 0.8em;
+    opacity: 0.8;
+}
+
+/* 通用單位樣式 - 讓TWD等單位與USDT單位大小相同 */
+.unit {
+    font-size: 0.8em;
+    opacity: 0.8;
+}
+
+/* 盈虧顏色樣式 */
+.pnl-positive {
+    color: #28a745; /* 綠色 - 正數 */
+}
+
+.pnl-negative {
+    color: #dc3545; /* 紅色 - 負數 */
+}
+
+.pnl-neutral {
+    color: #6c757d; /* 灰色 - 零值 */
+}
+
+
+/* 持倉方向標籤樣式 */
+.position-direction-badge {
+    display: inline-block;
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-size: 12px;
+    font-weight: bold;
+    color: white;
+    margin-right: 8px;
+}
+
+.position-direction-none {
+    background-color: #6c757d; /* 灰色背景 - 無持倉 */
+}
+
+.position-direction-long {
+    background-color: #28a745; /* 綠色背景 - 多倉 */
+}
+
+.position-direction-short {
+    background-color: #dc3545; /* 紅色背景 - 空倉 */
+}
+
+/* 交易對標題樣式 */
+.trading-pair-main {
+    display: inline-block;
+}
+
+
+/* 持倉方向顏色 */
+.position-direction-long {
+    color: #28a745 !important; /* 多單綠色 */
+}
+
+.position-direction-short {
+    color: #dc3545 !important; /* 空單紅色 */
+}
+
+/* 持倉數量分隔線樣式 */
+.position-amount-separator {
+    height: 1px;
+    background-color: #e0e0e0;
+    margin: 3px 0;
+    opacity: 0.6;
+}
+
 /* 總損益樣式 */
 .position-total-pnl {
     margin-top: 12px;
@@ -2728,6 +2843,79 @@ button[type="submit"]:hover {
     outline: none;
     border-color: #3498db;
     box-shadow: 0 0 0 2px rgba(52, 152, 219, 0.2);
+}
+
+/* 交易對容器布局 */
+.trading-pair-container-single {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 4px;
+    font-size: 0.9em;
+}
+
+.trading-pair-info {
+    display: flex;
+    gap: 3px;
+    font-size: 0.35em;
+    color: #333;
+}
+
+
+
+/* 持倉狀態樣式 */
+.position-direction-badge {
+    display: inline-block;
+    height: 20px;
+    border-radius: 3px;
+    font-size: 12px;
+    font-weight: bold;
+    color: white;
+    margin-right: 0px;
+    text-align: center;
+    line-height: 20px;
+    padding: 0 4px;
+    
+    /* 預設樣式（無持倉） */
+    background-color: #6c757d;
+}
+
+.position-direction-badge.long {
+    background-color: #28a745;
+}
+
+.position-direction-badge.short {
+    background-color: #dc3545;
+}
+
+.position-direction-long {
+    background-color: #27ae60;
+}
+
+.position-direction-short {
+    background-color: #e74c3c;
+}
+
+.position-direction-none {
+    background-color: #95a5a6;
+}
+
+.trading-pair-type, .trading-pair-margin {
+    display: inline-block;
+    padding: 0.5px 3px;
+    border-radius: 4px;
+    font-size: 12px;
+    margin-left: 4px;
+}
+
+.trading-pair-type {
+    background-color: #95a5a6;
+    color: white;
+}
+
+.trading-pair-margin {
+    background-color: #95a5a6;
+    color: white;
 }
 
  
