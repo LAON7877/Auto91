@@ -16,19 +16,28 @@ import requests
 import zipfile
 import shutil
 import time
+import logging
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 import tempfile
 import hashlib
+import platform
 
 # 設置編碼
 sys.stdout.reconfigure(encoding='utf-8')
 
+# ========== 日誌配置 ==========
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger('updater_system')
+
 class AutoUpdater:
     """Auto91 自動更新器"""
     
-    def __init__(self, project_root=None):
+    def __init__(self, project_root=None, silent_mode=False):
         """初始化更新器
         
         Args:
@@ -44,6 +53,8 @@ class AutoUpdater:
         self.version_file = self.project_root / "version.json"
         self.backup_dir = self.project_root / "backup_update"
         self.temp_dir = None
+        self.silent_mode = silent_mode
+        self.lock_file = self.project_root / ".update_check.lock"
         
         # 載入當前版本信息
         self.current_version = self._load_version_info()
@@ -85,13 +96,27 @@ class AutoUpdater:
         Returns:
             Tuple[bool, Dict]: (是否有更新, 最新版本信息)
         """
+        # 檢查是否已經有其他進程在檢查更新
+        if self._is_update_check_running():
+            if not self.silent_mode:
+                logger.info("其他進程正在檢查更新，跳過重複檢查")
+            return False, {}
+        
+        # 創建鎖文件
+        lock_acquired = self._acquire_update_lock()
+        if not lock_acquired:
+            if not self.silent_mode:
+                logger.info("無法獲取更新檢查鎖，可能有其他進程正在檢查")
+            return False, {}
+        
         try:
-            print("檢查線上最新版本...")
+            if not self.silent_mode:
+                logger.info("檢查線上最新版本...")
             
             # 獲取GitHub API URL
             update_url = self.current_version.get("update_url")
             if not update_url:
-                print("更新URL未配置")
+                logger.info("更新URL未配置")
                 return False, {}
             
             # 請求GitHub API
@@ -107,19 +132,19 @@ class AutoUpdater:
             latest_version = latest_release.get('tag_name', '').lstrip('v')
             
             if not latest_version:
-                print("無法獲取最新版本信息")
+                logger.info("無法獲取最新版本信息")
                 return False, {}
             
             current_version = self.current_version.get('version', '0.0.0')
             
-            print(f"當前版本: {current_version}")
-            print(f"最新版本: {latest_version}")
+            logger.info(f"當前版本: {current_version}")
+            logger.info(f"最新版本: {latest_version}")
             
             # 比較版本
             has_update = self._compare_versions(current_version, latest_version)
             
             if has_update:
-                print("發現新版本可用！")
+                logger.info("發現新版本可用！")
                 return True, {
                     'version': latest_version,
                     'name': latest_release.get('name', ''),
@@ -129,20 +154,25 @@ class AutoUpdater:
                     'html_url': latest_release.get('html_url', '')
                 }
             else:
-                print("當前版本已是最新版本")
+                if not self.silent_mode:
+                    logger.info("當前版本已是最新版本")
                 return False, {}
                 
         except requests.RequestException as e:
             if "404" in str(e):
                 repo_name = self.current_version.get("github_repo", "未知")
-                print(f"GitHub Repository '{repo_name}' 尚未建立或無Release，跳過更新檢查")
-                print(f"請確認Repository名稱是否正確，或在GitHub上創建對應的Repository和Release")
+                logger.info(f"GitHub Repository '{repo_name}' 尚未建立或無Release，跳過更新檢查")
+                logger.info(f"請確認Repository名稱是否正確，或在GitHub上創建對應的Repository和Release")
             else:
-                print(f"網絡請求失敗: {e}")
+                logger.error(f"網絡請求失敗: {e}")
             return False, {}
         except Exception as e:
-            print(f"檢查更新失敗: {e}")
+            if not self.silent_mode:
+                logger.error(f"檢查更新失敗: {e}")
             return False, {}
+        finally:
+            # 釋放鎖
+            self._release_update_lock()
     
     def _compare_versions(self, current: str, latest: str) -> bool:
         """比較版本號
@@ -173,7 +203,7 @@ class AutoUpdater:
             return False  # 版本相同
             
         except Exception as e:
-            print(f"版本比較失敗: {e}")
+            logger.error(f"版本比較失敗: {e}")
             return False
     
     def download_update(self, release_info: Dict) -> bool:
@@ -188,7 +218,7 @@ class AutoUpdater:
         try:
             download_url = release_info.get('download_url')
             if not download_url:
-                print("下載URL不可用")
+                logger.info("下載URL不可用")
                 return False
             
             # 創建臨時目錄
@@ -415,10 +445,14 @@ class AutoUpdater:
             
             # 2. 詢問用戶是否更新
             if not auto_confirm:
-                print(f"發現新版本: {release_info.get('version', '未知')}")
+                logger.info(f"發現新版本: {release_info.get('version', '未知')}")
                 choice = input("是否立即更新？ (y/n): ").lower().strip()
                 if choice not in ['y', 'yes', '是']:
                     return False
+            else:
+                # 自動確認模式下顯示友善的更新提示
+                logger.info(f"發現新版本 {release_info.get('version', '未知')}")
+                logger.info("正在自動更新中，請稍候...")
             
             # 3. 備份當前版本
             if not self.backup_current_version():
@@ -436,25 +470,69 @@ class AutoUpdater:
             # 6. 清理臨時文件
             self._cleanup_temp()
             
-            print("更新完成！請重新啟動程式以使用新版本")
+            logger.info("更新完成！請重新啟動程式以使用新版本")
             
             return True
             
         except Exception as e:
             self._cleanup_temp()
             return False
+    
+    def _is_update_check_running(self) -> bool:
+        """檢查是否已有更新檢查在進行中"""
+        return self.lock_file.exists()
+    
+    def _acquire_update_lock(self) -> bool:
+        """獲取更新檢查鎖（Windows兼容）"""
+        try:
+            if self.lock_file.exists():
+                # 檢查鎖文件是否過期（超過5分鐘）
+                try:
+                    lock_time = self.lock_file.stat().st_mtime
+                    current_time = time.time()
+                    if current_time - lock_time > 300:  # 5分鐘
+                        self.lock_file.unlink()  # 刪除過期鎖
+                    else:
+                        return False
+                except:
+                    # 如果無法讀取鎖文件，刪除它
+                    try:
+                        self.lock_file.unlink()
+                    except:
+                        pass
+            
+            # 創建鎖文件（Windows兼容方式）
+            try:
+                with open(self.lock_file, 'x') as f:  # 'x' 模式只在文件不存在時創建
+                    f.write(f"{os.getpid()}:{time.time()}")
+                return True
+            except FileExistsError:
+                # 文件已存在，表示另一個進程正在執行更新檢查
+                return False
+            
+        except Exception as e:
+            return False
+    
+    def _release_update_lock(self):
+        """釋放更新檢查鎖"""
+        try:
+            if self.lock_file.exists():
+                self.lock_file.unlink()
+        except Exception as e:
+            pass
 
-def check_and_update(project_root=None, auto_confirm=False) -> bool:
+def check_and_update(project_root=None, auto_confirm=False, silent_mode=False) -> bool:
     """便利函數：檢查並執行更新
     
     Args:
         project_root: 專案根目錄
         auto_confirm: 是否自動確認更新
+        silent_mode: 是否靜默模式（避免重複日誌）
     
     Returns:
         bool: 是否成功（無更新或更新成功都算成功）
     """
-    updater = AutoUpdater(project_root)
+    updater = AutoUpdater(project_root, silent_mode=silent_mode)
     return updater.update_flow(auto_confirm)
 
 if __name__ == "__main__":

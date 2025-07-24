@@ -7,6 +7,19 @@
     <link rel="icon" type="image/x-icon" href="favicon.ico">
 </head>
 <body>
+    <!-- 固定側邊欄（滾動時顯示） -->
+    <div class="sidebar-tabs" id="sidebar-tabs">
+        <button class="sidebar-btn active" onclick="showPanel('settings')" data-panel="settings">
+            <span>帳<br>戶<br>設<br>置</span>
+        </button>
+        <button class="sidebar-btn" onclick="showPanel('trade')" data-panel="trade">
+            <span>T<br>X<br>交<br>易</span>
+        </button>
+        <button class="sidebar-btn" onclick="showPanel('btc-trade')" data-panel="btc-trade">
+            <span>B<br>T<br>C<br>交<br>易</span>
+        </button>
+    </div>
+
     <div class="tabs">
         <div class="tab-buttons">
             <button class="tab-btn active" onclick="showPanel('settings')">帳戶設置</button>

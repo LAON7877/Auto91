@@ -1,10 +1,174 @@
-// 通用工具函數
+// =========================== 通用工具函數庫 ===========================
+
+// 通用API請求工具
+const APIUtils = {
+    async request(url, options = {}) {
+        try {
+            const response = await fetch(url, options);
+            const data = await response.json();
+            return { success: true, data };
+        } catch (error) {
+            console.error(`API請求失敗: ${url}`, error);
+            return { success: false, error: error.message };
+        }
+    },
+    
+    async get(url) {
+        return this.request(url);
+    },
+    
+    async post(url, data) {
+        return this.request(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(data)
+        });
+    }
+};
+
+// 通用API狀態更新函數
+async function updateApiStatus(config) {
+    const {
+        apiEndpoint,
+        statusElementId,
+        accountElementId,
+        versionElementId,
+        connectedText = 'API已連線',
+        disconnectedText = 'API未連線',
+        errorText = 'API連線錯誤'
+    } = config;
+    
+    const result = await APIUtils.get(apiEndpoint);
+    const statusElement = document.getElementById(statusElementId);
+    const accountElement = document.getElementById(accountElementId);
+    const versionElement = document.getElementById(versionElementId);
+    
+    if (result.success && result.data.connected) {
+        if (statusElement) {
+            statusElement.textContent = connectedText;
+            statusElement.className = 'status connected';
+        }
+        if (accountElement && result.data.account_id) {
+            accountElement.textContent = result.data.account_id;
+        }
+        if (versionElement && result.data.version) {
+            versionElement.textContent = result.data.version;
+        }
+    } else {
+        const displayText = result.success ? disconnectedText : errorText;
+        if (statusElement) {
+            statusElement.textContent = displayText;
+            statusElement.className = 'status error';
+        }
+        if (accountElement) accountElement.textContent = '-';
+        if (versionElement) versionElement.textContent = '-';
+    }
+}
+
+// 損益顏色工具函數
 function getPnLColorClass(value) {
     const numValue = parseFloat(value) || 0;
     if (numValue > 0) return 'pnl-positive';
     if (numValue < 0) return 'pnl-negative';
     return 'pnl-neutral';
 }
+
+// 統一的系統日誌管理工具
+const SystemLogManager = {
+    // 統一的日誌更新函數
+    async updateSystemLogs(systemType = 'tx') {
+        const apiEndpoint = systemType === 'btc' ? '/api/btc_system_log' : '/api/system_log';
+        const globalLogsArray = systemType === 'btc' ? 'btcSystemLogs' : 'systemLogs';
+        
+        try {
+            const result = await APIUtils.get(apiEndpoint);
+            if (result.success && result.data && result.data.logs) {
+                const filterCondition = systemType === 'btc' ? 
+                    (log => log.uri === '/api/btc_system_log' || (log.extra_info && log.extra_info.system === 'BTC')) :
+                    (log => (log.type === 'custom' || log.type === 'webhook') && !log.uri.includes('btc'));
+                
+                const filteredLogs = result.data.logs.filter(filterCondition);
+                
+                // 更新全域變數
+                window[globalLogsArray] = filteredLogs;
+                
+                // 更新顯示
+                this.updateSystemLogsDisplay(systemType);
+            }
+        } catch (error) {
+            console.error(`更新${systemType.toUpperCase()}系統日誌失敗:`, error);
+        }
+    },
+    
+    // 統一的日誌顯示函數
+    updateSystemLogsDisplay(systemType = 'tx') {
+        const containerId = systemType === 'btc' ? 'system-logs-content-btc' : 'system-logs-content';
+        const logsArray = window[systemType === 'btc' ? 'btcSystemLogs' : 'systemLogs'] || [];
+        const container = document.getElementById(containerId);
+        
+        if (!container) return;
+        
+        if (logsArray.length === 0) {
+            container.innerHTML = '<div class="log-item empty">目前沒有系統日誌</div>';
+            return;
+        }
+        
+        const logItems = logsArray.slice(-10).reverse().map(log => {
+            const typeClass = this.getLogTypeClass(log.type);
+            const typeText = this.getLogTypeText(log.type);
+            const timestamp = this.formatLogTimestamp(log.timestamp);
+            
+            return `
+                <div class="log-item ${typeClass}">
+                    <div class="log-header">
+                        <span class="log-type">${typeText}</span>
+                        <span class="log-time">${timestamp}</span>
+                    </div>
+                    <div class="log-message">${log.message}</div>
+                </div>
+            `;
+        }).join('');
+        
+        container.innerHTML = logItems;
+        container.scrollTop = 0; // 滾動到最新日誌
+    },
+    
+    // 工具方法
+    getLogTypeClass(type) {
+        const typeMap = {
+            'success': 'log-success',
+            'error': 'log-error', 
+            'warning': 'log-warning',
+            'info': 'log-info'
+        };
+        return typeMap[type] || 'log-info';
+    },
+    
+    getLogTypeText(type) {
+        const typeMap = {
+            'success': '成功',
+            'error': '錯誤',
+            'warning': '警告', 
+            'info': '資訊'
+        };
+        return typeMap[type] || '資訊';
+    },
+    
+    formatLogTimestamp(timestamp) {
+        try {
+            const date = new Date(timestamp);
+            return date.toLocaleString('zh-TW', {
+                month: '2-digit',
+                day: '2-digit', 
+                hour: '2-digit',
+                minute: '2-digit',
+                second: '2-digit'
+            });
+        } catch {
+            return timestamp || '';
+        }
+    }
+};
 
 function updateDOMElement(id, value, useInnerHTML = false) {
     const element = document.getElementById(id);
@@ -51,14 +215,19 @@ function showPanel(panel) {
     document.getElementById('trade-panel').style.display = (panel === 'trade') ? '' : 'none';
     document.getElementById('btc-trade-panel').style.display = (panel === 'btc-trade') ? '' : 'none';
     
-    // 更新標籤狀態
+    // 更新標籤狀態（頂部和側邊欄）
     document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
+    document.querySelectorAll('.sidebar-btn').forEach(btn => btn.classList.remove('active'));
+    
     if (panel === 'settings') {
         document.querySelectorAll('.tab-btn')[0].classList.add('active');
+        document.querySelector('.sidebar-btn[data-panel="settings"]').classList.add('active');
     } else if (panel === 'trade') {
         document.querySelectorAll('.tab-btn')[1].classList.add('active');
+        document.querySelector('.sidebar-btn[data-panel="trade"]').classList.add('active');
     } else if (panel === 'btc-trade') {
         document.querySelectorAll('.tab-btn')[2].classList.add('active');
+        document.querySelector('.sidebar-btn[data-panel="btc-trade"]').classList.add('active');
     }
 }
 
@@ -546,7 +715,14 @@ function saveEnv(e) {
         checkLoginButton();
         
         // 更新永豐API狀態
-        updateSinopacApiStatus();
+        // 使用統一的API狀態更新函數
+        updateApiStatus({
+            apiEndpoint: '/api/sinopac/status',
+            statusElementId: 'sinopac-api-status',
+            accountElementId: 'sinopac-account-id',
+            connectedText: 'API已連線',
+            disconnectedText: 'API未連線'
+        });
         
         // 檢查是否有空值被儲存
         if (data.has_empty_fields) {
@@ -913,7 +1089,14 @@ function login() {
             
             // 延遲更新永豐API狀態，讓背景線程有時間完成登入
             setTimeout(() => {
-                updateSinopacApiStatus();
+                // 使用統一的API狀態更新函數
+        updateApiStatus({
+            apiEndpoint: '/api/sinopac/status',
+            statusElementId: 'sinopac-api-status',
+            accountElementId: 'sinopac-account-id',
+            connectedText: 'API已連線',
+            disconnectedText: 'API未連線'
+        });
                 updateFuturesContracts(); // 登入後更新期貨合約資訊
                 updateAccountStatus(); // 登入後更新帳戶狀態
                 updatePositionStatus(); // 登入後更新持倉狀態
@@ -998,7 +1181,14 @@ function logout() {
             stopAccountAutoUpdate();
             
             // 更新永豐API狀態
-            updateSinopacApiStatus();
+            // 使用統一的API狀態更新函數
+        updateApiStatus({
+            apiEndpoint: '/api/sinopac/status',
+            statusElementId: 'sinopac-api-status',
+            accountElementId: 'sinopac-account-id',
+            connectedText: 'API已連線',
+            disconnectedText: 'API未連線'
+        });
             
             alert('已成功登出TX帳戶！');
         } else {
@@ -2363,6 +2553,14 @@ document.addEventListener('DOMContentLoaded', () => {
     // 初始化token管理狀態
     initializeTokenManagement();
     
+    // 預設選擇免費臨時域名模式
+    if (typeof setDomainMode === 'function') {
+        setDomainMode('temporary');
+    }
+    
+    // 初始化側邊欄滾動檢測
+    initSidebarScrollDetection();
+    
     // 開始定期更新隧道狀態和請求日誌
     // TX隧道狀態檢查
     refreshTunnelStatus('tx');
@@ -3277,18 +3475,9 @@ function closeSinopacRestartModal() {
     // 此函數已移除，不再需要自動重啟功能
 }
 
-function restartApplication() {
-    // 此函數已移除，不再需要自動重啟功能
-}
+// 無用的重啟函數已移除
 
-// 頁面載入時的初始化
-document.addEventListener('DOMContentLoaded', function() {
-    // 預設選擇免費臨時域名模式（最可靠）
-    if (typeof setDomainMode === 'function') {
-        setDomainMode('temporary');
-    }
-    // 移除自動檢查更新，避免不必要的錯誤訊息
-});
+// 第二個DOMContentLoaded已合併到主要初始化函數中
 
 // 重新整理合約資訊
 async function refreshContractInfo() {
@@ -3661,6 +3850,8 @@ function loginBtc() {
                     updateBtcTradingPairDisplay(config);
                 })
                 .catch(err => console.error('載入BTC配置失敗:', err));
+                
+                // BTC啟動通知改為只在每天9:00發送，登入時不發送
             }, 1000);
             
             // 延遲啟動BTC隧道（避免與TX隧道同時啟動導致429錯誤）
@@ -4181,6 +4372,184 @@ function updateBtcPinnedItemsBorder() {
     }
 }
 
+// 發送BTC啟動通知
+function sendBtcStartupNotification() {
+    fetch('/api/btc/startup_notification', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+    })
+    .then(res => res.json())
+    .then(data => {
+        if (data.success) {
+            console.log('BTC啟動通知發送成功');
+        } else {
+            console.error('BTC啟動通知發送失敗:', data.error || data.message);
+        }
+    })
+    .catch(error => {
+        console.error('發送BTC啟動通知時發生錯誤:', error);
+    });
+}
+
+// 發送BTC交易統計通知
+function sendBtcTradingStatistics(date = null) {
+    const requestBody = {};
+    if (date) {
+        requestBody.date = date;
+    }
+    
+    fetch('/api/btc/trading_statistics', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(requestBody)
+    })
+    .then(res => res.json())
+    .then(data => {
+        if (data.success) {
+            console.log('BTC交易統計通知發送成功');
+        } else {
+            console.error('BTC交易統計通知發送失敗:', data.error || data.message);
+        }
+    })
+    .catch(error => {
+        console.error('發送BTC交易統計通知時發生錯誤:', error);
+    });
+}
+
+// 生成BTC日報
+function generateBtcDailyReport(date = null) {
+    const requestBody = {};
+    if (date) {
+        requestBody.date = date;
+    }
+    
+    fetch('/api/btc/generate_daily_report', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(requestBody)
+    })
+    .then(res => res.json())
+    .then(data => {
+        if (data.success) {
+            console.log('BTC日報生成成功:', data.filename);
+            alert(`BTC日報生成成功！\n文件名：${data.filename}\n日期：${data.date}`);
+        } else {
+            console.error('BTC日報生成失敗:', data.error || data.message);
+            alert(`BTC日報生成失敗：${data.error || data.message}`);
+        }
+    })
+    .catch(error => {
+        console.error('生成BTC日報時發生錯誤:', error);
+        alert(`生成BTC日報時發生錯誤：${error}`);
+    });
+}
+
+// 生成BTC月報
+function generateBtcMonthlyReport(year = null, month = null) {
+    const requestBody = {};
+    if (year) requestBody.year = year;
+    if (month) requestBody.month = month;
+    
+    fetch('/api/btc/generate_monthly_report', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(requestBody)
+    })
+    .then(res => res.json())
+    .then(data => {
+        if (data.success) {
+            console.log('BTC月報生成成功:', data.filename);
+            alert(`BTC月報生成成功！\n文件名：${data.filename}\n年月：${data.year}年${data.month}月`);
+        } else {
+            console.error('BTC月報生成失敗:', data.error || data.message);
+            alert(`BTC月報生成失敗：${data.error || data.message}`);
+        }
+    })
+    .catch(error => {
+        console.error('生成BTC月報時發生錯誤:', error);
+        alert(`生成BTC月報時發生錯誤：${error}`);
+    });
+}
+
+// BTC手動下單
+function btcManualOrder(quantity, action, side, orderType = 'MARKET') {
+    const orderData = {
+        quantity: quantity,
+        action: action,     // new, cover
+        side: side,         // buy, sell
+        order_type: orderType
+    };
+    
+    fetch('/api/btc/manual_order', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(orderData)
+    })
+    .then(res => res.json())
+    .then(data => {
+        if (data.success) {
+            console.log('BTC手動下單成功:', data);
+            // 如果有成交價格，可以調用成交通知
+            if (data.order_result && data.order_result.price) {
+                // 模擬成交通知
+                btcOrderFillNotification({
+                    order_id: data.order_id,
+                    quantity: data.quantity,
+                    price: data.order_result.price || '0.00',
+                    action: data.action,
+                    direction: data.direction,
+                    order_type: data.order_type,
+                    is_auto: data.is_auto
+                });
+            }
+        } else {
+            console.error('BTC手動下單失敗:', data.error || data.message);
+            alert(`BTC手動下單失敗：${data.error || data.message}`);
+        }
+    })
+    .catch(error => {
+        console.error('BTC手動下單時發生錯誤:', error);
+        alert(`BTC手動下單時發生錯誤：${error}`);
+    });
+}
+
+// BTC訂單成交通知
+function btcOrderFillNotification(fillData) {
+    fetch('/api/btc/order_fill', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(fillData)
+    })
+    .then(res => res.json())
+    .then(data => {
+        if (data.success) {
+            console.log('BTC成交通知處理成功');
+        } else {
+            console.error('BTC成交通知處理失敗:', data.error || data.message);
+        }
+    })
+    .catch(error => {
+        console.error('BTC成交通知處理時發生錯誤:', error);
+    });
+}
+
+// BTC快速交易按鈕函數
+function btcQuickLongOpen(quantity = 0.00140000) {
+    btcManualOrder(quantity, 'new', 'buy', 'MARKET');
+}
+
+function btcQuickLongClose(quantity = 0.00140000) {
+    btcManualOrder(quantity, 'cover', 'sell', 'MARKET');
+}
+
+function btcQuickShortOpen(quantity = 0.00140000) {
+    btcManualOrder(quantity, 'new', 'sell', 'MARKET');
+}
+
+function btcQuickShortClose(quantity = 0.00140000) {
+    btcManualOrder(quantity, 'cover', 'buy', 'MARKET');
+}
+
 // BTC持倉信息更新 - 內部函數（無UI反饋，簡化版本）
 function updateBtcPositionInfo() {
     if (sessionStorage.getItem('isBtcLoggedIn') !== '1') {
@@ -4520,3 +4889,43 @@ function formatPnL(amount) {
     const sign = num >= 0 ? '+' : '';
     return `${sign}${num.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USDT`;
 }
+
+// 側邊欄顯示控制 - 使用現代 Intersection Observer API
+function initSidebarScrollDetection() {
+    const sidebar = document.getElementById('sidebar-tabs');
+    const tabs = document.querySelector('.tabs');
+    
+    if (!sidebar || !tabs) return;
+
+    // 創建 Intersection Observer 來監測上方按鈕的可見性
+    const observer = new IntersectionObserver(
+        (entries) => {
+            entries.forEach(entry => {
+                // entry.isIntersecting = true 表示上方按鈕可見
+                // entry.isIntersecting = false 表示上方按鈕不可見
+                if (entry.isIntersecting) {
+                    // 上方按鈕可見 → 隱藏側邊欄
+                    sidebar.classList.remove('show');
+                } else {
+                    // 上方按鈕不可見 → 顯示側邊欄
+                    sidebar.classList.add('show');
+                }
+            });
+        },
+        {
+            // 精確的觸發條件：
+            // threshold: 0 表示目標元素任何部分進入或離開視窗時觸發
+            // rootMargin: 負值可以提早觸發
+            threshold: 0,
+            rootMargin: '0px 0px 0px 0px'
+        }
+    );
+
+    // 開始觀察上方按鈕區域
+    observer.observe(tabs);
+    
+    // 返回 observer，以便後續可以清理
+    return observer;
+}
+
+// 第三個DOMContentLoaded已合併到主要初始化函數中

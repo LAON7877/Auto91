@@ -15,7 +15,15 @@ import re
 import platform
 import zipfile
 import shutil
+import logging
 from datetime import datetime
+
+# ========== 日誌配置 ==========
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger('tunnel_system')
 
 # 進程管理器功能已移除
 PROCESS_MANAGER_AVAILABLE = False
@@ -116,14 +124,14 @@ class CloudflareTunnel:
             
             # 檢查是否存在，不存在則下載
             if not os.path.exists(self.exe_path):
-                print("正在下載 Cloudflare Tunnel 客戶端...")
+                logger.info("正在下載 Cloudflare Tunnel 客戶端...")
                 self.download_cloudflared()
             
             # 設定配置檔路徑
             self.config_file = os.path.join(current_dir, 'cloudflared_config.yml')
             
         except Exception as e:
-            print(f"設置 Cloudflare Tunnel 失敗: {e}")
+            logger.error(f"設置 Cloudflare Tunnel 失敗: {e}")
             self.status = "error"
     
     def download_cloudflared(self):
@@ -148,7 +156,7 @@ class CloudflareTunnel:
             else:
                 raise Exception(f"不支援的系統: {system}")
             
-            print(f"正在下載: {url}")
+            logger.info(f"正在下載: {url}")
             
             # 下載檔案
             response = requests.get(url, stream=True)
@@ -163,16 +171,16 @@ class CloudflareTunnel:
             if system != "windows":
                 os.chmod(self.exe_path, 0o755)
             
-            print("Cloudflare Tunnel 客戶端下載完成!")
+            logger.info("Cloudflare Tunnel 客戶端下載完成!")
             
         except Exception as e:
-            print(f"下載 Cloudflare Tunnel 客戶端失敗: {e}")
+            logger.error(f"下載 Cloudflare Tunnel 客戶端失敗: {e}")
             raise
     
     def authenticate(self, token):
         """使用 token 進行身份驗證"""
         try:
-            print("正在驗證 Cloudflare Tunnel token...")
+            logger.info("正在驗證 Cloudflare Tunnel token...")
             
             # 執行身份驗證命令
             result = subprocess.run([
@@ -180,17 +188,17 @@ class CloudflareTunnel:
             ], capture_output=True, text=True, timeout=30)
             
             if result.returncode == 0:
-                print("Cloudflare Tunnel 身份驗證成功!")
+                logger.info("Cloudflare Tunnel 身份驗證成功!")
                 return True
             else:
-                print(f"身份驗證失敗: {result.stderr}")
+                logger.error(f"身份驗證失敗: {result.stderr}")
                 return False
                 
         except subprocess.TimeoutExpired:
-            print("身份驗證超時")
+            logger.info("身份驗證超時")
             return False
         except Exception as e:
-            print(f"身份驗證時發生錯誤: {e}")
+            logger.error(f"身份驗證時發生錯誤: {e}")
             return False
     
     def create_tunnel(self, tunnel_name=None):
@@ -201,7 +209,7 @@ class CloudflareTunnel:
             
             self.tunnel_name = tunnel_name
             
-            print(f"正在建立隧道: {tunnel_name}")
+            logger.info(f"正在建立隧道: {tunnel_name}")
             
             # 建立隧道
             result = subprocess.run([
@@ -209,15 +217,15 @@ class CloudflareTunnel:
             ], capture_output=True, text=True, timeout=30)
             
             if result.returncode == 0:
-                print(f"隧道 {tunnel_name} 建立成功!")
+                logger.info(f"隧道 {tunnel_name} 建立成功!")
                 self.create_config_file()
                 return True
             else:
-                print(f"建立隧道失敗: {result.stderr}")
+                logger.error(f"建立隧道失敗: {result.stderr}")
                 return False
                 
         except Exception as e:
-            print(f"建立隧道時發生錯誤: {e}")
+            logger.error(f"建立隧道時發生錯誤: {e}")
             return False
     
     def create_config_file(self):
@@ -241,7 +249,7 @@ class CloudflareTunnel:
                 import yaml
                 yaml.dump(config, f)
             
-            print(f"配置檔案已建立: {self.config_file}")
+            logger.info(f"配置檔案已建立: {self.config_file}")
             
         except ImportError:
             # 如果沒有 yaml 模組，使用簡單的字串格式
@@ -255,20 +263,20 @@ ingress:
             with open(self.config_file, 'w') as f:
                 f.write(config_content)
             
-            print(f"配置檔案已建立: {self.config_file}")
+            logger.info(f"配置檔案已建立: {self.config_file}")
             
         except Exception as e:
-            print(f"建立配置檔案失敗: {e}")
+            logger.error(f"建立配置檔案失敗: {e}")
             raise
     
     def start_tunnel(self, retry_count=0, max_retries=2):
         """啟動隧道"""
         try:
             if self.status == "running":
-                print("隧道已經在運行中")
+                logger.info("隧道已經在運行中")
                 return True
             
-            print(f"正在啟動 Cloudflare Tunnel... (嘗試 {retry_count + 1}/{max_retries + 1})")
+            logger.info(f"正在啟動 Cloudflare Tunnel... (嘗試 {retry_count + 1}/{max_retries + 1})")
             self.status = "starting"
             
             # 根據模式選擇啟動方式
@@ -288,7 +296,7 @@ ingress:
                     'run', '--token', token
                 ]
             
-            print(f"執行命令: {' '.join(cmd)}")
+            logger.info(f"執行命令: {' '.join(cmd)}")
             
             self.process = subprocess.Popen(
                 cmd, 
@@ -321,7 +329,7 @@ ingress:
                         output_buffer.append(remaining_output)
                     
                     full_output = ''.join(output_buffer)
-                    print(f"隧道進程結束，完整輸出：\n{full_output}")
+                    logger.info(f"隧道進程結束，完整輸出：\n{full_output}")
                     
                     # 檢查完整輸出中是否有URL
                     url_match = re.search(r'https://[a-zA-Z0-9\-]+\.trycloudflare\.com', full_output)
@@ -329,7 +337,7 @@ ingress:
                         self.tunnel_url = url_match.group(0)
                         self.tunnel_name = url_match.group(0).split('//')[1].split('.')[0]
                         url_found = True
-                        print(f"從完整輸出中找到隧道URL: {self.tunnel_url}")
+                        logger.info(f"從完整輸出中找到隧道URL: {self.tunnel_url}")
                         # 重新啟動進程以保持運行
                         self.process = subprocess.Popen(
                             cmd, 
@@ -347,11 +355,11 @@ ingress:
                     else:
                         # 檢查是否是429錯誤，如果是則嘗試重試
                         if "429 Too Many Requests" in full_output and retry_count < max_retries:
-                            print(f"檢測到429錯誤，等待 {(retry_count + 1) * 5} 秒後重試...")
+                            logger.error(f"檢測到429錯誤，等待 {(retry_count + 1) * 5} 秒後重試...")
                             time.sleep((retry_count + 1) * 5)  # 遞增延遲
                             return self.start_tunnel(retry_count + 1, max_retries)
                         else:
-                            print("進程結束但未找到URL")
+                            logger.info("進程結束但未找到URL")
                             self.status = "error"
                             return False
                 
@@ -360,7 +368,7 @@ ingress:
                     line = self.process.stdout.readline()
                     if line:
                         output_buffer.append(line)
-                        print(f"讀取輸出: {line.strip()}")
+                        logger.info(f"讀取輸出: {line.strip()}")
                         
                         if 'trycloudflare.com' in line:
                             url_match = re.search(r'https://[a-zA-Z0-9\-]+\.trycloudflare\.com', line)
@@ -368,31 +376,31 @@ ingress:
                                 self.tunnel_url = url_match.group(0)
                                 self.tunnel_name = url_match.group(0).split('//')[1].split('.')[0]
                                 url_found = True
-                                print(f"找到隧道URL: {self.tunnel_url}")
+                                logger.info(f"找到隧道URL: {self.tunnel_url}")
                                 break
                         
                         # 檢查隧道創建狀態
                         if 'Your quick Tunnel has been created' in line:
-                            print("快速隧道已創建，繼續等待URL...")
+                            logger.info("快速隧道已創建，繼續等待URL...")
                         elif 'Registered tunnel connection' in line:
-                            print("隧道連接已建立")
+                            logger.info("隧道連接已建立")
                             
                 except Exception as e:
-                    print(f"讀取輸出時出錯: {e}")
+                    logger.info(f"讀取輸出時出錯: {e}")
                 
                 time.sleep(0.5)  # 減少等待間隔
             
             if url_found:
                 self.status = "running"
-                print(f"Cloudflare Tunnel 啟動成功! URL: {self.tunnel_url}")
+                logger.info(f"Cloudflare Tunnel 啟動成功! URL: {self.tunnel_url}")
                 return True
             else:
-                print("隧道啟動超時，未能獲取URL")
+                logger.info("隧道啟動超時，未能獲取URL")
                 self.status = "error"
                 return False
             
         except Exception as e:
-            print(f"啟動 Cloudflare Tunnel 失敗: {e}")
+            logger.error(f"啟動 Cloudflare Tunnel 失敗: {e}")
             self.status = "error"
             return False
     
@@ -403,7 +411,7 @@ ingress:
                 # 從子進程列表中移除
                 if self.child_process_list is not None and self.process in self.child_process_list:
                     self.child_process_list.remove(self.process)
-                    print(f"已從子進程列表移除 PID={self.process.pid}")
+                    logger.info(f"已從子進程列表移除 PID={self.process.pid}")
                 
                 # 先嘗試正常終止
                 self.process.terminate()
@@ -411,7 +419,7 @@ ingress:
                     self.process.wait(timeout=5)
                 except subprocess.TimeoutExpired:
                     # 如果5秒內沒有終止，強制殺死進程
-                    print("正常終止超時，強制關閉 cloudflared.exe")
+                    logger.info("正常終止超時，強制關閉 cloudflared.exe")
                     self.process.kill()
                     self.process.wait(timeout=3)
                 self.process = None
@@ -430,16 +438,16 @@ ingress:
                     # Linux/WSL 系統使用 pkill
                     subprocess.run(["pkill", "-f", "cloudflared"], 
                                  capture_output=True, text=True, check=False)
-                print("已執行系統級 cloudflared 進程清理")
+                logger.info("已執行系統級 cloudflared 進程清理")
             except Exception as cleanup_error:
-                print(f"系統級清理警告: {cleanup_error}")
+                logger.error(f"系統級清理警告: {cleanup_error}")
             
             self.status = "stopped"
-            print("Cloudflare Tunnel 已停止")
+            logger.info("Cloudflare Tunnel 已停止")
             return True
             
         except Exception as e:
-            print(f"停止 Cloudflare Tunnel 失敗: {e}")
+            logger.error(f"停止 Cloudflare Tunnel 失敗: {e}")
             # 即使出錯也要清除進程引用
             self.process = None
             
@@ -451,9 +459,9 @@ ingress:
                 else:
                     subprocess.run(["pkill", "-f", "cloudflared"], 
                                  capture_output=True, text=True, check=False)
-                print("已執行應急系統級 cloudflared 進程清理")
+                logger.info("已執行應急系統級 cloudflared 進程清理")
             except Exception as emergency_cleanup_error:
-                print(f"應急清理也失敗: {emergency_cleanup_error}")
+                logger.error(f"應急清理也失敗: {emergency_cleanup_error}")
             
             return False
     
@@ -464,7 +472,7 @@ ingress:
             if self.process.poll() is not None:
                 # 進程已結束
                 self.status = "error"
-                print(f"隧道進程意外結束，返回碼: {self.process.returncode}")
+                logger.info(f"隧道進程意外結束，返回碼: {self.process.returncode}")
         
         status_info = {
             'status': self.status,
@@ -479,7 +487,7 @@ ingress:
         if self.status == "error" and self.process and self.process.poll() is not None:
             status_info['message'] = "隧道進程意外結束"
         
-        print(f"Cloudflare Tunnel 狀態: {self.status}, URL: {self.tunnel_url}")
+        logger.info(f"Cloudflare Tunnel 狀態: {self.status}, URL: {self.tunnel_url}")
         return status_info
     
     def add_request_log(self, method, path, status_code, response_time=None):
@@ -523,7 +531,7 @@ ingress:
     def quick_setup(self, token):
         """快速設定 (類似 ngrok 的簡單設定)"""
         try:
-            print("=== Cloudflare Tunnel 快速設定 ===")
+            logger.info("=== Cloudflare Tunnel 快速設定 ===")
             
             # 1. 身份驗證
             if not self.authenticate(token):
@@ -537,12 +545,12 @@ ingress:
             if not self.start_tunnel():
                 return False
             
-            print("=== 設定完成! ===")
-            print(f"您的網站網址: {self.tunnel_url}")
+            logger.info("=== 設定完成! ===")
+            logger.info(f"您的網站網址: {self.tunnel_url}")
             return True
             
         except Exception as e:
-            print(f"快速設定失敗: {e}")
+            logger.error(f"快速設定失敗: {e}")
             return False
     
     def load_token(self):
@@ -552,5 +560,5 @@ ingress:
             # 目前返回 None，表示沒有配置 token
             return None
         except Exception as e:
-            print(f"載入 token 失敗: {e}")
+            logger.error(f"載入 token 失敗: {e}")
             return None

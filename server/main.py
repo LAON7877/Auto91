@@ -8,35 +8,8 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 if current_dir not in sys.path:
     sys.path.insert(0, current_dir)
 
-# ========== 自動更新檢查 ==========
-# 在套件檢查之前先檢查程式更新
-try:
-    from updater import check_and_update
-    
-    print("=" * 60)
-    print("Auto91 啟動前自動更新檢查")
-    print("=" * 60)
-    
-    # 執行自動更新檢查（自動確認模式）
-    update_success = check_and_update(auto_confirm=True)
-    
-    if update_success:
-        print("版本檢查完成")
-    else:
-        print("更新檢查過程中發生問題，但將繼續啟動程式")
-    
-    print("=" * 60)
-    
-except ImportError as e:
-    print(f"警告: 無法導入自動更新器: {e}")
-    print("跳過更新檢查，直接啟動程式...")
-except Exception as e:
-    print(f"警告: 更新檢查過程中發生錯誤: {e}")
-    print("跳過更新檢查，直接啟動程式...")
-
 # ========== 套件依賴檢查 ==========
 # 套件檢查功能已移除，如需要請手動安裝依賴套件
-print("如果遇到模組導入錯誤，請手動安裝相關Python套件")
 
 # ========== 正常的程式導入開始 ==========
 from flask import Flask, send_from_directory, request, jsonify, abort
@@ -48,6 +21,7 @@ import requests
 import subprocess
 import json
 import time
+import logging
 import atexit
 import signal
 import platform
@@ -55,7 +29,6 @@ import zipfile
 import shutil
 from datetime import datetime, timezone, timedelta
 import csv
-import logging
 import schedule
 import openpyxl
 from openpyxl.styles import Alignment, PatternFill, Font
@@ -74,32 +47,39 @@ def create_managed_subprocess(*args, **kwargs):
     kwargs.pop('process_name', None)  # 移除自定義參數
     return subprocess.Popen(*args, **kwargs)
 
+# ========== 日誌配置 ==========
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger('main_system')
+
 def register_subprocess(process, name="未知進程", description=""):
     """註冊子進程到ALL_CHILD_PROCESSES列表以便清理"""
     global ALL_CHILD_PROCESSES
     if process and process not in ALL_CHILD_PROCESSES:
         ALL_CHILD_PROCESSES.append(process)
-        print(f"📋 已註冊子進程: {name} (PID: {process.pid}) - {description}")
+        logger.info(f"📋 已註冊子進程: {name} (PID: {process.pid}) - {description}")
 
 def unregister_subprocess(process):
     """從ALL_CHILD_PROCESSES列表移除子進程"""
     global ALL_CHILD_PROCESSES
     if process in ALL_CHILD_PROCESSES:
         ALL_CHILD_PROCESSES.remove(process)
-        print(f"📋 已移除子進程註冊: PID {process.pid}")
+        logger.info(f"📋 已移除子進程註冊: PID {process.pid}")
 
 def register_thread(thread, name="未知線程"):
     """註冊非daemon線程到ALL_ACTIVE_THREADS列表以便清理"""
     global ALL_ACTIVE_THREADS
     if thread and not thread.daemon and thread not in ALL_ACTIVE_THREADS:
         ALL_ACTIVE_THREADS.append(thread)
-        print(f"🧵 已註冊活動線程: {name}")
+        logger.info(f"🧵 已註冊活動線程: {name}")
 
 def signal_shutdown():
     """設置全域停止標誌，通知所有線程準備結束"""
     global SHUTDOWN_FLAG
     SHUTDOWN_FLAG.set()
-    print("🚩 已設置全域停止標誌")
+    logger.info("🚩 已設置全域停止標誌")
 
 # ========================== 美化輸出系統 ==========================
 
@@ -723,7 +703,7 @@ def add_custom_request_log(method, uri, status, extra_info=None):
     # 過濾掉 webhook 和系統日誌 API 相關日誌，避免前端顯示
     if uri in ['/webhook', '/webhook/btc', '/api/btc/webhook', '/api/btc_system_log', '/api/system_log']:
         # 只在後端記錄，不添加到前端日誌
-        print(f"[WEBHOOK] {method} {uri} - {status} - {extra_info}")
+        logger.info(f"[WEBHOOK] {method} {uri} - {status} - {extra_info}")
         return
     
     # 建立時間戳（加上日期但前端會只顯示時分秒）
@@ -1155,7 +1135,7 @@ def api_reconnect():
     global is_reconnecting, reconnect_attempts
     
     try:
-        print("收到手動重連請求...")
+        logger.info("收到手動重連請求...")
         
         # 發送前端系統日誌
         try:
@@ -1188,7 +1168,7 @@ def api_reconnect():
             })
             
     except Exception as e:
-        print(f"手動重連API時發生錯誤: {e}")
+        logger.error(f"手動重連API時發生錯誤: {e}")
         return jsonify({
             'success': False, 
             'message': f'手動重連時發生錯誤: {str(e)}',
@@ -1211,7 +1191,7 @@ def api_btc_reconnect():
     """手動觸發BTC API重連"""
     if BTC_MODULE_AVAILABLE:
         try:
-            print("收到BTC手動重連請求...")
+            logger.info("收到BTC手動重連請求...")
             
             # 調用BTC重連功能
             success = btcmain.btc_reconnect_api()
@@ -1228,7 +1208,7 @@ def api_btc_reconnect():
                 })
                 
         except Exception as e:
-            print(f"BTC手動重連失敗: {e}")
+            logger.error(f"BTC手動重連失敗: {e}")
             return jsonify({
                 'success': False,
                 'message': f'BTC重連異常: {str(e)}'
@@ -1436,6 +1416,294 @@ def api_btc_positions():
     else:
         return jsonify({'success': False, 'message': 'BTC模組不可用'})
 
+@app.route('/api/btc/startup_notification', methods=['POST'])
+def api_btc_startup_notification():
+    """發送BTC啟動通知"""
+    if not BTC_MODULE_AVAILABLE:
+        return jsonify({'success': False, 'message': 'BTC模組不可用'})
+    
+    try:
+        # 獲取BTC啟動通知數據
+        notification_data = btcmain.get_btc_startup_notification_data()
+        
+        if not notification_data['success']:
+            return jsonify(notification_data)
+        
+        data = notification_data['data']
+        
+        # 格式化通知訊息
+        message = "✅ 自動交易比特幣正在啟動中.....\n"
+        message += "  ═════ 系統資訊 ═════\n"
+        message += "  交易平台：Binance Futures\n"
+        message += f"  綁定帳戶：{data['account_id']}\n"
+        message += "  API 狀態：已連線\n"
+        message += "  ═════ 選用合約 ═════\n"
+        message += f"  {data['trading_pair']} PERPETUAL（{data['leverage']}x {data['max_loss_percent']}% {data['margin_type']}）\n"
+        message += "  ═════ 帳戶狀態 ═════\n"
+        message += f"錢包餘額 {data['wallet_balance']:.8f} USDT \n"
+        message += f"可供轉帳 {data['available_balance']:.8f} USDT \n"
+        message += f"保證金餘額 {data['margin_balance']:.8f} USDT \n"
+        message += f"未實現盈虧 {data['unrealized_pnl']:.8f} USDT \n"
+        message += f"交易手續費 {data['today_commission']:.8f} USDT\n"
+        message += f"保證金比率 {data['margin_ratio']:.2f}% \n"
+        message += f"槓桿使用率 {data['leverage_usage']:.2f}% \n"
+        message += f"本日盈虧 {data['today_pnl']:.8f} USDT {data['today_pnl_percent']:.2f}%\n"
+        message += f"7 天盈虧 {data['week_pnl']:.8f} USDT {data['week_pnl_percent']:.2f}%\n"
+        message += f"30天盈虧 {data['month_pnl']:.8f} USDT {data['month_pnl_percent']:.2f}%\n"
+        message += "  ═════ 持倉狀態 ═════\n"
+        
+        # 處理持倉信息
+        if data['positions']:
+            for pos in data['positions']:
+                message += f"{pos['side']}｜{pos['size']:.8f}BTC｜{pos['entry_price']:.2f} USDT｜${pos['unrealized_pnl']:.2f} USDT\n"
+        else:
+            message += "❌ 無持倉部位\n"
+        
+        # 發送Telegram通知
+        telegram_success = send_telegram_message(message)
+        
+        if telegram_success:
+            print_console("TELEGRAM", "SUCCESS", "Telegram［啟動通知］訊息發送成功！！！")
+            return jsonify({
+                'success': True,
+                'message': '啟動通知發送成功',
+                'telegram_sent': True
+            })
+        else:
+            return jsonify({
+                'success': False,
+                'message': '啟動通知發送失敗',
+                'telegram_sent': False
+            })
+        
+    except Exception as e:
+        logger.error(f"發送BTC啟動通知失敗: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        })
+
+@app.route('/api/btc/trading_statistics', methods=['POST'])
+def api_btc_trading_statistics():
+    """發送BTC交易統計通知"""
+    if not BTC_MODULE_AVAILABLE:
+        return jsonify({'success': False, 'message': 'BTC模組不可用'})
+    
+    try:
+        # 獲取請求中的日期（可選）
+        data = request.get_json() or {}
+        date_str = data.get('date')
+        
+        # 獲取BTC交易統計數據
+        stats_data = btcmain.get_btc_trading_statistics_data(date_str)
+        
+        if not stats_data['success']:
+            return jsonify(stats_data)
+        
+        data = stats_data['data']
+        account = data['account']
+        
+        # 格式化通知訊息
+        message = f"📊 交易統計（{data['date']}）\n"
+        message += f"委託次數：{data['order_count']} 筆\n"
+        message += f"取消次數：{data['cancel_count']} 筆\n"
+        message += f"成交次數：{data['fill_count']} 筆\n"
+        message += f"買入總量 {data['buy_volume']:.8f}\n"
+        message += f"賣出總量 {data['sell_volume']:.8f}\n"
+        message += f"平均買價 {data['avg_buy_price']:.2f}\n"
+        message += f"平均賣價 {data['avg_sell_price']:.2f}\n"
+        message += f"已實現獲利 {data['realized_profit']:.8f}\n"
+        message += f"已實現盈虧 {data['realized_pnl']:.8f}\n"
+        message += f"總計已實現盈虧 {data['total_realized_pnl']:.8f}\n"
+        message += "  ═════ 帳戶狀態 ═════\n"
+        message += f"錢包餘額 {account['wallet_balance']:.8f} USDT \n"
+        message += f"可供轉帳 {account['available_balance']:.8f} USDT \n"
+        message += f"保證金餘額 {account['margin_balance']:.8f} USDT \n"
+        message += f"未實現盈虧 {account['unrealized_pnl']:.8f} USDT \n"
+        message += f"交易手續費 {account['today_commission']:.8f} USDT\n"
+        message += f"保證金比率 {account['margin_ratio']:.2f}% \n"
+        message += f"槓桿使用率 {account['leverage_usage']:.2f}% \n"
+        message += f"本日盈虧 {account['today_pnl']:.8f} USDT {account['today_pnl_percent']:.2f}%\n"
+        message += f"7 天盈虧 {account['week_pnl']:.8f} USDT {account['week_pnl_percent']:.2f}%\n"
+        message += f"30天盈虧 {account['month_pnl']:.8f} USDT {account['month_pnl_percent']:.2f}%\n"
+        message += "  ═════ 交易明細 ═════\n"
+        
+        # 處理平倉交易明細
+        if data['closed_trades']:
+            for trade in data['closed_trades']:
+                message += f"{trade['side']}｜{trade['size']:.8f}BTC｜{trade['entry_price']:.2f} USDT｜{trade['exit_price']:.2f} USDT\n"
+                message += f"${trade['pnl']:.2f} USDT\n"
+        else:
+            message += "❌ 無平倉交易\n"
+        
+        message += "  ═════ 持倉狀態 ═════\n"
+        
+        # 處理當前持倉
+        if account['positions']:
+            for pos in account['positions']:
+                message += f"{pos['side']}｜{pos['size']:.8f}BTC｜{pos['entry_price']:.2f} USDT｜${pos['unrealized_pnl']:.2f} USDT\n"
+        else:
+            message += "❌ 無持倉部位\n"
+        
+        # 發送Telegram通知
+        telegram_success = send_telegram_message(message)
+        
+        if telegram_success:
+            print_console("TELEGRAM", "SUCCESS", "Telegram［交易統計］訊息發送成功！！！")
+            return jsonify({
+                'success': True,
+                'message': '交易統計通知發送成功',
+                'telegram_sent': True
+            })
+        else:
+            return jsonify({
+                'success': False,
+                'message': '交易統計通知發送失敗',
+                'telegram_sent': False
+            })
+        
+    except Exception as e:
+        logger.error(f"發送BTC交易統計通知失敗: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        })
+
+@app.route('/api/btc/generate_daily_report', methods=['POST'])
+def api_btc_generate_daily_report():
+    """生成BTC日報Excel文件"""
+    if not BTC_MODULE_AVAILABLE:
+        return jsonify({'success': False, 'message': 'BTC模組不可用'})
+    
+    try:
+        # 獲取請求中的日期（可選）
+        data = request.get_json() or {}
+        date_str = data.get('date')
+        
+        # 生成日報
+        result = btcmain.generate_btc_daily_report(date_str)
+        
+        if result['success']:
+            print_console("REPORT", "SUCCESS", f"BTC日報生成成功: {result['filename']}")
+            return jsonify({
+                'success': True,
+                'message': 'BTC日報生成成功',
+                'filename': result['filename'],
+                'filepath': result['filepath'],
+                'date': result['date']
+            })
+        else:
+            return jsonify(result)
+        
+    except Exception as e:
+        logger.error(f"生成BTC日報失敗: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        })
+
+@app.route('/api/btc/generate_monthly_report', methods=['POST'])
+def api_btc_generate_monthly_report():
+    """生成BTC月報Excel文件"""
+    if not BTC_MODULE_AVAILABLE:
+        return jsonify({'success': False, 'message': 'BTC模組不可用'})
+    
+    try:
+        # 獲取請求中的年份和月份
+        data = request.get_json() or {}
+        year = data.get('year')
+        month = data.get('month')
+        
+        # 如果沒有指定年月，使用當前年月
+        if not year or not month:
+            from datetime import datetime
+            now = datetime.now()
+            year = year or now.year
+            month = month or now.month
+        
+        # 生成月報
+        result = btcmain.generate_btc_monthly_report(int(year), int(month))
+        
+        if result['success']:
+            print_console("REPORT", "SUCCESS", f"BTC月報生成成功: {result['filename']}")
+            return jsonify({
+                'success': True,
+                'message': 'BTC月報生成成功',
+                'filename': result['filename'],
+                'filepath': result['filepath'],
+                'year': result['year'],
+                'month': result['month']
+            })
+        else:
+            return jsonify(result)
+        
+    except Exception as e:
+        logger.error(f"生成BTC月報失敗: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        })
+
+
+@app.route('/api/btc/manual_order', methods=['POST'])
+def api_btc_manual_order():
+    """BTC手動下單接口"""
+    if not BTC_MODULE_AVAILABLE:
+        return jsonify({'success': False, 'message': 'BTC模組不可用'})
+    
+    try:
+        order_data = request.get_json()
+        if not order_data:
+            return jsonify({'success': False, 'error': '缺少訂單數據'})
+        
+        quantity = order_data.get('quantity')
+        action = order_data.get('action')  # new, cover
+        side = order_data.get('side')      # buy, sell
+        order_type = order_data.get('order_type', 'MARKET')
+        
+        if not all([quantity, action, side]):
+            return jsonify({'success': False, 'error': '缺少必要的交易參數'})
+        
+        # 執行手動下單
+        result = btcmain.btc_place_order(
+            quantity=quantity,
+            action=action,
+            side=side,
+            order_type=order_type,
+            is_auto=False
+        )
+        
+        return jsonify(result)
+        
+    except Exception as e:
+        logger.error(f"BTC手動下單失敗: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        })
+
+@app.route('/api/btc/order_fill', methods=['POST'])
+def api_btc_order_fill():
+    """BTC訂單成交通知接口"""
+    if not BTC_MODULE_AVAILABLE:
+        return jsonify({'success': False, 'message': 'BTC模組不可用'})
+    
+    try:
+        fill_data = request.get_json()
+        if not fill_data:
+            return jsonify({'success': False, 'error': '缺少成交數據'})
+        
+        # 處理成交通知
+        result = btcmain.btc_process_fill_notification(fill_data)
+        return jsonify(result)
+        
+    except Exception as e:
+        logger.error(f"BTC成交通知處理失敗: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        })
+
 @app.route('/api/btc_bot_username', methods=['GET'])
 def api_get_btc_bot_username():
     if BTC_MODULE_AVAILABLE:
@@ -1463,22 +1731,22 @@ def api_btc_webhook():
     # 解析請求數據
     try:
         raw = request.data.decode('utf-8')
-        print(f"BTC Webhook 收到原始數據: {raw}")
+        logger.debug(f"BTC Webhook 收到原始數據: {raw}")
         
         # 嘗試解析 JSON 格式
         try:
             data = json.loads(raw) if raw.strip() else {}
             action = data.get('action', '未知')
-            print(f"BTC Webhook JSON 解析成功: {data}")
+            logger.info(f"BTC Webhook JSON 解析成功: {data}")
         except json.JSONDecodeError:
             # 如果不是 JSON，處理為純文字訊息
-            print(f"BTC Webhook 收到純文字訊息，轉換為 JSON 格式")
+            logger.debug(f"BTC Webhook 收到純文字訊息，轉換為 JSON 格式")
             data = {'message': raw.strip()}
             action = '純文字訊號'
-            print(f"BTC Webhook 轉換後數據: {data}")
+            logger.debug(f"BTC Webhook 轉換後數據: {data}")
         
     except Exception as e:
-        print(f"BTC Webhook 處理失敗: {e}, 原始數據: {raw}")
+        logger.error(f"BTC Webhook 處理失敗: {e}, 原始數據: {raw}")
         add_custom_request_log('POST', '/api/btc/webhook', 400, {
             'reason': f'BTC API webhook處理失敗: {str(e)[:50]}',
             'raw_data': raw[:100],
@@ -1750,7 +2018,7 @@ def tradingview_webhook_tx():
         
         # 不發送webhook信號到前端系統日誌，只在後端記錄
         # 後端日誌記錄
-        print(f"[WEBHOOK] {log_message}")
+        logger.info(f"[WEBHOOK] {log_message}")
         
         # 記錄成功的webhook請求日誌
         add_custom_request_log('POST', '/webhook', 200, {
@@ -1908,53 +2176,6 @@ def api_generate_btc_monthly_report():
     else:
         return jsonify({'success': False, 'message': 'BTC模組不可用'})
 
-@app.route('/api/btc/manual/order', methods=['POST'])
-def api_btc_manual_order():
-    """BTC手動下單API"""
-    if BTC_MODULE_AVAILABLE:
-        try:
-            data = request.get_json()
-            if not data:
-                return jsonify({'success': False, 'message': '無效的請求數據'})
-            
-            # 解析下單參數
-            symbol = data.get('symbol', 'BTCUSDT')
-            side = data.get('side', 'BUY')  # BUY 或 SELL
-            quantity = float(data.get('quantity', 0.001))
-            order_type = data.get('order_type', 'MARKET')  # MARKET 或 LIMIT
-            price = float(data.get('price', 0)) if data.get('price') else None
-            reduce_only = data.get('reduce_only', False)  # True為平倉，False為開倉
-            
-            # 執行手動下單
-            order_result = btcmain.place_btc_futures_order(
-                symbol=symbol,
-                side=side,
-                quantity=quantity,
-                price=price,
-                order_type=order_type,
-                reduce_only=reduce_only,
-                is_manual=True  # 標記為手動交易
-            )
-            
-            if order_result and order_result.get('success'):
-                return jsonify({
-                    'success': True,
-                    'message': 'BTC手動下單成功',
-                    'order': order_result
-                })
-            else:
-                return jsonify({
-                    'success': False,
-                    'message': order_result.get('message', 'BTC手動下單失敗')
-                })
-                
-        except Exception as e:
-            return jsonify({
-                'success': False,
-                'message': f'BTC手動下單失敗: {str(e)}'
-            })
-    else:
-        return jsonify({'success': False, 'message': 'BTC模組不可用'})
 
 @app.route('/api/ngrok/status', methods=['GET'])
 def api_ngrok_status():
@@ -1974,7 +2195,7 @@ def api_ngrok_requests():
             try:
                 latency_info = tunnel_service.get_latency()
             except Exception as e:
-                print(f"獲取延遲信息失敗: {e}")
+                logger.error(f"獲取延遲信息失敗: {e}")
         
         
         return jsonify({
@@ -2039,11 +2260,11 @@ def api_ngrok_setup():
                 if success:
                     return True
                 else:
-                    print("Cloudflare Tunnel 設置失敗！")
+                    logger.error("Cloudflare Tunnel 設置失敗！")
                     return False
                     
             except Exception as e:
-                print(f"設置 Cloudflare Tunnel 失敗: {e}")
+                logger.error(f"設置 Cloudflare Tunnel 失敗: {e}")
                 return False
         
         create_managed_thread(target=setup_tunnel_background, name="隧道設置背景線程").start()
@@ -2169,7 +2390,7 @@ def api_tunnel_setup():
                 else:
                     pass
             except Exception as e:
-                print(f"設置 {service_type} 失敗: {e}")
+                logger.error(f"設置 {service_type} 失敗: {e}")
         
         create_managed_thread(target=setup_tunnel_background, name="隧道設置背景線程").start()
         
@@ -2441,6 +2662,9 @@ def api_futures_contracts():
         })
     
     try:
+        # 先更新保證金資訊（確保獲取最新數據）
+        update_margin_requirements_from_api()
+        
         # 獲取所有可用合約
         available_contracts = {}
         selected_contracts = {}
@@ -2821,7 +3045,7 @@ def api_position_status():
                                     '開倉價格': trade.get('real_opening_price', order.get('price', 0))
                                 }
             except Exception as e:
-                print(f"讀取交易記錄失敗: {e}")
+                logger.error(f"讀取交易記錄失敗: {e}")
         
         # 初始化總損益
         total_pnl = 0.0
@@ -2885,7 +3109,7 @@ def api_position_status():
                     has_positions = True
                     
                 except Exception as e:
-                    print(f"處理持倉 {contract_code} 時發生錯誤: {e}")
+                    logger.error(f"處理持倉 {contract_code} 時發生錯誤: {e}")
                     continue
         
         # 格式化總損益
@@ -2929,7 +3153,7 @@ def api_system_log():
         )
         
         # 這裡可以添加後端日誌記錄邏輯
-        print(f"前端系統日誌 [{log_type.upper()}]: {message}")
+        logger.info(f"前端系統日誌 [{log_type.upper()}]: {message}")
         
         return jsonify({'status': 'success'})
     except Exception as e:
@@ -3149,12 +3373,34 @@ def get_port():
 CURRENT_PORT, LOG_CONSOLE = get_port()
 
 def start_flask():
-    # 啟用基本的 HTTP 請求日誌輸出（用於 webhook 調試）
-    log = logging.getLogger('werkzeug')
-    log.setLevel(logging.INFO)  # 顯示所有 HTTP 請求日誌
+    # 配置werkzeug日誌格式，移除重複時間戳
+    werkzeug_logger = logging.getLogger('werkzeug')
+    werkzeug_logger.setLevel(logging.INFO)
     
-    # 如果只想看 POST 請求，可以設置為 WARNING 並在下方添加過濾
-    # log.setLevel(logging.WARNING)
+    # 清除任何現有的處理器，避免重複日誌
+    werkzeug_logger.handlers.clear()
+    
+    # 創建自定義格式化器，只顯示IP和請求信息（移除werkzeug內建時間戳）
+    class CleanHTTPFormatter(logging.Formatter):
+        def format(self, record):
+            # 使用正則表達式移除werkzeug內建的時間戳部分 [24/Jul/2025 18:07:28]
+            import re
+            message = record.getMessage()
+            # 移除 [日期/月份/年份 時間] 格式的時間戳
+            clean_message = re.sub(r'\s*\[\d{1,2}/\w{3}/\d{4}\s+\d{1,2}:\d{2}:\d{2}\]\s*', ' ', message)
+            # 移除多餘的空格和破折號
+            clean_message = re.sub(r'\s+-\s+-\s+', ' ', clean_message)
+            clean_message = clean_message.strip()
+            
+            # 返回我們自定義的格式：時間戳 - werkzeug - INFO - 清理後的請求信息
+            return f"{self.formatTime(record)} - {record.name} - {record.levelname} - {clean_message}"
+    
+    handler = logging.StreamHandler()
+    handler.setFormatter(CleanHTTPFormatter())
+    werkzeug_logger.addHandler(handler)
+    
+    # 防止向父級傳播（避免重複輸出）
+    werkzeug_logger.propagate = False
     
     app.run(port=CURRENT_PORT, threaded=True)
 
@@ -3284,7 +3530,7 @@ def order_callback(state, deal, order=None):
     global order_octype_map, contract_txf, contract_mxf, contract_tmf
         
     try:
-        print(f"收到回調事件: {state}")
+        logger.info(f"收到回調事件: {state}")
         
         # 成交回調和訂單回調的數據結構不同，需要分別處理
         if str(state) == 'OrderState.FuturesDeal':
@@ -3322,7 +3568,7 @@ def order_callback(state, deal, order=None):
                             is_manual = trade.get('is_manual', False)
                             break
                 except Exception as e:
-                    print(f"讀取交易記錄失敗：{e}")
+                    logger.error(f"讀取交易記錄失敗：{e}")
             
             # 如果從交易記錄中找不到，使用推斷邏輯
             if not oc_type:
@@ -3348,15 +3594,15 @@ def order_callback(state, deal, order=None):
                     else:
                         action = 'Sell'  # 預設值
                     
-                    print(f"推斷邏輯調試:")
-                    print(f"  action: '{action}'")
-                    print(f"  contract_positions: {[f'{p.code}:{p.direction}:{p.quantity}' for p in contract_positions]}")
+                    logger.debug(f"推斷邏輯調試:")
+                    logger.debug(f"  action: '{action}'")
+                    logger.debug(f"  contract_positions: {[f'{p.code}:{p.direction}:{p.quantity}' for p in contract_positions]}")
                     
                     has_opposite_position = any(
                         (p.direction != action and p.quantity != 0) for p in contract_positions
                     )
                     
-                    print(f"  has_opposite_position: {has_opposite_position}")
+                    logger.info(f"  has_opposite_position: {has_opposite_position}")
                     
                     oc_type = 'Cover' if has_opposite_position else 'New'
                     direction = action
@@ -3618,7 +3864,7 @@ def order_callback(state, deal, order=None):
                 create_managed_thread(target=delayed_submit_notification, name="延遲提交通知線程").start()
         
     except Exception as e:
-        print(f"回調函數處理失敗: {e}")
+        logger.error(f"回調函數處理失敗: {e}")
 
 def handle_futures_deal_callback(deal, octype_info):
     """處理期貨成交回調"""
@@ -3640,15 +3886,15 @@ def handle_futures_deal_callback(deal, octype_info):
         original_order_type = deal.get('order_type', '')
         original_price_type = deal.get('price_type', '')
         
-        print(f"[數據收集] 成交數據完整性檢查:")
-        print(f"  - 成交單號: {deal_number}")
-        print(f"  - 訂單ID: {order_id}")
-        print(f"  - 合約代碼: {contract_code}")
-        print(f"  - 成交價格: {deal_price}")
-        print(f"  - 成交數量: {deal_quantity}")
-        print(f"  - 原始訂單類型: {original_order_type}")
-        print(f"  - 原始價格類型: {original_price_type}")
-        print(f"  - 時間戳: {ts}")
+        logger.info(f"[數據收集] 成交數據完整性檢查:")
+        logger.info(f"  - 成交單號: {deal_number}")
+        logger.info(f"  - 訂單ID: {order_id}")
+        logger.info(f"  - 合約代碼: {contract_code}")
+        logger.info(f"  - 成交價格: {deal_price}")
+        logger.info(f"  - 成交數量: {deal_quantity}")
+        logger.info(f"  - 原始訂單類型: {original_order_type}")
+        logger.info(f"  - 原始價格類型: {original_price_type}")
+        logger.info(f"  - 時間戳: {ts}")
         
         current_time = datetime.now().strftime('%Y/%m/%d %H:%M')
         
@@ -3760,24 +4006,24 @@ def handle_futures_deal_callback(deal, octype_info):
             if sinopac_connected and sinopac_api:
                 # 等待2秒讓持倉更新（增加等待時間）
                 time.sleep(2)
-                print(f"正在獲取 {contract_code} 的持倉信息...")
+                logger.info(f"正在獲取 {contract_code} 的持倉信息...")
                 positions = sinopac_api.list_positions()
                 
                 for position in positions:
-                    print(f"檢查持倉：{getattr(position, 'code', 'N/A')} (尋找 {contract_code})")
+                    logger.info(f"檢查持倉：{getattr(position, 'code', 'N/A')} (尋找 {contract_code})")
                     if hasattr(position, 'code') and position.code == contract_code:
                         if hasattr(position, 'price') and position.price:
                             real_opening_price = float(position.price)
-                            print(f"✅ 從永豐API獲取到真實開倉價格：{contract_code} @ {real_opening_price} ({octype})")
+                            logger.info(f"✅ 從永豐API獲取到真實開倉價格：{contract_code} @ {real_opening_price} ({octype})")
                             break
                         else:
-                            print(f"⚠️ 持倉 {contract_code} 沒有price字段或price為空")
+                            logger.info(f"⚠️ 持倉 {contract_code} 沒有price字段或price為空")
                 
                 if real_opening_price is None:
-                    print(f"❌ 未找到 {contract_code} 的持倉信息或均價")
+                    logger.info(f"❌ 未找到 {contract_code} 的持倉信息或均價")
                     
         except Exception as e:
-            print(f"獲取真實開倉價格失敗：{e}")
+            logger.error(f"獲取真實開倉價格失敗：{e}")
             import traceback
             traceback.print_exc()
         
@@ -3836,7 +4082,7 @@ def handle_futures_deal_callback(deal, octype_info):
             order_octype_map.pop(order_id, None)
             
     except Exception as e:
-        print(f"處理期貨成交回調失敗: {e}")
+        logger.error(f"處理期貨成交回調失敗: {e}")
 
 def get_contract_name_from_code(contract_code):
     """根據合約代碼獲取合約名稱"""
@@ -4112,7 +4358,7 @@ def get_simple_order_log_message(contract_name, direction, qty, price, order_id,
             return f"{manual_type}{action_type}：{simple_contract}｜{direction_display}｜{qty} 口｜{price_display}｜{order_info}"
             
     except Exception as e:
-        print(f"生成簡化日誌訊息失敗: {e}")
+        logger.error(f"生成簡化日誌訊息失敗: {e}")
         return f"日誌生成失敗: {order_id}"
 
 def login_sinopac():
@@ -4144,9 +4390,9 @@ def login_sinopac():
         # 設置回調函數
         try:
             sinopac_api.set_order_callback(order_callback)
-            print("回調函數設置成功")
+            logger.info("回調函數設置成功")
         except Exception as e:
-            print(f"回調函數設置失敗: {e}")
+            logger.error(f"回調函數設置失敗: {e}")
             # 回調函數設置失敗，但繼續使用基本功能
         
         # 激活CA憑證 - 智能路徑處理
@@ -4158,7 +4404,7 @@ def login_sinopac():
             for file in os.listdir(cert_dir):
                 if file.endswith('.pfx'):
                     cert_file = os.path.join(cert_dir, file)
-                    print(f"找到憑證檔案: {cert_file}")
+                    logger.info(f"找到憑證檔案: {cert_file}")
                     break
         
         # 如果 server/certificate/ 目錄沒有找到，再檢查 ca_path
@@ -4170,7 +4416,7 @@ def login_sinopac():
                 # 如果是相對路徑，轉換為絕對路徑
                 final_ca_path = os.path.abspath(os.path.join(os.path.dirname(__file__), ca_path))
             
-            print(f"憑證路徑: {final_ca_path}")
+            logger.info(f"憑證路徑: {final_ca_path}")
             
             # 檢查路徑是否存在
             if os.path.isfile(final_ca_path):
@@ -4179,28 +4425,28 @@ def login_sinopac():
                 for file in os.listdir(final_ca_path):
                     if file.endswith('.pfx'):
                         cert_file = os.path.join(final_ca_path, file)
-                        print(f"找到憑證檔案: {cert_file}")
+                        logger.info(f"找到憑證檔案: {cert_file}")
                         break
         
         if cert_file and os.path.exists(cert_file):
             try:
                 sinopac_api.activate_ca(ca_path=cert_file, ca_passwd=ca_passwd, person_id=person_id)
-                print("憑證激活成功")
+                logger.info("憑證激活成功")
             except Exception as e:
                 error_msg = str(e).lower()
-                print(f"憑證激活失敗: {e}")
+                logger.error(f"憑證激活失敗: {e}")
                 
                 # 詳細的錯誤分析和建議（僅控制台輸出，不發送TG通知）
                 if "password" in error_msg or "passwd" in error_msg or "密碼" in error_msg:
-                    print("❌ 憑證密碼錯誤！請檢查前端輸入的憑證密碼是否正確")
+                    logger.error("❌ 憑證密碼錯誤！請檢查前端輸入的憑證密碼是否正確")
                 elif "person_id" in error_msg or "身分證字號" in error_msg or "id" in error_msg:
-                    print("❌ 身分證字號錯誤！請檢查格式是否為：1個英文字母+9個數字")
+                    logger.error("❌ 身分證字號錯誤！請檢查格式是否為：1個英文字母+9個數字")
                 elif "file" in error_msg or "path" in error_msg or "not found" in error_msg:
-                    print("❌ 憑證檔案問題！請檢查 .pfx 檔案是否正確上傳")
+                    logger.error("❌ 憑證檔案問題！請檢查 .pfx 檔案是否正確上傳")
                 elif "expired" in error_msg or "過期" in error_msg:
-                    print("❌ 憑證已過期！請聯絡永豐證券更新憑證")
+                    logger.error("❌ 憑證已過期！請聯絡永豐證券更新憑證")
                 else:
-                    print(f"❌ 憑證激活失敗：{e}")
+                    logger.error(f"❌ 憑證激活失敗：{e}")
                 
                 # 記錄到前端系統日誌
                 try:
@@ -4213,7 +4459,7 @@ def login_sinopac():
                     pass
         else:
             error_msg = f"找不到憑證檔案，請確認 {final_ca_path if 'final_ca_path' in locals() else ca_path} 目錄下有 .pfx 檔案"
-            print(f"❌ {error_msg}")
+            logger.error(f"❌ {error_msg}")
             # 不發送TG通知，只記錄到前端
             try:
                 requests.post(
@@ -4288,9 +4534,9 @@ def save_order_mapping():
         order_mapping_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'order_mapping.json')
         with open(order_mapping_file, 'w', encoding='utf-8') as f:
             json.dump(order_octype_map, f, ensure_ascii=False, indent=2)
-        print(f"訂單映射已保存到 {order_mapping_file}")
+        logger.info(f"訂單映射已保存到 {order_mapping_file}")
     except Exception as e:
-        print(f"保存訂單映射失敗: {str(e)}")
+        logger.error(f"保存訂單映射失敗: {str(e)}")
 
 def load_order_mapping():
     """從文件加載訂單映射"""
@@ -4301,11 +4547,11 @@ def load_order_mapping():
         if os.path.exists(order_mapping_file):
             with open(order_mapping_file, 'r', encoding='utf-8') as f:
                 order_octype_map = json.load(f)
-            print(f"訂單映射已從 {order_mapping_file} 加載，共 {len(order_octype_map)} 個訂單")
+            logger.info(f"訂單映射已從 {os.path.basename(order_mapping_file)} 加載，共 {len(order_octype_map)} 個訂單")
         else:
-            print("訂單映射文件不存在，使用空映射")
+            logger.info("訂單映射文件不存在，使用空映射")
     except Exception as e:
-        print(f"加載訂單映射失敗: {str(e)}")
+        logger.error(f"加載訂單映射失敗: {str(e)}")
         order_octype_map = {}
 
 def is_duplicate_signal(signal_id, action, contract_code, time_window=30):
@@ -4327,7 +4573,7 @@ def is_duplicate_signal(signal_id, action, contract_code, time_window=30):
     # 檢查是否為重複訊號
     if signal_key in duplicate_signal_window:
         time_diff = (current_time - duplicate_signal_window[signal_key]).total_seconds()
-        print(f"檢測到重複訊號: {signal_key}, 時間差: {time_diff:.2f}秒")
+        logger.info(f"檢測到重複訊號: {signal_key}, 時間差: {time_diff:.2f}秒")
         return True
     
     # 記錄新訊號
@@ -4622,9 +4868,7 @@ LOGIN_BTC=0
     except Exception as e:
         print_console("SYSTEM", "ERROR", "創建BTC環境配置失敗", str(e))
 
-# 程式啟動時確保環境配置文件存在
-ensure_tx_env_exists()
-ensure_btc_env_exists()
+# 環境配置文件檢查將在主程式啟動時執行
 
 def cleanup_on_exit():
     """程式退出時的清理工作"""
@@ -4848,15 +5092,15 @@ def schedule_next_check():
     tomorrow = datetime.now() + timedelta(days=1)
     schedule.every().day.at("08:45").do(check_daily_startup_notification)
     
-    # 設定BTC每日啟動通知 8:00 (24/7無交易日限制)
+    # 設定BTC每日啟動通知 9:00 (24/7無交易日限制)
     if BTC_MODULE_AVAILABLE:
-        schedule.every().day.at("08:00").do(lambda: btcmain.send_btc_daily_startup_notification())
+        schedule.every().day.at("09:00").do(lambda: btcmain.send_btc_daily_startup_notification())
         
         # 設定BTC每日交易統計 23:59 (24/7無交易日限制，統計後會自動延遲生成日報和月報)
         schedule.every().day.at("23:59").do(lambda: btcmain.check_btc_daily_trading_statistics())
         
         print_console("SYSTEM", "SUCCESS", "已設定BTC定時任務")
-        print_console("SYSTEM", "INFO", "  - 08:00: BTC每日啟動通知")
+        print_console("SYSTEM", "INFO", "  - 09:00: BTC每日啟動通知")
         print_console("SYSTEM", "INFO", "  - 23:59: BTC每日交易統計 (統計後延遲30秒生成日報，月末再延遲30秒生成月報)")
     
     # 設定今天下午 14:50 的夜盤檢查
@@ -5071,7 +5315,7 @@ def check_margin_changes():
                 send_margin_change_notification(changes)
                 
     except Exception as e:
-        print(f"檢查保證金變更失敗: {e}")
+        logger.error(f"檢查保證金變更失敗: {e}")
 
 def generate_trading_report(trades, account_data, position_data, cover_trades, total_orders, total_cancels, total_trades, total_cover_quantity, contract_pnl):
     """生成交易日報Excel文件"""
@@ -5498,7 +5742,7 @@ def generate_trading_report(trades, account_data, position_data, cover_trades, t
         return True
         
     except Exception as e:
-        print(f"生成交易日報失敗: {e}")
+        logger.error(f"生成交易日報失敗: {e}")
         import traceback
         traceback.print_exc()
         
@@ -5565,7 +5809,7 @@ def send_margin_change_notification(changes):
             pass
         
     except Exception as e:
-        print(f"發送保證金變更通知失敗: {e}")
+        logger.error(f"發送保證金變更通知失敗: {e}")
 
 def check_night_session_notification():
     """檢查是否需要發送夜盤通知"""
@@ -5584,7 +5828,7 @@ def check_night_session_notification():
                     check_margin_changes()
 
     except Exception as e:
-        print(f"檢查夜盤通知失敗: {e}")
+        logger.error(f"檢查夜盤通知失敗: {e}")
 
 def check_daily_trading_statistics():
     """檢查是否需要發送每日交易統計"""
@@ -5609,11 +5853,11 @@ def check_daily_trading_statistics():
             
             # 只有週五是交易日時，週六才會有夜盤，才發送統計
             if friday_is_trading_day:
-                print(f"週五({friday.strftime('%Y-%m-%d')})是交易日，週六有夜盤，發送交易統計")
+                logger.info(f"週五({friday.strftime('%Y-%m-%d')})是交易日，週六有夜盤，發送交易統計")
                 send_daily_trading_statistics()
-                print(f"已發送週六交易統計：{today.strftime('%Y-%m-%d')}")
+                logger.info(f"已發送週六交易統計：{today.strftime('%Y-%m-%d')}")
             else:
-                print(f"週五({friday.strftime('%Y-%m-%d')})非交易日，週六無夜盤，跳過統計")
+                logger.info(f"週五({friday.strftime('%Y-%m-%d')})非交易日，週六無夜盤，跳過統計")
         else:
             # 非週六：檢查今天是否為交易日
             response = requests.get(f'http://127.0.0.1:{CURRENT_PORT}/api/trading/status', timeout=5)
@@ -5622,12 +5866,12 @@ def check_daily_trading_statistics():
                 if data.get('is_trading_day', False):
                     send_daily_trading_statistics()
                 else:
-                    print(f"非交易日，跳過交易統計：{today.strftime('%Y-%m-%d')}")
+                    logger.info(f"非交易日，跳過交易統計：{today.strftime('%Y-%m-%d')}")
             else:
-                print(f"無法獲取交易狀態，跳過交易統計：{today.strftime('%Y-%m-%d')}")
+                logger.info(f"無法獲取交易狀態，跳過交易統計：{today.strftime('%Y-%m-%d')}")
             
     except Exception as e:
-        print(f"檢查每日交易統計失敗: {e}")
+        logger.error(f"檢查每日交易統計失敗: {e}")
 
 
 def is_last_trading_day_of_month():
@@ -5673,7 +5917,7 @@ def is_last_trading_day_of_month():
         return False
         
     except Exception as e:
-        print(f"檢查月末交易日失敗: {e}")
+        logger.error(f"檢查月末交易日失敗: {e}")
         return False
 
 def generate_monthly_trading_report():
@@ -5724,9 +5968,9 @@ def generate_monthly_trading_report():
                         if daily_trades:  # 如果當天有交易記錄
                             all_trades.extend(daily_trades)
                             last_trading_day_date = current_date  # 記錄最後有交易的日期
-                            print(f"讀取 {date_str} 交易記錄：{len(daily_trades)} 筆")
+                            logger.info(f"讀取 {date_str} 交易記錄：{len(daily_trades)} 筆")
                 except Exception as e:
-                    print(f"讀取 {date_str} 交易記錄失敗: {e}")
+                    logger.error(f"讀取 {date_str} 交易記錄失敗: {e}")
             
             current_date += timedelta(days=1)
         
@@ -5775,15 +6019,15 @@ def generate_monthly_trading_report():
                                     else:
                                         monthly_data['account_data'][title] += int(value)
                                 except ValueError as e:
-                                    print(f"轉換數值失敗 {title}: {value} - {e}")
+                                    logger.error(f"轉換數值失敗 {title}: {value} - {e}")
                             account_row += 1
                         
                 except Exception as e:
-                    print(f"讀取日報 {filename} 失敗: {e}")
+                    logger.error(f"讀取日報 {filename} 失敗: {e}")
                     continue
         
         if not all_trades:
-            print("當月無交易記錄，不生成月報")
+            logger.info("當月無交易記錄，不生成月報")
             return False
         
         # 統計交易數據（從原始交易記錄）
@@ -5807,12 +6051,12 @@ def generate_monthly_trading_report():
                 monthly_data['total_cancels'] += 1
         
         # 分析平倉交易明細（整月所有平倉）
-        print(f"正在分析 {len(all_trades)} 筆月度交易記錄...")
+        logger.info(f"正在分析 {len(all_trades)} 筆月度交易記錄...")
         cover_trades, total_cover_quantity, contract_pnl = analyze_simple_trading_stats(all_trades)
         monthly_data['total_cover_quantity'] = total_cover_quantity
         monthly_data['contract_pnl'] = contract_pnl
         monthly_data['cover_trades'] = cover_trades
-        print(f"月度統計完成：平倉 {total_cover_quantity} 口，{len(cover_trades)} 筆交易")
+        logger.info(f"月度統計完成：平倉 {total_cover_quantity} 口，{len(cover_trades)} 筆交易")
         
         # 獲取最後一天的帳戶狀態和持倉狀態
         if last_trading_day_date:
@@ -5838,7 +6082,7 @@ def generate_monthly_trading_report():
                     monthly_data['position_data'] = position_response.json()
                     
             except Exception as e:
-                print(f"獲取最後一天狀態失敗: {e}")
+                logger.error(f"獲取最後一天狀態失敗: {e}")
                 monthly_data['account_data'] = {}
                 monthly_data['position_data'] = None
         
@@ -6192,7 +6436,7 @@ def generate_monthly_trading_report():
         return True
         
     except Exception as e:
-        print(f"生成交易月報失敗: {e}")
+        logger.error(f"生成交易月報失敗: {e}")
         return False
 
 
@@ -6224,9 +6468,9 @@ def send_daily_trading_statistics():
                     with open(trades_file, 'r', encoding='utf-8') as f:
                         daily_trades = json.load(f)
                         trades.extend(daily_trades)
-                        print(f"讀取 {date_str} 交易記錄：{len(daily_trades)} 筆")
+                        logger.info(f"讀取 {date_str} 交易記錄：{len(daily_trades)} 筆")
                 except Exception as e:
-                    print(f"讀取 {date_str} 交易記錄失敗: {e}")
+                    logger.error(f"讀取 {date_str} 交易記錄失敗: {e}")
         
         # 統計變數
         total_orders = 0  # 委託單量
@@ -6269,11 +6513,11 @@ def send_daily_trading_statistics():
             # 使用基本統計分析平倉口數（不重新計算損益，使用永豐API提供的數據）
             # 只統計今天的平倉交易明細，但使用7天數據做開倉價格配對
             today_str = today.strftime('%Y%m%d')
-            print(f"正在統計 {len(trades)} 筆交易記錄（篩選當天 {today_str} 的平倉明細）...")
+            logger.info(f"正在統計 {len(trades)} 筆交易記錄（篩選當天 {today_str} 的平倉明細）...")
             cover_trades, total_cover_quantity, contract_pnl = analyze_simple_trading_stats(trades, filter_date=today_str)
-            print(f"統計完成：平倉 {total_cover_quantity} 口，{len(cover_trades)} 筆交易")
+            logger.info(f"統計完成：平倉 {total_cover_quantity} 口，{len(cover_trades)} 筆交易")
         else:
-            print("沒有找到交易記錄")
+            logger.info("沒有找到交易記錄")
             cover_trades = []
             total_cover_quantity = 0
         
@@ -6371,7 +6615,7 @@ def send_daily_trading_statistics():
         response = requests.post(url, json=payload, timeout=10)
         response.raise_for_status()
         
-        print(f"已發送交易統計：{today_str}")
+        logger.info(f"已發送交易統計：{today_str}")
         
         # 發送前端系統日誌
         try:
@@ -6408,7 +6652,7 @@ def send_daily_trading_statistics():
         create_managed_thread(target=delayed_generate_reports, name="延遲報表生成線程").start()
         
     except Exception as e:
-        print(f"發送每日交易統計失敗: {e}")
+        logger.error(f"發送每日交易統計失敗: {e}")
 
 
 @app.route('/api/manual/order', methods=['POST'])
@@ -6583,7 +6827,7 @@ def send_unified_failure_message(data, reason, order_id="未知"):
                 send_telegram_message(fail_message)
                 
     except Exception as e:
-        print(f"發送統一失敗訊息錯誤: {e}")
+        logger.error(f"發送統一失敗訊息錯誤: {e}")
         # 如果統一格式失敗，回退到簡單訊息
         send_telegram_message(f"❌ 提交失敗：{reason}")
 
@@ -6591,12 +6835,12 @@ def process_signal(data):
     """處理TradingView訊號（參考TXserver.py邏輯）"""
     global has_processed_delivery_exit, active_trades, contract_txf, contract_mxf, contract_tmf, rollover_mode
     
-    print(f"[process_signal] 開始處理訊號數據: {data}")
+    logger.info(f"[process_signal] 開始處理訊號數據: {data}")
     
     try:
         # 驗證API是否已連線
         if not sinopac_connected or not sinopac_api:
-            print("錯誤: 永豐API未連線")
+            logger.error("錯誤: 永豐API未連線")
             send_unified_failure_message(data, "永豐API未連線")
             return
             
@@ -6622,14 +6866,14 @@ def process_signal(data):
         order_type = "IOC"
         price_type = "MKT"
         
-        print(f"解析結果: type={msg_type}, direction={direction}, price={price}")
-        print(f"合約數量: TXF={qty_txf}, MXF={qty_mxf}, TMF={qty_tmf}")
-        print(f"轉倉模式: {is_rollover_mode}")
+        logger.info(f"解析結果: type={msg_type}, direction={direction}, price={price}")
+        logger.info(f"合約數量: TXF={qty_txf}, MXF={qty_mxf}, TMF={qty_tmf}")
+        logger.info(f"轉倉模式: {is_rollover_mode}")
         
         # 驗證價格
         if price <= 0:
             error_msg = f"價格 {price} 無效"
-            print(f"錯誤: {error_msg}")
+            logger.error(f"錯誤: {error_msg}")
             send_unified_failure_message(data, error_msg)
             return
             
@@ -6637,7 +6881,7 @@ def process_signal(data):
         trading_status = requests.get(f'http://127.0.0.1:{CURRENT_PORT}/api/trading/status', timeout=5).json()
         if not trading_status.get('is_trading_day', False) or not trading_status.get('is_market_open', False):
             error_msg = "非交易時間"
-            print(f"錯誤: {error_msg}")
+            logger.error(f"錯誤: {error_msg}")
             send_unified_failure_message(data, error_msg)
             return
             
@@ -6690,9 +6934,9 @@ def process_signal(data):
                         break
                 contract_tmf = r1_contract if r1_contract else sorted_contracts[0]
         
-        print(f"當前合約: TXF={contract_txf.code if contract_txf else None}, "
-              f"MXF={contract_mxf.code if contract_mxf else None}, "
-              f"TMF={contract_tmf.code if contract_tmf else None}")
+        logger.info(f"當前合約: TXF={contract_txf.code if contract_txf else None}, "
+                    f"MXF={contract_mxf.code if contract_mxf else None}, "
+                    f"TMF={contract_tmf.code if contract_tmf else None}")
         
         # 處理進場訊號
         if msg_type == "entry":
@@ -6704,12 +6948,12 @@ def process_signal(data):
             
         else:
             error_msg = f"無效訊號類型 {msg_type}"
-            print(f"錯誤: {error_msg}")
+            logger.error(f"錯誤: {error_msg}")
             send_unified_failure_message(data, error_msg)
             
     except Exception as e:
         error_msg = str(e)
-        print(f"[process_signal] 處理訊號失敗：{error_msg}")
+        logger.error(f"[process_signal] 處理訊號失敗：{error_msg}")
         import traceback
         traceback.print_exc()
         send_unified_failure_message(data, error_msg[:100])
@@ -6718,11 +6962,11 @@ def process_entry_signal(data, qty_txf, qty_mxf, qty_tmf, direction, price, orde
     """處理進場訊號"""
     global active_trades, contract_txf, contract_mxf, contract_tmf, rollover_mode
     
-    print(f"[process_entry_signal] 處理進場訊號: direction={direction}")
+    logger.info(f"[process_entry_signal] 處理進場訊號: direction={direction}")
     
     if direction not in ["開多", "開空"]:
         error_msg = f"無效進場動作 {direction}"
-        print(f"錯誤: {error_msg}")
+        logger.error(f"錯誤: {error_msg}")
         send_unified_failure_message(data, error_msg)
         return
         
@@ -6736,7 +6980,7 @@ def process_entry_signal(data, qty_txf, qty_mxf, qty_tmf, direction, price, orde
     has_opposite = any(p.direction != expected_action and p.quantity != 0 for p in positions)
     
     if has_opposite:
-        print("警告: 存在相反持倉，取消下單")
+        logger.warning("警告: 存在相反持倉，取消下單")
         
         # 發送提交失敗訊息
         contracts = [
@@ -6794,7 +7038,7 @@ def process_entry_signal(data, qty_txf, qty_mxf, qty_tmf, direction, price, orde
                 else:
                     contract_type = f"合約{contract.code}"
                     
-                print(f"[process_entry_signal] 開始處理{name}進場: {qty} 口 {direction}，開倉合約: {contract.code} ({contract_type})")
+                logger.info(f"[process_entry_signal] 開始處理{name}進場: {qty} 口 {direction}，開倉合約: {contract.code} ({contract_type})")
                 
                 result = place_futures_order_tx_style(
                     contract=contract,
@@ -6808,13 +7052,13 @@ def process_entry_signal(data, qty_txf, qty_mxf, qty_tmf, direction, price, orde
                 
                 if result.get('success'):
                     active_trades[contract_key_map[name]] = data.get('tradeId')
-                    print(f"{name}進場成功，開倉合約: {contract.code} ({contract_type})")
+                    logger.info(f"{name}進場成功，開倉合約: {contract.code} ({contract_type})")
                 else:
-                    print(f"{name}進場失敗: {result.get('message', '未知錯誤')}")
+                    logger.error(f"{name}進場失敗: {result.get('message', '未知錯誤')}")
                     
             except Exception as e:
                 error_msg = str(e)
-                print(f"{name}進場異常: {error_msg}")
+                logger.error(f"{name}進場異常: {error_msg}")
                 
                 # 創建單個合約的data用於發送失敗訊息
                 single_data = data.copy()
@@ -6827,7 +7071,7 @@ def process_exit_signal(data, qty_txf, qty_mxf, qty_tmf, direction, price, order
     """處理出場訊號"""
     global active_trades, rollover_mode
     
-    print(f"[process_exit_signal] 處理出場訊號: direction={direction}")
+    logger.info(f"[process_exit_signal] 處理出場訊號: direction={direction}")
     
     # 平倉邏輯：使用實際持倉的合約進行平倉
     is_rollover_mode = data.get('rollover_mode', False)
@@ -6839,7 +7083,7 @@ def process_exit_signal(data, qty_txf, qty_mxf, qty_tmf, direction, price, order
     elif direction == "平空":
         target_direction = safe_constants.get_action('SELL')
     else:
-        print(f"警告: 未知的平倉方向: {direction}")
+        logger.warning(f"警告: 未知的平倉方向: {direction}")
         return
     
     position_txf = next((p for p in positions if p.code.startswith("TXF") and p.quantity != 0 and p.direction == target_direction), None) if qty_txf > 0 else None
@@ -6849,18 +7093,18 @@ def process_exit_signal(data, qty_txf, qty_mxf, qty_tmf, direction, price, order
     has_position = bool(position_txf or position_mxf or position_tmf)
     
     # 調試信息
-    print(f"[平倉檢查] 訊號方向: {direction}, 目標持倉方向: {target_direction}")
-    print(f"[平倉檢查] 找到持倉: TXF={position_txf is not None}, MXF={position_mxf is not None}, TMF={position_tmf is not None}")
+    logger.info(f"[平倉檢查] 訊號方向: {direction}, 目標持倉方向: {target_direction}")
+    logger.info(f"[平倉檢查] 找到持倉: TXF={position_txf is not None}, MXF={position_mxf is not None}, TMF={position_tmf is not None}")
     if position_txf:
-        print(f"[平倉檢查] TXF持倉: {position_txf.code}, 方向: {position_txf.direction}, 數量: {position_txf.quantity}")
+        logger.info(f"[平倉檢查] TXF持倉: {position_txf.code}, 方向: {position_txf.direction}, 數量: {position_txf.quantity}")
     if position_mxf:
-        print(f"[平倉檢查] MXF持倉: {position_mxf.code}, 方向: {position_mxf.direction}, 數量: {position_mxf.quantity}")
+        logger.info(f"[平倉檢查] MXF持倉: {position_mxf.code}, 方向: {position_mxf.direction}, 數量: {position_mxf.quantity}")
     if position_tmf:
-        print(f"[平倉檢查] TMF持倉: {position_tmf.code}, 方向: {position_tmf.direction}, 數量: {position_tmf.quantity}")
+        logger.info(f"[平倉檢查] TMF持倉: {position_tmf.code}, 方向: {position_tmf.direction}, 數量: {position_tmf.quantity}")
             
     if not has_position:
-        print(f"警告: 無對應方向的持倉，取消平倉。訊號: {direction}")
-        print(f"當前所有持倉: {[(p.code, p.direction, p.quantity) for p in positions if p.quantity != 0]}")
+        logger.warning(f"警告: 無對應方向的持倉，取消平倉。訊號: {direction}")
+        logger.info(f"當前所有持倉: {[(p.code, p.direction, p.quantity) for p in positions if p.quantity != 0]}")
         
         # 發送提交失敗訊息 - 使用轉倉邏輯選擇合約（用於通知顯示）
         contracts_to_check = [
@@ -6905,7 +7149,7 @@ def process_exit_signal(data, qty_txf, qty_mxf, qty_tmf, direction, price, order
             
         # 從持倉中獲取合約代碼，然後找到對應的合約對象
         position_code = position.code
-        print(f"持倉合約代碼: {position_code}")
+        logger.info(f"持倉合約代碼: {position_code}")
         
         try:
             # 獲取該類型的所有合約
@@ -6914,13 +7158,13 @@ def process_exit_signal(data, qty_txf, qty_mxf, qty_tmf, direction, price, order
                 # 找到與持倉代碼匹配的合約對象
                 for contract in contracts:
                     if contract.code == position_code:
-                        print(f"找到匹配的合約對象: {contract.code}")
+                        logger.info(f"找到匹配的合約對象: {contract.code}")
                         return contract
                         
-            print(f"警告: 未找到持倉 {position_code} 對應的合約對象")
+            logger.warning(f"警告: 未找到持倉 {position_code} 對應的合約對象")
             return None
         except Exception as e:
-            print(f"獲取持倉合約對象失敗: {e}")
+            logger.error(f"獲取持倉合約對象失敗: {e}")
             return None
     
     contracts_positions = [
@@ -6940,7 +7184,7 @@ def process_exit_signal(data, qty_txf, qty_mxf, qty_tmf, direction, price, order
                 else:
                     contract_type = f"合約{contract.code}"
                     
-                print(f"[process_exit_signal] 開始處理{name}出場: {qty} 口，平倉合約: {contract.code} ({contract_type})")
+                logger.info(f"[process_exit_signal] 開始處理{name}出場: {qty} 口，平倉合約: {contract.code} ({contract_type})")
                 
                 result = place_futures_order_tx_style(
                     contract=contract,
@@ -6955,13 +7199,13 @@ def process_exit_signal(data, qty_txf, qty_mxf, qty_tmf, direction, price, order
                 
                 if result.get('success'):
                     active_trades[contract_key_map[name]] = None
-                    print(f"{name}出場成功，平倉合約: {contract.code} ({contract_type})")
+                    logger.info(f"{name}出場成功，平倉合約: {contract.code} ({contract_type})")
                 else:
-                    print(f"{name}出場失敗: {result.get('message', '未知錯誤')}")
+                    logger.error(f"{name}出場失敗: {result.get('message', '未知錯誤')}")
             
             except Exception as e:
                 error_msg = str(e)
-                print(f"{name}出場異常: {error_msg}")
+                logger.error(f"{name}出場異常: {error_msg}")
                 
                 # 創建單個合約的data用於發送失敗訊息
                 single_data = data.copy()
@@ -7105,7 +7349,7 @@ def place_futures_order_tx_style(contract, quantity, direction, price, order_typ
         # 僅在後端控制台顯示，不發送到前端
         
         # 訂單提交成功 - 不需要立即發送通知，等callback處理
-        print(f"訂單提交成功: {order_id} - {contract_name} {quantity} 口 {direction}")
+        logger.info(f"訂單提交成功: {order_id} - {contract_name} {quantity} 口 {direction}")
         
         return {
             'success': True,
@@ -7116,7 +7360,7 @@ def place_futures_order_tx_style(contract, quantity, direction, price, order_typ
             
     except Exception as e:
         error_msg = str(e)
-        print(f"下單失敗: {error_msg}")
+        logger.error(f"下單失敗: {error_msg}")
         
         # 記錄掛單失敗日誌
         contract_name = "大台" if contract.code.startswith('TXF') else "小台" if contract.code.startswith('MXF') else "微台"
@@ -7178,7 +7422,7 @@ def init_contracts():
     global contract_txf, contract_mxf, contract_tmf
     
     try:
-        print("[init_contracts] 開始初始化合約對象...")
+        logger.info("[init_contracts] 開始初始化合約對象...")
         
         # 初始化大台指合約（使用轉倉邏輯）
         txf_contracts = sinopac_api.Contracts.Futures.get("TXF")
@@ -7186,7 +7430,7 @@ def init_contracts():
             sorted_contracts = sorted(txf_contracts, key=lambda x: x.delivery_date)
             if rollover_mode and next_month_contracts.get('TXF'):
                 contract_txf = next_month_contracts['TXF']
-                print(f"大台指合約（轉倉模式）: {contract_txf.code} (交割日: {contract_txf.delivery_date})")
+                logger.info(f"大台指合約（轉倉模式）: {contract_txf.code} (交割日: {contract_txf.delivery_date})")
             else:
                 # 非轉倉模式：尋找R1合約作為當月合約
                 r1_contract = None
@@ -7195,9 +7439,9 @@ def init_contracts():
                         r1_contract = contract
                         break
                 contract_txf = r1_contract if r1_contract else sorted_contracts[0]
-                print(f"大台指合約: {contract_txf.code} (交割日: {contract_txf.delivery_date})")
+                logger.info(f"大台指合約: {contract_txf.code} (交割日: {contract_txf.delivery_date})")
         else:
-            print("警告: 無法獲取大台指合約")
+            logger.warning("警告: 無法獲取大台指合約")
             
         # 初始化小台指合約（使用轉倉邏輯）
         mxf_contracts = sinopac_api.Contracts.Futures.get("MXF")
@@ -7205,7 +7449,7 @@ def init_contracts():
             sorted_contracts = sorted(mxf_contracts, key=lambda x: x.delivery_date)
             if rollover_mode and next_month_contracts.get('MXF'):
                 contract_mxf = next_month_contracts['MXF']
-                print(f"小台指合約（轉倉模式）: {contract_mxf.code} (交割日: {contract_mxf.delivery_date})")
+                logger.info(f"小台指合約（轉倉模式）: {contract_mxf.code} (交割日: {contract_mxf.delivery_date})")
             else:
                 # 非轉倉模式：尋找R1合約作為當月合約
                 r1_contract = None
@@ -7214,9 +7458,9 @@ def init_contracts():
                         r1_contract = contract
                         break
                 contract_mxf = r1_contract if r1_contract else sorted_contracts[0]
-                print(f"小台指合約: {contract_mxf.code} (交割日: {contract_mxf.delivery_date})")
+                logger.info(f"小台指合約: {contract_mxf.code} (交割日: {contract_mxf.delivery_date})")
         else:
-            print("警告: 無法獲取小台指合約")
+            logger.warning("警告: 無法獲取小台指合約")
             
         # 初始化微台指合約（使用轉倉邏輯）
         tmf_contracts = sinopac_api.Contracts.Futures.get("TMF")
@@ -7224,7 +7468,7 @@ def init_contracts():
             sorted_contracts = sorted(tmf_contracts, key=lambda x: x.delivery_date)
             if rollover_mode and next_month_contracts.get('TMF'):
                 contract_tmf = next_month_contracts['TMF']
-                print(f"微台指合約（轉倉模式）: {contract_tmf.code} (交割日: {contract_tmf.delivery_date})")
+                logger.info(f"微台指合約（轉倉模式）: {contract_tmf.code} (交割日: {contract_tmf.delivery_date})")
             else:
                 # 非轉倉模式：尋找R1合約作為當月合約
                 r1_contract = None
@@ -7233,11 +7477,11 @@ def init_contracts():
                         r1_contract = contract
                         break
                 contract_tmf = r1_contract if r1_contract else sorted_contracts[0]
-                print(f"微台指合約: {contract_tmf.code} (交割日: {contract_tmf.delivery_date})")
+                logger.info(f"微台指合約: {contract_tmf.code} (交割日: {contract_tmf.delivery_date})")
         else:
-            print("警告: 無法獲取微台指合約")
+            logger.warning("警告: 無法獲取微台指合約")
             
-        print("[init_contracts] 合約對象初始化完成")
+        logger.info("[init_contracts] 合約對象初始化完成")
         
         # 合約對象初始化完成後，立即執行轉倉狀態檢查
         print_console("SYSTEM", "INFO", "合約對象初始化完成，執行轉倉狀態檢查...")
@@ -7248,7 +7492,7 @@ def init_contracts():
             print_console("SYSTEM", "ERROR", "轉倉狀態檢查失敗", str(check_error))
         
     except Exception as e:
-        print(f"[init_contracts] 初始化合約對象失敗: {e}")
+        logger.error(f"[init_contracts] 初始化合約對象失敗: {e}")
         contract_txf = None
         contract_mxf = None
         contract_tmf = None
@@ -7293,18 +7537,18 @@ def place_futures_order(contract_code, quantity, direction, price=0, is_manual=F
             # 而不是中文的 direction 參數
             
             # 使用傳入的永豐官方參數
-            print(f"永豐手動下單參數檢查:")
-            print(f"  action_param: '{action_param}'")
-            print(f"  octype_param: '{octype_param}'")
+            logger.info(f"永豐手動下單參數檢查:")
+            logger.info(f"  action_param: '{action_param}'")
+            logger.info(f"  octype_param: '{octype_param}'")
             
             if action_param and octype_param:
                 # 使用永豐官方參數
                 final_action = safe_constants.get_action(action_param)
                 final_octype = safe_constants.get_oc_type(octype_param)
-                print(f"永豐手動下單使用官方參數: action={action_param} -> {final_action}, octype={octype_param} -> {final_octype}")
+                logger.info(f"永豐手動下單使用官方參數: action={action_param} -> {final_action}, octype={octype_param} -> {final_octype}")
             else:
                 # 如果沒有官方參數，顯示未知
-                print(f"錯誤: 永豐手動下單缺少官方參數")
+                logger.error(f"錯誤: 永豐手動下單缺少官方參數")
                 raise Exception('永豐手動下單缺少官方參數 action 和 octype')
         # WEBHOOK下單：使用 direction 參數
         else:
@@ -7312,27 +7556,27 @@ def place_futures_order(contract_code, quantity, direction, price=0, is_manual=F
                 if direction == "開多":
                     final_action = safe_constants.get_action('BUY')
                     final_octype = safe_constants.get_oc_type('New')
-                    print(f"WEBHOOK開多 -> BUY/New")
+                    logger.info(f"WEBHOOK開多 -> BUY/New")
                 elif direction == "開空":
                     final_action = safe_constants.get_action('SELL')
                     final_octype = safe_constants.get_oc_type('New')
-                    print(f"WEBHOOK開空 -> SELL/New")
+                    logger.info(f"WEBHOOK開空 -> SELL/New")
                 elif direction == "平多":
                     final_action = safe_constants.get_action('SELL')
                     final_octype = safe_constants.get_oc_type('Cover')
-                    print(f"WEBHOOK平多 -> SELL/Cover")
+                    logger.info(f"WEBHOOK平多 -> SELL/Cover")
                 elif direction == "平空":
                     final_action = safe_constants.get_action('BUY')
                     final_octype = safe_constants.get_oc_type('Cover')
-                    print(f"WEBHOOK平空 -> BUY/Cover")
+                    logger.info(f"WEBHOOK平空 -> BUY/Cover")
                 else:
-                    print(f"無效的WEBHOOK direction: '{direction}'")
+                    logger.info(f"無效的WEBHOOK direction: '{direction}'")
                     raise Exception(f'無效的WEBHOOK交易方向: {direction}')
             else:
-                print(f"WEBHOOK缺少direction參數")
+                logger.info(f"WEBHOOK缺少direction參數")
                 raise Exception('WEBHOOK缺少direction參數')
         
-        print(f"最終: action={final_action}, octype={final_octype}")
+        logger.info(f"最終: action={final_action}, octype={final_octype}")
         
         # 判斷訂單類型
         if is_manual:
@@ -7369,7 +7613,7 @@ def place_futures_order(contract_code, quantity, direction, price=0, is_manual=F
         # 檢查是否有操作訊息
         if hasattr(trade, 'operation') and trade.operation.get('op_msg'):
             error_msg = trade.operation.get('op_msg')
-            print(f"訂單操作訊息: {error_msg}")
+            logger.error(f"訂單操作訊息: {error_msg}")
             
             # 準備訂單資訊用於失敗通知
             contract_name = '大台' if contract_code == 'TXF' else '小台' if contract_code == 'MXF' else '微台'
@@ -7456,9 +7700,9 @@ def place_futures_order(contract_code, quantity, direction, price=0, is_manual=F
             # 保存訂單映射
             save_order_mapping()
         
-        print(f"訂單提交成功，單號: {order_id}")
-        print(f"訂單映射已建立: {order_info}")
-        print(f"當前 order_octype_map 內容: {order_octype_map}")
+        logger.info(f"訂單提交成功，單號: {order_id}")
+        logger.info(f"訂單映射已建立: {order_info}")
+        logger.info(f"當前 order_octype_map 內容: {order_octype_map}")
         
         # 記錄掛單成功日誌（僅後端顯示）
         log_message = get_simple_order_log_message(
@@ -7502,11 +7746,11 @@ def send_telegram_file(file_path, caption=""):
     """發送Telegram檔案"""
     try:
         if not os.path.exists(ENV_PATH):
-            print(f"找不到 .env 檔案，路徑: {ENV_PATH}")
+            logger.info(f"找不到 .env 檔案，路徑: {ENV_PATH}")
             return False
             
         if not os.path.exists(file_path):
-            print(f"找不到檔案，路徑: {file_path}")
+            logger.info(f"找不到檔案，路徑: {file_path}")
             return False
         
         # 讀取環境變數
@@ -7524,13 +7768,13 @@ def send_telegram_file(file_path, caption=""):
                 chat_id_raw = line.split('=', 1)[1].strip().strip('"')
         
         if not bot_token or not chat_id_raw:
-            print("Telegram設定不完整")
+            logger.warning("Telegram設定不完整")
             return False
         
         # 支援多個CHAT_ID，用逗號分隔
         chat_ids = [id.strip() for id in chat_id_raw.split(',') if id.strip()]
         
-        print(f"準備發送檔案到 {len(chat_ids)} 個接收者")
+        logger.info(f"準備發送檔案到 {len(chat_ids)} 個接收者")
         
         # 發送檔案
         url = f"https://api.telegram.org/bot{bot_token}/sendDocument"
@@ -7548,18 +7792,18 @@ def send_telegram_file(file_path, caption=""):
                     'caption': caption
                 }
                 
-                print(f"發送檔案到 Chat ID: {chat_id}")
+                logger.info(f"發送檔案到 Chat ID: {chat_id}")
                 response = requests.post(url, files=files, data=data, timeout=30)
                 
                 if response.status_code == 200:
-                    print(f"Telegram檔案發送成功 (Chat ID: {chat_id})")
+                    logger.info(f"Telegram檔案發送成功 (Chat ID: {chat_id})")
                     success_count += 1
                 else:
-                    print(f"Telegram檔案發送失敗 (Chat ID: {chat_id}): {response.status_code}")
+                    logger.error(f"Telegram檔案發送失敗 (Chat ID: {chat_id}): {response.status_code}")
             
         # 判斷整體發送結果
         if success_count == total_count:
-            print(f"Telegram檔案發送完成！成功發送到 {success_count}/{total_count} 個接收者")
+            logger.info(f"Telegram檔案發送完成！成功發送到 {success_count}/{total_count} 個接收者")
             
             # 記錄前端系統日誌（合併發送：生成報表 + 檔案發送）
             try:
@@ -7581,7 +7825,7 @@ def send_telegram_file(file_path, caption=""):
             
             return True
         else:
-            print(f"Telegram檔案部分發送失敗！成功發送到 {success_count}/{total_count} 個接收者")
+            logger.warning(f"Telegram檔案部分發送失敗！成功發送到 {success_count}/{total_count} 個接收者")
             
             # 記錄失敗日誌
             try:
@@ -7597,7 +7841,7 @@ def send_telegram_file(file_path, caption=""):
             return success_count > 0  # 至少有一個成功就返回True
             
     except Exception as e:
-        print(f"發送Telegram檔案失敗: {e}")
+        logger.error(f"發送Telegram檔案失敗: {e}")
         return False
 
 def send_telegram_message(message, log_type="info"):
@@ -7605,7 +7849,7 @@ def send_telegram_message(message, log_type="info"):
     try:
         
         if not os.path.exists(ENV_PATH):
-            print(f"找不到 .env 檔案，路徑: {ENV_PATH}")
+            logger.info(f"找不到 .env 檔案，路徑: {ENV_PATH}")
             return False
         
         load_dotenv(ENV_PATH)
@@ -7613,17 +7857,17 @@ def send_telegram_message(message, log_type="info"):
         chat_id_raw = os.getenv('CHAT_ID')
         
         if not bot_token:
-            print("找不到 BOT_TOKEN")
+            logger.info("找不到 BOT_TOKEN")
             return False
         if not chat_id_raw:
-            print("找不到 CHAT_ID")
+            logger.info("找不到 CHAT_ID")
             return False
         
         # 支援多個CHAT_ID，用逗號分隔
         chat_ids = [id.strip() for id in chat_id_raw.split(',') if id.strip()]
         
-        print(f"BOT_TOKEN: {bot_token[:10]}...")
-        print(f"CHAT_IDs: {chat_ids}")
+        logger.info(f"BOT_TOKEN: {bot_token[:10]}...")
+        logger.info(f"CHAT_IDs: {chat_ids}")
         
         url = f'https://api.telegram.org/bot{bot_token}/sendMessage'
         
@@ -7639,20 +7883,20 @@ def send_telegram_message(message, log_type="info"):
                 'parse_mode': 'HTML'
             }
             
-            print(f"發送請求到 Telegram API (Chat ID: {chat_id})...")
+            logger.info(f"發送請求到 Telegram API (Chat ID: {chat_id})...")
             response = requests.post(url, json=payload, timeout=10)
             
-            print(f"Telegram API 回應 (Chat ID: {chat_id}): {response.status_code}")
+            logger.info(f"Telegram API 回應 (Chat ID: {chat_id}): {response.status_code}")
             
             if response.status_code == 200:
-                print(f"Telegram 訊息發送成功 (Chat ID: {chat_id})！")
+                logger.info(f"Telegram 訊息發送成功 (Chat ID: {chat_id})！")
                 success_count += 1
             else:
-                print(f"Telegram 訊息發送失敗 (Chat ID: {chat_id}): {response.text}")
+                logger.error(f"Telegram 訊息發送失敗 (Chat ID: {chat_id}): {response.text}")
         
         # 判斷整體發送結果
         if success_count == total_count:
-            print(f"Telegram 訊息發送完成！成功發送到 {success_count}/{total_count} 個接收者")
+            logger.info(f"Telegram 訊息發送完成！成功發送到 {success_count}/{total_count} 個接收者")
             
             # 根據訊息內容判斷發送狀態類型
             if "提交成功" in message:
@@ -7690,7 +7934,7 @@ def send_telegram_message(message, log_type="info"):
             
             return True
         else:
-            print(f"Telegram 訊息部分發送失敗！成功發送到 {success_count}/{total_count} 個接收者")
+            logger.error(f"Telegram 訊息部分發送失敗！成功發送到 {success_count}/{total_count} 個接收者")
             # 發送失敗也要記錄日誌
             try:
                 error_log_message = f"Telegram 訊息部分發送失敗！成功：{success_count}/{total_count}"
@@ -7699,16 +7943,16 @@ def send_telegram_message(message, log_type="info"):
                     json={'message': error_log_message, 'type': 'warning'},
                     timeout=5
                 )
-                print(f"TX系統錯誤日誌已發送: {error_log_message}")
+                logger.error(f"TX系統錯誤日誌已發送: {error_log_message}")
             except Exception as e:
-                print(f"發送TX系統錯誤日誌失敗: {e}")
+                logger.error(f"發送TX系統錯誤日誌失敗: {e}")
             return success_count > 0  # 至少有一個成功就返回True
             
     except Exception as e:
-        print(f"發送Telegram訊息失敗: {e}")
-        print(f"錯誤類型: {str(e.__class__.__name__)}")
+        logger.error(f"發送Telegram訊息失敗: {e}")
+        logger.error(f"錯誤類型: {str(e.__class__.__name__)}")
         if hasattr(e, 'response'):
-            print(f"回應內容: {e.response.text}")
+            logger.info(f"回應內容: {e.response.text}")
         import traceback
         traceback.print_exc()
         return False
@@ -7731,7 +7975,7 @@ def save_trade(data):
         try:
             trades = json.load(open(filename, 'r')) if os.path.exists(filename) else []
         except json.JSONDecodeError:
-            print(f"交易記錄檔案 {filename} 格式錯誤，重置為空列表")
+            logger.error(f"交易記錄檔案 {filename} 格式錯誤，重置為空列表")
             send_telegram_message(f"❌ 交易記錄檔案 {filename} 格式錯誤，已重置")
             trades = []
         data['timestamp'] = datetime.now().isoformat()
@@ -7742,7 +7986,7 @@ def save_trade(data):
         # 清理舊的交易記錄檔案（保留30個交易日）
         cleanup_old_trade_files()
     except Exception as e:
-        print(f"儲存交易記錄失敗：{str(e)}")
+        logger.error(f"儲存交易記錄失敗：{str(e)}")
         send_telegram_message(f"❌ 儲存交易記錄失敗：{str(e)[:100]}")
 
 def cleanup_old_trade_files():
@@ -7774,14 +8018,14 @@ def cleanup_old_trade_files():
                 file_path = os.path.join(LOG_DIR, filename)
                 try:
                     os.remove(file_path)
-                    print(f"已刪除舊交易記錄檔案：{filename}")
+                    logger.info(f"已刪除舊交易記錄檔案：{filename}")
                 except Exception as e:
-                    print(f"刪除檔案失敗 {filename}：{e}")
+                    logger.error(f"刪除檔案失敗 {filename}：{e}")
             
-            print(f"清理完成：保留 {len(trade_files) - len(files_to_delete)} 個檔案，刪除 {len(files_to_delete)} 個舊檔案")
+            logger.info(f"清理完成：保留 {len(trade_files) - len(files_to_delete)} 個檔案，刪除 {len(files_to_delete)} 個舊檔案")
     
     except Exception as e:
-        print(f"清理舊交易記錄檔案失敗：{e}")
+        logger.error(f"清理舊交易記錄檔案失敗：{e}")
 
 # 公共工具函數
 def get_sort_date(contract):
@@ -7861,12 +8105,12 @@ def get_next_month_contracts():
                         next_month_contracts[code] = next_month_contract
                         
             except Exception as e:
-                print(f"獲取{code}次月合約失敗: {e}")
+                logger.error(f"獲取{code}次月合約失敗: {e}")
                 
         return next_month_contracts
         
     except Exception as e:
-        print(f"獲取次月合約失敗: {e}")
+        logger.error(f"獲取次月合約失敗: {e}")
         return {}
 
 def check_rollover_mode():
@@ -8038,11 +8282,11 @@ def get_contract_for_rollover(contract_type):
     # 轉倉模式，使用次月合約
     next_month_contract = next_month_contracts.get(contract_type)
     if next_month_contract:
-        print(f"轉倉模式: 使用次月{contract_type}合約 {next_month_contract.code}")
+        logger.info(f"轉倉模式: 使用次月{contract_type}合約 {next_month_contract.code}")
         return next_month_contract
     else:
         # 如果沒有次月合約，回退到當前合約
-        print(f"警告: 沒有次月{contract_type}合約，使用當前合約")
+        logger.warning(f"警告: 沒有次月{contract_type}合約，使用當前合約")
         if contract_type == 'TXF':
             return contract_txf
         elif contract_type == 'MXF':
@@ -8058,7 +8302,7 @@ def process_rollover_signal(data):
     
     signal_id = data.get('tradeId')
     if signal_id in rollover_processed_signals:
-        print(f"轉倉訊號 {signal_id} 已處理，跳過")
+        logger.info(f"轉倉訊號 {signal_id} 已處理，跳過")
         return True
     
     # 檢查是否為轉倉模式
@@ -8067,7 +8311,7 @@ def process_rollover_signal(data):
     
     # 檢查是否為第一個webhook訊號
     if len(rollover_processed_signals) == 0:
-        print("收到轉倉模式下的第一個webhook訊號")
+        logger.info("收到轉倉模式下的第一個webhook訊號")
         rollover_processed_signals.add(signal_id)
         return True
     
@@ -8093,7 +8337,7 @@ def start_rollover_checker():
                     time.sleep(sleep_seconds)
                     
             except Exception as e:
-                print(f"轉倉檢查器錯誤: {e}")
+                logger.error(f"轉倉檢查器錯誤: {e}")
                 time.sleep(3600)  # 發生錯誤時等待1小時
     
     rollover_thread = create_managed_thread(target=rollover_check_loop, name="轉倉檢查線程")
@@ -8120,11 +8364,11 @@ def check_api_connection():
             reconnect_attempts = 0
             return True
         except Exception as e:
-            print(f"API連線檢查失敗: {e}")
+            logger.error(f"API連線檢查失敗: {e}")
             return False
             
     except Exception as e:
-        print(f"檢查API連線時發生錯誤: {e}")
+        logger.error(f"檢查API連線時發生錯誤: {e}")
         return False
 
 def get_dynamic_check_interval():
@@ -8147,7 +8391,7 @@ def get_dynamic_check_interval():
             # 如果無法獲取交易狀態，預設使用較長的間隔
             return 600
     except Exception as e:
-        print(f"獲取動態檢查間隔失敗: {e}")
+        logger.error(f"獲取動態檢查間隔失敗: {e}")
         # 發生錯誤時使用較長的間隔
         return 600
 
@@ -8167,14 +8411,14 @@ def start_connection_monitor():
                 if is_reconnecting:
                     # 重連中：每30秒檢查一次
                     sleep_time = 30
-                    print(f"重連中，{sleep_time}秒後檢查連線狀態...")
+                    logger.info(f"重連中，{sleep_time}秒後檢查連線狀態...")
                 else:
                     # 正常狀態：使用動態間隔
                     sleep_time = check_interval
                     if check_interval == 60:
-                        print(f"交易時間，{sleep_time}秒後檢查連線狀態...")
+                        logger.info(f"交易時間，{sleep_time}秒後檢查連線狀態...")
                     else:
-                        print(f"非交易時間，{sleep_time}秒後檢查連線狀態...")
+                        logger.info(f"非交易時間，{sleep_time}秒後檢查連線狀態...")
                 
                 time.sleep(sleep_time)
                 
@@ -8183,20 +8427,20 @@ def start_connection_monitor():
                     if not check_api_connection():
                         # 如果還沒開始重連，發送斷線通知
                         if not is_reconnecting:
-                            print("檢測到API斷線，開始重連...")
+                            logger.info("檢測到API斷線，開始重連...")
                             send_telegram_message("⚠️ API連線異常！！！\n正在嘗試重新連線．．．")
                             is_reconnecting = True
                             reconnect_attempts = 0
                         
                         # 嘗試重連
                         if reconnect_api():
-                            print("API重連成功！")
+                            logger.info("API重連成功！")
                             send_telegram_message("✅ API連線成功！！！")
                             reconnect_attempts = 0
                             is_reconnecting = False
                         else:
                             reconnect_attempts += 1
-                            print(f"重連失敗，將在下次監控週期繼續嘗試... (第{reconnect_attempts}次)")
+                            logger.error(f"重連失敗，將在下次監控週期繼續嘗試... (第{reconnect_attempts}次)")
                             
                             # 發送警告通知（但不停止重連嘗試）
                             if reconnect_attempts % 5 == 0:  # 每5次失敗發送一次通知
@@ -8205,7 +8449,7 @@ def start_connection_monitor():
                             # 註意：不將 is_reconnecting 設為 False，繼續保持重連狀態
                 
             except Exception as e:
-                print(f"連線監控器錯誤: {e}")
+                logger.error(f"連線監控器錯誤: {e}")
                 time.sleep(60)  # 發生錯誤時等待1分鐘
     
     connection_thread = create_managed_thread(target=connection_monitor_loop, name="連線監控線程")
@@ -8220,21 +8464,21 @@ def reconnect_api():
     
     for attempt in range(1, max_retries + 1):
         try:
-            print(f"開始第{attempt}次重連API...")
+            logger.info(f"開始第{attempt}次重連API...")
             
             # 先登出（包含token清理）
             if sinopac_connected:
                 try:
                     sinopac_api.logout()
-                    print("已執行API登出")
+                    logger.info("已執行API登出")
                 except Exception as e:
-                    print(f"API登出時發生錯誤: {e}")
+                    logger.error(f"API登出時發生錯誤: {e}")
                 sinopac_connected = False
                 sinopac_login_status = False
             
             # 等待間隔時間（重試次數越多等待越久）
             wait_time = attempt * 2
-            print(f"等待{wait_time}秒後重新初始化...")
+            logger.info(f"等待{wait_time}秒後重新初始化...")
             time.sleep(wait_time)
             
             # 重新初始化API並登入
@@ -8246,16 +8490,16 @@ def reconnect_api():
                     except:
                         pass
                 
-                print("重新初始化API...")
+                logger.info("重新初始化API...")
                 init_sinopac_api()
                 
                 # 等待1秒讓API完全初始化
                 time.sleep(1)
                 
                 # 重新登入
-                print("嘗試重新登入...")
+                logger.info("嘗試重新登入...")
                 if login_sinopac():
-                    print(f"API重連成功！(第{attempt}次嘗試)")
+                    logger.info(f"API重連成功！(第{attempt}次嘗試)")
                     
                     # 發送前端系統日誌
                     try:
@@ -8269,20 +8513,20 @@ def reconnect_api():
                     
                     return True
                 else:
-                    print(f"第{attempt}次重連失敗：登入失敗")
+                    logger.error(f"第{attempt}次重連失敗：登入失敗")
                     
             except Exception as e:
-                print(f"第{attempt}次重連失敗：初始化錯誤 - {e}")
+                logger.error(f"第{attempt}次重連失敗：初始化錯誤 - {e}")
                 
         except Exception as e:
-            print(f"第{attempt}次重連時發生嚴重錯誤: {e}")
+            logger.error(f"第{attempt}次重連時發生嚴重錯誤: {e}")
         
         # 如果不是最後一次嘗試，記錄失敗並繼續
         if attempt < max_retries:
-            print(f"第{attempt}次重連失敗，準備下一次嘗試...")
+            logger.error(f"第{attempt}次重連失敗，準備下一次嘗試...")
     
     # 所有嘗試都失敗
-    print(f"API重連失敗！已嘗試{max_retries}次")
+    logger.error(f"API重連失敗！已嘗試{max_retries}次")
     
     # 發送前端系統日誌
     try:
@@ -8303,7 +8547,7 @@ def stop_connection_monitor():
     if connection_monitor_timer and connection_monitor_timer.is_alive():
         connection_monitor_timer.cancel()
         connection_monitor_timer = None
-        print("已停止連線監控器")
+        logger.info("已停止連線監控器")
 
 def get_contract_point_value(contract_code):
     """獲取合約點值"""
@@ -8459,10 +8703,10 @@ def load_historical_open_trades(close_trades):
     # 按日期排序（從最新到最舊）
     trade_files.sort(reverse=True)
     
-    print(f"搜尋歷史開倉記錄，共找到 {len(trade_files)} 個交易記錄檔案")
+    logger.info(f"搜尋歷史開倉記錄，共找到 {len(trade_files)} 個交易記錄檔案")
     
     for close_trade in close_trades:
-        print(f"搜尋 {close_trade['contract_code']} 的歷史開倉記錄...")
+        logger.info(f"搜尋 {close_trade['contract_code']} 的歷史開倉記錄...")
         
         # 為每個平倉交易尋找對應的開倉記錄
         for trade_file in trade_files:
@@ -8509,7 +8753,7 @@ def load_historical_open_trades(close_trades):
                             'real_opening_price': trade.get('real_opening_price', order.get('price', 0))
                         })
                         
-                        print(f"  找到歷史開倉記錄: {contract_code} {order.get('action')} {order.get('quantity')} 口 @ {order.get('price')}")
+                        logger.info(f"  找到歷史開倉記錄: {contract_code} {order.get('action')} {order.get('quantity')} 口 @ {order.get('price')}")
                         break  # 找到一個就停止搜尋該合約
                 
                 # 如果找到了開倉記錄，停止搜尋其他檔案
@@ -8517,7 +8761,7 @@ def load_historical_open_trades(close_trades):
                     break
                 
             except Exception as e:
-                print(f"讀取歷史記錄失敗 {trade_file}: {e}")
+                logger.error(f"讀取歷史記錄失敗 {trade_file}: {e}")
                 continue
     
     return historical_opens
@@ -8526,16 +8770,16 @@ def get_opening_price_from_profit_loss_api(contract_code):
     """使用list_profit_loss + detail_id獲取真實開倉價格"""
     try:
         if not sinopac_connected or not sinopac_api:
-            print(f"[損益API查詢] 永豐API未連接，無法查詢{contract_code}開倉價格")
+            logger.info(f"[損益API查詢] 永豐API未連接，無法查詢{contract_code}開倉價格")
             return None
             
         # 檢查是否有list_profit_loss API
         if hasattr(sinopac_api, 'list_profit_loss'):
-            print(f"[損益API查詢] 使用list_profit_loss查詢{contract_code}損益明細")
+            logger.info(f"[損益API查詢] 使用list_profit_loss查詢{contract_code}損益明細")
             profit_loss_data = sinopac_api.list_profit_loss(sinopac_api.futopt_account)
             
             if profit_loss_data:
-                print(f"[損益API查詢] 獲取到{len(profit_loss_data) if isinstance(profit_loss_data, list) else 1}筆損益記錄")
+                logger.info(f"[損益API查詢] 獲取到{len(profit_loss_data) if isinstance(profit_loss_data, list) else 1}筆損益記錄")
                 
                 # 查找與當前合約相關的記錄
                 for item in profit_loss_data:
@@ -8543,43 +8787,43 @@ def get_opening_price_from_profit_loss_api(contract_code):
                         # 檢查合約代碼匹配
                         item_contract = getattr(item, 'code', None) or getattr(item, 'contract', None) or getattr(item, 'symbol', None)
                         if item_contract and contract_code in str(item_contract):
-                            print(f"[損益API查詢] 找到{contract_code}相關記錄")
+                            logger.info(f"[損益API查詢] 找到{contract_code}相關記錄")
                             
                             # 獲取detail_id用於進一步查詢
                             detail_id = getattr(item, 'id', None) or getattr(item, 'detail_id', None) or getattr(item, 'trade_id', None)
                             if detail_id and hasattr(sinopac_api, 'detail_id'):
-                                print(f"[損益API查詢] 使用detail_id: {detail_id}查詢詳細信息")
+                                logger.info(f"[損益API查詢] 使用detail_id: {detail_id}查詢詳細信息")
                                 detail_data = sinopac_api.detail_id(detail_id)
                                 
                                 if detail_data:
                                     # 從詳細信息中提取開倉價格
                                     entry_price = getattr(detail_data, 'entry_price', None) or getattr(detail_data, 'open_price', None) or getattr(detail_data, 'avg_price', None)
                                     if entry_price:
-                                        print(f"[損益API查詢] ✅ 從detail_id獲取到{contract_code}真實開倉價格: {entry_price}")
+                                        logger.info(f"[損益API查詢] ✅ 從detail_id獲取到{contract_code}真實開倉價格: {entry_price}")
                                         return float(entry_price)
                             
                             # 如果無法使用detail_id，嘗試直接從損益記錄獲取
                             entry_price = getattr(item, 'entry_price', None) or getattr(item, 'open_price', None) or getattr(item, 'avg_price', None)
                             if entry_price:
-                                print(f"[損益API查詢] ✅ 從損益記錄獲取到{contract_code}開倉價格: {entry_price}")
+                                logger.info(f"[損益API查詢] ✅ 從損益記錄獲取到{contract_code}開倉價格: {entry_price}")
                                 return float(entry_price)
                                 
                     except Exception as item_error:
-                        print(f"[損益API查詢] 處理損益項目時出錯: {item_error}")
+                        logger.error(f"[損益API查詢] 處理損益項目時出錯: {item_error}")
                         continue
                         
-        print(f"[損益API查詢] ❌ 未能從損益API獲取{contract_code}開倉價格")
+        logger.info(f"[損益API查詢] ❌ 未能從損益API獲取{contract_code}開倉價格")
         return None
         
     except Exception as e:
-        print(f"[損益API查詢] 查詢{contract_code}開倉價格時發生錯誤: {e}")
+        logger.error(f"[損益API查詢] 查詢{contract_code}開倉價格時發生錯誤: {e}")
         return None
 
 def get_opening_price_from_api(contract_code):
     """直接從永豐API查詢指定合約的開倉價格（原成交均價）"""
     try:
         if not sinopac_connected or not sinopac_api:
-            print(f"[API查詢] 永豐API未連接，無法查詢{contract_code}開倉價格")
+            logger.info(f"[API查詢] 永豐API未連接，無法查詢{contract_code}開倉價格")
             return None
             
         # 優先使用list_profit_loss + detail_id方法
@@ -8590,11 +8834,11 @@ def get_opening_price_from_api(contract_code):
         # 檢查是否有list_profit_loss API可用（官方提及的端點）
         if hasattr(sinopac_api, 'list_profit_loss'):
             try:
-                print(f"[API探索] 發現list_profit_loss API，嘗試查詢損益明細")
+                logger.info(f"[API探索] 發現list_profit_loss API，嘗試查詢損益明細")
                 profit_loss_data = sinopac_api.list_profit_loss(sinopac_api.futopt_account)
-                print(f"[API探索] list_profit_loss返回數據類型: {type(profit_loss_data)}")
+                logger.info(f"[API探索] list_profit_loss返回數據類型: {type(profit_loss_data)}")
                 if profit_loss_data:
-                    print(f"[API探索] list_profit_loss數據內容示例: {profit_loss_data[:2] if isinstance(profit_loss_data, list) else str(profit_loss_data)[:200]}")
+                    logger.info(f"[API探索] list_profit_loss數據內容示例: {profit_loss_data[:2] if isinstance(profit_loss_data, list) else str(profit_loss_data)[:200]}")
                     
                     # 查看是否有與當前合約相關的數據
                     for item in profit_loss_data:
@@ -8602,39 +8846,39 @@ def get_opening_price_from_api(contract_code):
                             # 檢查各種可能的屬性名稱
                             item_contract = getattr(item, 'code', None) or getattr(item, 'contract', None) or getattr(item, 'symbol', None)
                             if item_contract and contract_code in str(item_contract):
-                                print(f"[API探索] 找到{contract_code}相關損益數據: {item}")
+                                logger.info(f"[API探索] 找到{contract_code}相關損益數據: {item}")
                                 
                                 # 查看是否有detail_id或id可用於進一步查詢
                                 detail_id = getattr(item, 'id', None) or getattr(item, 'detail_id', None) or getattr(item, 'trade_id', None)
                                 if detail_id:
-                                    print(f"[API探索] 發現detail_id: {detail_id}，可用於查詢詳細信息")
+                                    logger.info(f"[API探索] 發現detail_id: {detail_id}，可用於查詢詳細信息")
                                     
                                     # 嘗試查看是否有原成交價格信息
                                     entry_price = getattr(item, 'entry_price', None) or getattr(item, 'open_price', None) or getattr(item, 'avg_price', None)
                                     if entry_price:
-                                        print(f"[API探索] 發現原成交價格: {entry_price}")
+                                        logger.info(f"[API探索] 發現原成交價格: {entry_price}")
                                         return float(entry_price)
                                 
                                 break
                         except Exception as item_error:
-                            print(f"[API探索] 處理損益項目時出錯: {item_error}")
+                            logger.error(f"[API探索] 處理損益項目時出錯: {item_error}")
                             continue
                             
             except Exception as e:
-                print(f"[API探索] list_profit_loss查詢失敗: {e}")
+                logger.error(f"[API探索] list_profit_loss查詢失敗: {e}")
         else:
-            print(f"[API探索] 未發現list_profit_loss API，檢查其他可能的API方法")
+            logger.info(f"[API探索] 未發現list_profit_loss API，檢查其他可能的API方法")
             
             # 列出sinopac_api物件的所有方法，尋找其他可能的API端點
             try:
                 api_methods = [method for method in dir(sinopac_api) if not method.startswith('_')]
                 profit_related_methods = [method for method in api_methods if 'profit' in method.lower() or 'loss' in method.lower() or 'trade' in method.lower() or 'deal' in method.lower()]
                 if profit_related_methods:
-                    print(f"[API探索] 發現可能相關的API方法: {profit_related_methods}")
+                    logger.info(f"[API探索] 發現可能相關的API方法: {profit_related_methods}")
                 else:
-                    print(f"[API探索] 未發現明顯的損益相關API方法")
+                    logger.info(f"[API探索] 未發現明顯的損益相關API方法")
             except Exception as e:
-                print(f"[API探索] 列舉API方法失敗: {e}")
+                logger.error(f"[API探索] 列舉API方法失敗: {e}")
         
         # 查詢持倉
         positions = sinopac_api.list_positions(sinopac_api.futopt_account)
@@ -8642,17 +8886,17 @@ def get_opening_price_from_api(contract_code):
             if hasattr(position, 'code') and position.code == contract_code:
                 if hasattr(position, 'price') and position.price:
                     opening_price = float(position.price)
-                    print(f"[API查詢] 找到{contract_code}開倉價格: {opening_price}")
+                    logger.info(f"[API查詢] 找到{contract_code}開倉價格: {opening_price}")
                     return opening_price
                 else:
-                    print(f"[API查詢] {contract_code}持倉無價格信息")
+                    logger.info(f"[API查詢] {contract_code}持倉無價格信息")
                     return None
         
-        print(f"[API查詢] 未找到{contract_code}持倉記錄")
+        logger.info(f"[API查詢] 未找到{contract_code}持倉記錄")
         return None
         
     except Exception as e:
-        print(f"[API查詢] 查詢{contract_code}開倉價格失敗: {e}")
+        logger.error(f"[API查詢] 查詢{contract_code}開倉價格失敗: {e}")
         return None
 
 def analyze_simple_trading_stats(trades, filter_date=None):
@@ -8741,24 +8985,24 @@ def analyze_simple_trading_stats(trades, filter_date=None):
                 })
     
     # 打印開倉和平倉記錄數量
-    print(f"當天開倉交易數量: {len(open_trades)}")
-    print(f"當天平倉交易數量: {len(close_trades)}")
+    logger.info(f"當天開倉交易數量: {len(open_trades)}")
+    logger.info(f"當天平倉交易數量: {len(close_trades)}")
     
     # 如果當天沒有開倉記錄，嘗試從歷史記錄中查找
     if close_trades and not open_trades:
-        print("當天沒有開倉記錄，嘗試從歷史記錄中查找...")
+        logger.info("當天沒有開倉記錄，嘗試從歷史記錄中查找...")
         open_trades = load_historical_open_trades(close_trades)
-        print(f"從歷史記錄找到開倉交易數量: {len(open_trades)}")
+        logger.info(f"從歷史記錄找到開倉交易數量: {len(open_trades)}")
     
     # 打印所有開倉交易記錄
-    print("所有開倉交易記錄:")
+    logger.info("所有開倉交易記錄:")
     for i, open_trade in enumerate(open_trades):
-        print(f"  {i+1}. {open_trade['contract_code']} {open_trade['action']} {open_trade['quantity']} 口 @ {open_trade['price']}")
+        logger.info(f"  {i+1}. {open_trade['contract_code']} {open_trade['action']} {open_trade['quantity']} 口 @ {open_trade['price']}")
     
     # 打印所有平倉交易記錄    
-    print("所有平倉交易記錄:")
+    logger.info("所有平倉交易記錄:")
     for i, close_trade in enumerate(close_trades):
-        print(f"  {i+1}. {close_trade['contract_code']} {close_trade['action']} {close_trade['quantity']} 口 @ {close_trade['price']}")
+        logger.info(f"  {i+1}. {close_trade['contract_code']} {close_trade['action']} {close_trade['quantity']} 口 @ {close_trade['price']}")
     
     # 簡單配對平倉交易，找對應的開倉價格
     for close_trade in close_trades:
@@ -8769,30 +9013,30 @@ def analyze_simple_trading_stats(trades, filter_date=None):
         open_price = None
         
         # 從開倉交易中找最接近的價格（時間上最早的）
-        print(f"尋找平倉交易 {close_trade['contract_code']} {close_trade['action']} {close_trade['quantity']} 口 的開倉記錄...")
-        print(f"需要找的開倉動作: {required_open_action}")
+        logger.info(f"尋找平倉交易 {close_trade['contract_code']} {close_trade['action']} {close_trade['quantity']} 口 的開倉記錄...")
+        logger.info(f"需要找的開倉動作: {required_open_action}")
         
         # 優先直接從永豐API查詢該合約的開倉價格（更快更準確）
         api_opening_price = get_opening_price_from_api(close_trade['contract_code'])
         if api_opening_price is not None:
             open_price = api_opening_price
-            print(f"✅ 從永豐API直接獲取開倉價格：{close_trade['contract_code']} @ {open_price}")
+            logger.info(f"✅ 從永豐API直接獲取開倉價格：{close_trade['contract_code']} @ {open_price}")
         else:
             # 回退到本地記錄配對
             for open_trade in open_trades:
                 if (open_trade['contract_code'] == close_trade['contract_code'] and
                     open_trade['action'] == required_open_action):
-                    print(f"檢查開倉記錄：{open_trade['contract_code']} {open_trade['action']}")
-                    print(f"  原價格: {open_trade.get('price', 'N/A')}")
-                    print(f"  真實開倉價格: {open_trade.get('real_opening_price', 'N/A')}")
+                    logger.info(f"檢查開倉記錄：{open_trade['contract_code']} {open_trade['action']}")
+                    logger.info(f"  原價格: {open_trade.get('price', 'N/A')}")
+                    logger.info(f"  真實開倉價格: {open_trade.get('real_opening_price', 'N/A')}")
                     
                     # 優先使用真實開倉價格
                 if 'real_opening_price' in open_trade and open_trade['real_opening_price'] is not None:
                     open_price = float(open_trade['real_opening_price'])
-                    print(f"✅ 使用永豐API真實開倉價格：{open_trade['contract_code']} {open_trade['action']} {open_trade['quantity']} 口 @ {open_price}（真實均價）")
+                    logger.info(f"✅ 使用永豐API真實開倉價格：{open_trade['contract_code']} {open_trade['action']} {open_trade['quantity']} 口 @ {open_price}（真實均價）")
                     break
                 else:
-                    print(f"⚠️ 開倉記錄中沒有真實開倉價格，將使用傳統配對邏輯")
+                    logger.info(f"⚠️ 開倉記錄中沒有真實開倉價格，將使用傳統配對邏輯")
         
         # 如果沒有找到真實開倉價格，使用傳統配對邏輯
         if open_price is None:
@@ -8803,18 +9047,18 @@ def analyze_simple_trading_stats(trades, filter_date=None):
                     open_trade['quantity'] == close_trade['quantity']):
                     # 優先使用真實開倉價格
                     open_price = open_trade.get('real_opening_price', open_trade['price'])
-                    print(f"找到精確配對開倉記錄：{open_trade['contract_code']} {open_trade['action']} {open_trade['quantity']} 口 @ {open_price} (real_price: {open_trade.get('real_opening_price', 'N/A')})")
+                    logger.info(f"找到精確配對開倉記錄：{open_trade['contract_code']} {open_trade['action']} {open_trade['quantity']} 口 @ {open_price} (real_price: {open_trade.get('real_opening_price', 'N/A')})")
                     break
         
         # 如果精確匹配失敗，嘗試只匹配合約和動作（忽略數量）
         if open_price is None:
-            print("精確匹配失敗，嘗試模糊匹配...")
+            logger.error("精確匹配失敗，嘗試模糊匹配...")
             for open_trade in open_trades:
                 if (open_trade['contract_code'] == close_trade['contract_code'] and
                     open_trade['action'] == required_open_action):
                     # 優先使用真實開倉價格
                     open_price = open_trade.get('real_opening_price', open_trade['price'])
-                    print(f"找到模糊配對開倉記錄：{open_trade['contract_code']} {open_trade['action']} {open_trade['quantity']} 口 @ {open_price} (real_price: {open_trade.get('real_opening_price', 'N/A')})")
+                    logger.info(f"找到模糊配對開倉記錄：{open_trade['contract_code']} {open_trade['action']} {open_trade['quantity']} 口 @ {open_price} (real_price: {open_trade.get('real_opening_price', 'N/A')})")
                     break
         
         # 計算單筆損益（如果找到開倉價格）
@@ -8857,9 +9101,9 @@ def analyze_simple_trading_stats(trades, filter_date=None):
         if not real_order_id and sinopac_connected and sinopac_api:
             try:
                 # 這裡可以加入更多的API查詢邏輯來獲取真實的訂單ID
-                print(f"[數據獲取] 嘗試從API查詢{close_trade['contract_code']}的訂單詳情")
+                logger.info(f"[數據獲取] 嘗試從API查詢{close_trade['contract_code']}的訂單詳情")
             except Exception as e:
-                print(f"[數據獲取] API查詢失敗: {e}")
+                logger.error(f"[數據獲取] API查詢失敗: {e}")
         
         # 如果還是沒有交割日期，嘗試從全域合約對象獲取
         if not delivery_date:
@@ -8885,10 +9129,10 @@ def analyze_simple_trading_stats(trades, filter_date=None):
                 for contract in contracts:
                     if contract_prefix in contract.code:
                         delivery_date = contract.delivery_date.strftime('%Y/%m/%d') if hasattr(contract.delivery_date, 'strftime') else str(contract.delivery_date)
-                        print(f"[數據獲取] 從API獲取到{contract.code}交割日: {delivery_date}")
+                        logger.info(f"[數據獲取] 從API獲取到{contract.code}交割日: {delivery_date}")
                         break
             except Exception as e:
-                print(f"[數據獲取] 從API獲取交割日失敗: {e}")
+                logger.error(f"[數據獲取] 從API獲取交割日失敗: {e}")
         
         cover_trades.append({
             'contract_name': close_trade['contract_name'],
@@ -8909,9 +9153,9 @@ def analyze_simple_trading_stats(trades, filter_date=None):
 
 def analyze_daily_trades_with_pnl(trades):
     """分析每日交易並計算損益"""
-    print(f"  開始分析 {len(trades)} 筆交易記錄...")
+    logger.info(f"  開始分析 {len(trades)} 筆交易記錄...")
     enhanced_trades, position_tracker = analyze_position_changes(trades)
-    print(f"  識別出 {len(enhanced_trades)} 筆有效成交記錄")
+    logger.info(f"  識別出 {len(enhanced_trades)} 筆有效成交記錄")
     
     # 為每個合約建立開倉列表
     open_positions = {}
@@ -8921,7 +9165,7 @@ def analyze_daily_trades_with_pnl(trades):
     # 統計開平倉數量
     open_count = sum(1 for t in enhanced_trades if t['actual_oc_type'] == 'New')
     close_count = sum(1 for t in enhanced_trades if t['actual_oc_type'] == 'Cover')
-    print(f"  開倉交易：{open_count} 筆，平倉交易：{close_count} 筆")
+    logger.info(f"  開倉交易：{open_count} 筆，平倉交易：{close_count} 筆")
     
     for trade_info in enhanced_trades:
         contract_code = trade_info['contract_code']
@@ -8960,7 +9204,7 @@ def analyze_daily_trades_with_pnl(trades):
      
      # 最終統計
     total_pnl = sum(trade.get('pnl', 0) for trade in cover_trades_with_pnl)
-    print(f"  損益計算完成：{len(cover_trades_with_pnl)} 筆平倉，總損益 {total_pnl:,} TWD")
+    logger.info(f"  損益計算完成：{len(cover_trades_with_pnl)} 筆平倉，總損益 {total_pnl:,} TWD")
      
     return cover_trades_with_pnl, total_cover_quantity
 
@@ -9023,10 +9267,43 @@ def start_tx_service():
     print_console("SYSTEM", "SUCCESS", "TX交易服務初始化完成")
 
 if __name__ == '__main__':
+    # ========== 自動更新檢查 ==========
+    # 在程式啟動前先檢查程式更新
+    try:
+        from updater import check_and_update
+        
+        print("=" * 60)
+        print("Auto91 啟動前自動更新檢查")
+        print("=" * 60)
+        
+        # 執行自動更新檢查（自動確認模式）
+        update_success = check_and_update(auto_confirm=True)
+        
+        if update_success:
+            print("版本檢查完成")
+        else:
+            print("更新檢查過程中發生問題，但將繼續啟動程式")
+        
+        print("=" * 60)
+        print("如果遇到模組導入錯誤，請手動安裝相關Python套件")
+        
+    except ImportError as e:
+        print(f"警告: 無法導入自動更新器: {e}")
+        print("跳過更新檢查，直接啟動程式...")
+        print("如果遇到模組導入錯誤，請手動安裝相關Python套件")
+    except Exception as e:
+        print(f"警告: 更新檢查過程中發生錯誤: {e}")
+        print("跳過更新檢查，直接啟動程式...")
+        print("如果遇到模組導入錯誤，請手動安裝相關Python套件")
+    
     try:
         # 設置信號處理器 (只能在主線程中設置)
         signal.signal(signal.SIGINT, signal_handler)
         signal.signal(signal.SIGTERM, signal_handler)
+        
+        # 確保環境配置文件存在
+        ensure_tx_env_exists()
+        ensure_btc_env_exists()
         
         # 初始化隧道管理器
         init_tunnel_service()
