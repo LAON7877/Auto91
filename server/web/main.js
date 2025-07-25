@@ -804,8 +804,8 @@ window.onload = function() {
         document.getElementById('binance_secret_key').dataset.raw = btcEnv.BINANCE_SECRET_KEY || '';
         document.getElementById('binance_user_id').value = btcEnv.BINANCE_USER_ID || '';
         document.getElementById('trading_pair').value = btcEnv.TRADING_PAIR || 'BTCUSDT';
-        document.getElementById('leverage').value = btcEnv.LEVERAGE || '5';
-        document.getElementById('position_size').value = btcEnv.POSITION_SIZE || '10';
+        document.getElementById('leverage').value = btcEnv.LEVERAGE || '20';
+        document.getElementById('position_size').value = btcEnv.POSITION_SIZE || '80';
         document.getElementById('margin_type').value = btcEnv.MARGIN_TYPE || 'CROSS';
         document.getElementById('contract_type').value = btcEnv.CONTRACT_TYPE || 'PERPETUAL';
         
@@ -3968,8 +3968,8 @@ function loadBtcConfig() {
                 'binance_secret_key': config.BINANCE_SECRET_KEY || '',
                 'binance_user_id': config.BINANCE_USER_ID || '',
                 'trading_pair': config.TRADING_PAIR || 'BTCUSDT',
-                'leverage': config.LEVERAGE || '5',
-                'position_size': config.POSITION_SIZE || '10',
+                'leverage': config.LEVERAGE || '20',
+                'position_size': config.POSITION_SIZE || '80',
                 'margin_type': config.MARGIN_TYPE || 'CROSS',
                 'contract_type': config.CONTRACT_TYPE || 'PERPETUAL'
             };

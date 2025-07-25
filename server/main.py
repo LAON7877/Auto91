@@ -1431,14 +1431,48 @@ def api_btc_startup_notification():
         
         data = notification_data['data']
         
+        # 從環境配置獲取交易設定
+        try:
+            if BTC_MODULE_AVAILABLE:
+                import btcmain
+                env_data = btcmain.load_btc_env_data()
+            else:
+                env_data = {}
+        except:
+            env_data = {}
+
+        # 獲取配置數據
+        trading_pair = env_data.get('TRADING_PAIR', 'BTCUSDT')
+        contract_type = env_data.get('CONTRACT_TYPE', 'PERPETUAL')
+        leverage = env_data.get('LEVERAGE', '20')
+        position_size = env_data.get('POSITION_SIZE', '80')
+        margin_type = env_data.get('MARGIN_TYPE', 'CROSS')
+        binance_user_id = env_data.get('BINANCE_USER_ID', '403303357')
+        
+        # 轉換合約類型顯示
+        contract_type_display = {
+            'PERPETUAL': '永續',
+            'FUTURES': '期貨', 
+            'SPOT': '現貨'
+        }.get(contract_type, '永續')
+        
+        # 轉換保證金模式顯示
+        margin_type_display = {
+            'CROSS': '全倉',
+            'ISOLATED': '逐倉'
+        }.get(margin_type, '全倉')
+        
+        # 檢查API連線狀態
+        api_status = "已連線" if data.get('api_connected', True) else "未連線"
+        
         # 格式化通知訊息
         message = "✅ 自動交易比特幣正在啟動中.....\n"
         message += "  ═════ 系統資訊 ═════\n"
         message += "  交易平台：Binance Futures\n"
-        message += f"  綁定帳戶：{data['account_id']}\n"
-        message += "  API 狀態：已連線\n"
+        message += f"  綁定帳戶：{binance_user_id}\n"
+        message += f"  API 狀態：{api_status}\n"
         message += "  ═════ 選用合約 ═════\n"
-        message += f"  {data['trading_pair']} PERPETUAL（{data['leverage']}x {data['max_loss_percent']}% {data['margin_type']}）\n"
+        message += f"  {trading_pair} {contract_type_display}（{leverage}x {position_size}% {margin_type_display}）\n"
         message += "  ═════ 帳戶狀態 ═════\n"
         message += f"錢包餘額 {data['wallet_balance']:.8f} USDT \n"
         message += f"可供轉帳 {data['available_balance']:.8f} USDT \n"
@@ -1447,15 +1481,16 @@ def api_btc_startup_notification():
         message += f"交易手續費 {data['today_commission']:.8f} USDT\n"
         message += f"保證金比率 {data['margin_ratio']:.2f}% \n"
         message += f"槓桿使用率 {data['leverage_usage']:.2f}% \n"
-        message += f"本日盈虧 {data['today_pnl']:.8f} USDT {data['today_pnl_percent']:.2f}%\n"
-        message += f"7 天盈虧 {data['week_pnl']:.8f} USDT {data['week_pnl_percent']:.2f}%\n"
-        message += f"30天盈虧 {data['month_pnl']:.8f} USDT {data['month_pnl_percent']:.2f}%\n"
+        message += f"本日盈虧 {data['today_pnl']:.8f} USDT\n"
+        message += f"7 天盈虧 {data['week_pnl']:.8f} USDT\n"
+        message += f"30天盈虧 {data['month_pnl']:.8f} USDT\n"
         message += "  ═════ 持倉狀態 ═════\n"
         
         # 處理持倉信息
         if data['positions']:
             for pos in data['positions']:
-                message += f"{pos['side']}｜{pos['size']:.8f}BTC｜{pos['entry_price']:.2f} USDT｜${pos['unrealized_pnl']:.2f} USDT\n"
+                side_display = "多單" if pos['side'] == 'LONG' else "空單"
+                message += f"{side_display}｜{pos['size']:.8f}BTC｜{pos['entry_price']:.2f} USDT｜${pos['unrealized_pnl']:.2f} USDT\n"
         else:
             message += "❌ 無持倉部位\n"
         
@@ -1464,6 +1499,15 @@ def api_btc_startup_notification():
         
         if telegram_success:
             print_console("TELEGRAM", "SUCCESS", "Telegram［啟動通知］訊息發送成功！！！")
+            
+            # 發送前端日誌記錄
+            if BTC_MODULE_AVAILABLE:
+                try:
+                    import btcmain
+                    btcmain.log_btc_frontend_message("Telegram［啟動通知］訊息發送成功！！！", "success")
+                except Exception as log_error:
+                    logger.warning(f"BTC前端日誌發送失敗: {log_error}")
+            
             return jsonify({
                 'success': True,
                 'message': '啟動通知發送成功',
@@ -1508,40 +1552,39 @@ def api_btc_trading_statistics():
         message += f"委託次數：{data['order_count']} 筆\n"
         message += f"取消次數：{data['cancel_count']} 筆\n"
         message += f"成交次數：{data['fill_count']} 筆\n"
-        message += f"買入總量 {data['buy_volume']:.8f}\n"
-        message += f"賣出總量 {data['sell_volume']:.8f}\n"
-        message += f"平均買價 {data['avg_buy_price']:.2f}\n"
-        message += f"平均賣價 {data['avg_sell_price']:.2f}\n"
-        message += f"已實現獲利 {data['realized_profit']:.8f}\n"
-        message += f"已實現盈虧 {data['realized_pnl']:.8f}\n"
-        message += f"總計已實現盈虧 {data['total_realized_pnl']:.8f}\n"
+        message += f"買入總量：{data['buy_volume']:.2f} USDT\n"
+        message += f"賣出總量：{data['sell_volume']:.2f} USDT\n"
+        message += f"平均買價：{data['avg_buy_price']:.2f} USDT\n"
+        message += f"平均賣價：{data['avg_sell_price']:.2f} USDT\n"
         message += "  ═════ 帳戶狀態 ═════\n"
-        message += f"錢包餘額 {account['wallet_balance']:.8f} USDT \n"
-        message += f"可供轉帳 {account['available_balance']:.8f} USDT \n"
-        message += f"保證金餘額 {account['margin_balance']:.8f} USDT \n"
-        message += f"未實現盈虧 {account['unrealized_pnl']:.8f} USDT \n"
-        message += f"交易手續費 {account['today_commission']:.8f} USDT\n"
-        message += f"保證金比率 {account['margin_ratio']:.2f}% \n"
-        message += f"槓桿使用率 {account['leverage_usage']:.2f}% \n"
-        message += f"本日盈虧 {account['today_pnl']:.8f} USDT {account['today_pnl_percent']:.2f}%\n"
-        message += f"7 天盈虧 {account['week_pnl']:.8f} USDT {account['week_pnl_percent']:.2f}%\n"
-        message += f"30天盈虧 {account['month_pnl']:.8f} USDT {account['month_pnl_percent']:.2f}%\n"
+        message += f"錢包餘額：{account['wallet_balance']:.8f} USDT\n"
+        message += f"可供轉帳：{account['available_balance']:.8f} USDT\n"
+        message += f"保證金餘額：{account['margin_balance']:.8f} USDT\n"
+        message += f"未實現盈虧：{account['unrealized_pnl']:.8f} USDT\n"
+        message += f"交易手續費：{account['today_commission']:.8f} USDT\n"
+        message += f"保證金比率：{account['margin_ratio']:.2f}\n"
+        message += f"槓桿使用率：{account['leverage_usage']:.2f}\n"
+        message += f"本日盈虧：{account['today_pnl']:.8f} USDT\n"
+        message += f"7 天盈虧：{account['week_pnl']:.8f} USDT\n"
+        message += f"30天盈虧：{account['month_pnl']:.8f} USDT\n"
         message += "  ═════ 交易明細 ═════\n"
         
         # 處理平倉交易明細
         if data['closed_trades']:
             for trade in data['closed_trades']:
-                message += f"{trade['side']}｜{trade['size']:.8f}BTC｜{trade['entry_price']:.2f} USDT｜{trade['exit_price']:.2f} USDT\n"
+                side_display = "多單" if trade['side'] == 'LONG' else "空單"
+                message += f"{side_display}｜{trade['size']:.8f}BTC｜{trade['entry_price']:.2f} USDT｜{trade['exit_price']:.2f} USDT\n"
                 message += f"${trade['pnl']:.2f} USDT\n"
         else:
             message += "❌ 無平倉交易\n"
         
         message += "  ═════ 持倉狀態 ═════\n"
         
-        # 處理當前持倉
-        if account['positions']:
-            for pos in account['positions']:
-                message += f"{pos['side']}｜{pos['size']:.8f}BTC｜{pos['entry_price']:.2f} USDT｜${pos['unrealized_pnl']:.2f} USDT\n"
+        # 處理持倉信息
+        if data['positions']:
+            for pos in data['positions']:
+                side_display = "多單" if pos['side'] == 'LONG' else "空單"
+                message += f"{side_display}｜{pos['size']:.8f}BTC｜{pos['entry_price']:.2f} USDT｜${pos['unrealized_pnl']:.2f} USDT\n"
         else:
             message += "❌ 無持倉部位\n"
         
@@ -1550,6 +1593,15 @@ def api_btc_trading_statistics():
         
         if telegram_success:
             print_console("TELEGRAM", "SUCCESS", "Telegram［交易統計］訊息發送成功！！！")
+            
+            # 發送前端日誌記錄
+            if BTC_MODULE_AVAILABLE:
+                try:
+                    import btcmain
+                    btcmain.log_btc_frontend_message("Telegram［交易統計］訊息發送成功！！！", "success")
+                except Exception as log_error:
+                    logger.warning(f"BTC前端日誌發送失敗: {log_error}")
+                    
             return jsonify({
                 'success': True,
                 'message': '交易統計通知發送成功',
@@ -1682,42 +1734,133 @@ def api_btc_manual_order():
             'error': str(e)
         })
 
-@app.route('/api/btc/order_fill', methods=['POST'])
-def api_btc_order_fill():
-    """BTC訂單成交通知接口"""
-    if not BTC_MODULE_AVAILABLE:
-        return jsonify({'success': False, 'message': 'BTC模組不可用'})
-    
-    try:
-        fill_data = request.get_json()
-        if not fill_data:
-            return jsonify({'success': False, 'error': '缺少成交數據'})
-        
-        # 處理成交通知
-        result = btcmain.btc_process_fill_notification(fill_data)
-        return jsonify(result)
-        
-    except Exception as e:
-        logger.error(f"BTC成交通知處理失敗: {e}")
-        return jsonify({
-            'success': False,
-            'error': str(e)
-        })
 
 @app.route('/api/btc_bot_username', methods=['GET'])
 def api_get_btc_bot_username():
-    if BTC_MODULE_AVAILABLE:
-        return btcmain.get_btc_bot_username()
-    else:
-        return jsonify({'success': False, 'message': 'BTC模組不可用'})
+    try:
+        if BTC_MODULE_AVAILABLE:
+            return btcmain.get_btc_bot_username()
+        else:
+            # 如果BTC模組不可用，直接在這裡處理
+            import os
+            btc_env_path = os.path.join(os.path.dirname(__file__), 'config', 'btc.env')
+            bot_token = None
+            
+            if os.path.exists(btc_env_path):
+                with open(btc_env_path, 'r', encoding='utf-8') as f:
+                    for line in f:
+                        line = line.strip()
+                        if line.startswith('BOT_TOKEN_BTC='):
+                            bot_token = line.split('=', 1)[1]
+                            break
+            
+            if not bot_token:
+                bot_token = "7912873826:AAFPPDwuwspKVdyDGwh1oVqxH6u1gQ_N-jU"
+            
+            if bot_token:
+                import requests
+                try:
+                    response = requests.get(f"https://api.telegram.org/bot{bot_token}/getMe", timeout=10)
+                    if response.status_code == 200:
+                        bot_info = response.json()
+                        if bot_info.get('ok'):
+                            username = bot_info['result'].get('username', 'Auto91_BtcBot')
+                            return jsonify({'username': f'@{username}'})
+                except:
+                    pass
+            
+            return jsonify({'username': '@Auto91_BtcBot'})
+    except Exception as e:
+        return jsonify({'username': '@Auto91_BtcBot'})
 
 @app.route('/api/save_btc_env', methods=['POST'])
 def api_save_btc_env():
     """保存BTC環境變量 (前端調用路由)"""
-    if BTC_MODULE_AVAILABLE:
-        return btcmain.save_btc_env()
-    else:
-        return jsonify({'success': False, 'message': 'BTC模組不可用'})
+    try:
+        if BTC_MODULE_AVAILABLE:
+            return btcmain.save_btc_env()
+        else:
+            # 如果BTC模組不可用，直接在這裡處理保存
+            import os
+            from flask import request
+            
+            data = request.get_json()
+            btc_env_path = os.path.join(os.path.dirname(__file__), 'config', 'btc.env')
+            
+            # 檢查是否有空值欄位
+            required_fields = ['CHAT_ID_BTC', 'BINANCE_API_KEY', 'BINANCE_SECRET_KEY', 'BINANCE_USER_ID', 'TRADING_PAIR', 'LEVERAGE', 'POSITION_SIZE', 'MARGIN_TYPE', 'CONTRACT_TYPE']
+            has_empty_fields = False
+            
+            for field in required_fields:
+                if not data.get(field, '').strip():
+                    has_empty_fields = True
+                    break
+            
+            # 讀取當前登入狀態
+            current_login_status = '0'
+            if os.path.exists(btc_env_path):
+                try:
+                    with open(btc_env_path, 'r', encoding='utf-8') as f:
+                        for line in f:
+                            line = line.strip()
+                            if line.startswith('LOGIN_BTC='):
+                                current_login_status = line.split('=', 1)[1]
+                                break
+                except Exception:
+                    current_login_status = '0'
+            
+            # 如果有空欄位，強制登出狀態設為0，否則保持當前狀態
+            final_login_status = '0' if has_empty_fields else current_login_status
+            
+            # 創建BTC環境文件內容
+            btc_env_content = f"""# Telegram Bot
+BOT_TOKEN_BTC=7912873826:AAFPPDwuwspKVdyDGwh1oVqxH6u1gQ_N-jU
+
+# Telegram ID
+CHAT_ID_BTC={data.get('CHAT_ID_BTC', '')}
+
+# 幣安 API Key
+BINANCE_API_KEY={data.get('BINANCE_API_KEY', '')}
+
+# 幣安 Secret Key
+BINANCE_SECRET_KEY={data.get('BINANCE_SECRET_KEY', '')}
+
+# 幣安用戶ID
+BINANCE_USER_ID={data.get('BINANCE_USER_ID', '')}
+
+# 交易對
+TRADING_PAIR={data.get('TRADING_PAIR', 'BTCUSDT')}
+
+# 合約類型
+CONTRACT_TYPE={data.get('CONTRACT_TYPE', 'PERPETUAL')}
+
+# 槓桿倍數
+LEVERAGE={data.get('LEVERAGE', '20')}
+
+# 風險比例百分比
+POSITION_SIZE={data.get('POSITION_SIZE', '80')}
+
+# 保證金模式
+MARGIN_TYPE={data.get('MARGIN_TYPE', 'CROSS')}
+
+# 登入狀態
+LOGIN_BTC={final_login_status}
+"""
+            
+            # 確保配置目錄存在
+            os.makedirs(os.path.dirname(btc_env_path), exist_ok=True)
+            
+            # 儲存到btc.env文件
+            with open(btc_env_path, 'w', encoding='utf-8') as f:
+                f.write(btc_env_content)
+            
+            return jsonify({
+                'success': True, 
+                'message': 'BTC配置儲存成功',
+                'has_empty_fields': has_empty_fields
+            })
+    except Exception as e:
+        return jsonify({'success': False, 'message': f'儲存失敗: {str(e)}'})
 
 @app.route('/api/load_btc_env', methods=['GET'])
 def api_load_btc_env():
@@ -3032,6 +3175,12 @@ def api_position_status():
                                 contract_type = 'TMF'
                             
                             if contract_type:
+                                # 從合約代碼提取交割月份（如TXF202508 -> 202508）
+                                delivery_month = ''
+                                if len(contract_code) >= 8:
+                                    # 合約代碼格式：TXF202508, MXF202508, TMF202508
+                                    delivery_month = contract_code[-6:]  # 取最後6位數字
+                                
                                 opening_trades[contract_type] = {
                                     '開倉時間': trade.get('timestamp', ''),
                                     '成交單號': order.get('id', ''),  # 真實成交單號
@@ -3039,8 +3188,8 @@ def api_position_status():
                                     '訂單類型': order.get('order_type', ''),  # IOC, ROD等
                                     '委託價格類型': order.get('price_type', ''),
                                     '商品名稱': trade.get('contract_name', ''),
-                                    '到期月份': contract.get('delivery_month', ''),
-                                    '交割日': contract.get('delivery_month', ''),  # 用於計算實際交割日
+                                    '到期月份': delivery_month or contract.get('delivery_month', ''),
+                                    '交割日': delivery_month or contract.get('delivery_month', ''),  # 用於計算實際交割日
                                     '合約代號': contract_code,
                                     '開倉價格': trade.get('real_opening_price', order.get('price', 0))
                                 }
@@ -3083,6 +3232,12 @@ def api_position_status():
                     # 獲取開倉詳細信息
                     opening_info = opening_trades.get(contract_type, {})
                     
+                    # 從合約代碼提取交割月份（如果開倉記錄中沒有）
+                    delivery_month = opening_info.get('到期月份', '')
+                    if not delivery_month and len(contract_code) >= 8:
+                        # 合約代碼格式：TXF202508, MXF202508, TMF202508
+                        delivery_month = contract_code[-6:]  # 取最後6位數字
+                    
                     # 更新對應合約的資料
                     position_data[contract_type] = {
                         '動作': direction,
@@ -3098,8 +3253,8 @@ def api_position_status():
                         '委託條件': opening_info.get('訂單類型', ''),  # 兼容舊欄位名稱
                         '委託價格類型': opening_info.get('委託價格類型', ''),
                         '商品名稱': opening_info.get('商品名稱', ''),
-                        '到期月份': opening_info.get('到期月份', ''),
-                        '交割日': opening_info.get('交割日', ''),  # 交割日信息
+                        '到期月份': delivery_month,  # 確保有交割月份
+                        '交割日': delivery_month,  # 交割日信息
                         '合約代號': opening_info.get('合約代號', contract_code),
                         '開倉價格': opening_info.get('開倉價格', position.price)  # 真實開倉價格
                     }
@@ -4813,14 +4968,13 @@ LOGIN=0
 def ensure_btc_env_exists():
     """確保BTC環境配置文件存在，如果不存在則創建預設配置"""
     try:
-        if BTC_MODULE_AVAILABLE:
-            btc_env_path = os.path.join(os.path.dirname(__file__), 'config', 'btc.env')
+        btc_env_path = os.path.join(os.path.dirname(__file__), 'config', 'btc.env')
+        
+        if not os.path.exists(btc_env_path):
+            print_console("SYSTEM", "INFO", "BTC環境配置文件不存在，正在創建預設配置...")
             
-            if not os.path.exists(btc_env_path):
-                print_console("SYSTEM", "INFO", "BTC環境配置文件不存在，正在創建預設配置...")
-                
-                # 創建預設BTC環境配置
-                default_btc_config = """# Telegram Bot
+            # 創建預設BTC環境配置
+            default_btc_config = """# Telegram Bot
 BOT_TOKEN_BTC=7912873826:AAFPPDwuwspKVdyDGwh1oVqxH6u1gQ_N-jU
 
 # Telegram ID
@@ -4842,10 +4996,10 @@ TRADING_PAIR=BTCUSDT
 CONTRACT_TYPE=PERPETUAL
 
 # 槓桿倍數
-LEVERAGE=5
+LEVERAGE=20
 
 # 風險比例百分比
-POSITION_SIZE=5
+POSITION_SIZE=80
 
 # 保證金模式
 MARGIN_TYPE=CROSS
@@ -4853,18 +5007,16 @@ MARGIN_TYPE=CROSS
 # 登入狀態
 LOGIN_BTC=0
 """
-                # 確保config目錄存在
-                os.makedirs(os.path.dirname(btc_env_path), exist_ok=True)
-                
-                # 寫入預設配置
-                with open(btc_env_path, 'w', encoding='utf-8') as f:
-                    f.write(default_btc_config)
-                
-                print_console("SYSTEM", "SUCCESS", f"BTC環境配置文件已創建: {btc_env_path}")
-            else:
-                print_console("SYSTEM", "INFO", "BTC環境配置文件已存在")
+            # 確保config目錄存在
+            os.makedirs(os.path.dirname(btc_env_path), exist_ok=True)
+            
+            # 寫入預設配置
+            with open(btc_env_path, 'w', encoding='utf-8') as f:
+                f.write(default_btc_config)
+            
+            print_console("SYSTEM", "SUCCESS", f"BTC環境配置文件已創建: {btc_env_path}")
         else:
-            print_console("SYSTEM", "WARNING", "BTC模組不可用，跳過BTC環境配置檢查")
+            print_console("SYSTEM", "INFO", "BTC環境配置文件已存在")
     except Exception as e:
         print_console("SYSTEM", "ERROR", "創建BTC環境配置失敗", str(e))
 
@@ -5096,12 +5248,12 @@ def schedule_next_check():
     if BTC_MODULE_AVAILABLE:
         schedule.every().day.at("09:00").do(lambda: btcmain.send_btc_daily_startup_notification())
         
-        # 設定BTC每日交易統計 23:59 (24/7無交易日限制，統計後會自動延遲生成日報和月報)
-        schedule.every().day.at("23:59").do(lambda: btcmain.check_btc_daily_trading_statistics())
+        # 設定BTC每日交易統計 23:58 (24/7無交易日限制，統計後會自動延遲生成日報和月報)
+        schedule.every().day.at("23:58").do(lambda: btcmain.check_btc_daily_trading_statistics())
         
         print_console("SYSTEM", "SUCCESS", "已設定BTC定時任務")
         print_console("SYSTEM", "INFO", "  - 09:00: BTC每日啟動通知")
-        print_console("SYSTEM", "INFO", "  - 23:59: BTC每日交易統計 (統計後延遲30秒生成日報，月末再延遲30秒生成月報)")
+        print_console("SYSTEM", "INFO", "  - 23:58: BTC每日交易統計 (統計後延遲30秒生成日報，月末再延遲30秒生成月報)")
     
     # 設定今天下午 14:50 的夜盤檢查
     schedule.every().day.at("14:50").do(check_night_session_notification)
@@ -5330,7 +5482,7 @@ def generate_trading_report(trades, account_data, position_data, cover_trades, t
         
         # 設置所有欄寬為19
         for col in range(1, 12):
-            ws.column_dimensions[get_column_letter(col)].width = 19
+            ws.column_dimensions[get_column_letter(col)].width = 25
             
         # 設置藍色和灰色背景、置中對齊
         blue_fill = PatternFill(start_color='B8CCE4', end_color='B8CCE4', fill_type='solid')
@@ -6030,24 +6182,20 @@ def generate_monthly_trading_report():
             logger.info("當月無交易記錄，不生成月報")
             return False
         
-        # 統計交易數據（從原始交易記錄）
-        processed_orders = set()
+        # 統計整月的提交成功、成交通知、取消/失敗次數
         for trade in all_trades:
-            raw_data = trade.get('raw_data', {})
-            order = raw_data.get('order', {})
-            order_id = order.get('id', '')
+            trade_type = trade.get('type', '')
             
-            # 統計委託單量
-            if trade.get('type') == 'order' and order_id not in processed_orders:
+            # 統計委託次數（提交成功的訂單）
+            if trade_type == 'order':
                 monthly_data['total_orders'] += 1
-                processed_orders.add(order_id)
             
-            # 統計成交單量
-            if trade.get('type') == 'deal':
+            # 統計成交次數（成交通知）
+            elif trade_type == 'deal':
                 monthly_data['total_trades'] += 1
             
-            # 統計取消單量
-            if trade.get('type') == 'cancel':
+            # 統計取消次數（包含提交失敗和主動取消）
+            elif trade_type == 'cancel' or trade_type == 'fail':
                 monthly_data['total_cancels'] += 1
         
         # 分析平倉交易明細（整月所有平倉）
@@ -6092,7 +6240,7 @@ def generate_monthly_trading_report():
         
         # 設置所有欄寬為19
         for col in range(1, 12):
-            ws.column_dimensions[get_column_letter(col)].width = 19
+            ws.column_dimensions[get_column_letter(col)].width = 25
         
         # 設置藍色和灰色背景、置中對齊
         blue_fill = PatternFill(start_color='B8CCE4', end_color='B8CCE4', fill_type='solid')
@@ -6490,25 +6638,34 @@ def send_daily_trading_statistics():
         processed_orders = set()
         
         if trades:  # 如果有讀取到交易記錄
-            # 基本統計（委託、成交、取消）
-            for trade in trades:
-                raw_data = trade.get('raw_data', {})
-                operation = raw_data.get('operation', {})
-                order = raw_data.get('order', {})
-                order_id = order.get('id', '')
-                
-                # 統計委託單量（所有提交成功的訂單，不重複計算）
-                if trade.get('type') == 'order' and order_id not in processed_orders:
-                    total_orders += 1
-                    processed_orders.add(order_id)
-                
-                # 統計成交單量（有成交記錄的訂單）
-                if trade.get('type') == 'deal':
-                    total_trades += 1
-                
-                # 統計取消單量
-                if trade.get('type') == 'cancel':
-                    total_cancels += 1
+            # 統計當天的提交成功、提交失敗、成交通知次數
+            today_str = today.strftime('%Y%m%d')
+            today_trades_file = os.path.join(TX_LOG_DIR, f'TXtrades_{today_str}.json')
+            
+            if os.path.exists(today_trades_file):
+                try:
+                    with open(today_trades_file, 'r', encoding='utf-8') as f:
+                        today_trades = json.load(f)
+                        
+                    for trade in today_trades:
+                        trade_type = trade.get('type', '')
+                        
+                        # 統計委託次數（提交成功的訂單）
+                        if trade_type == 'order':
+                            total_orders += 1
+                        
+                        # 統計成交次數（成交通知）
+                        elif trade_type == 'deal':
+                            total_trades += 1
+                        
+                        # 統計取消次數（包含提交失敗和主動取消）
+                        elif trade_type == 'cancel' or trade_type == 'fail':
+                            total_cancels += 1
+                            
+                except Exception as e:
+                    logger.error(f"讀取當天交易記錄失敗: {e}")
+            
+            logger.info(f"當天統計：委託{total_orders}筆，成交{total_trades}筆，取消{total_cancels}筆")
                 
             # 使用基本統計分析平倉口數（不重新計算損益，使用永豐API提供的數據）
             # 只統計今天的平倉交易明細，但使用7天數據做開倉價格配對
@@ -6724,6 +6881,35 @@ def manual_order():
             
         except Exception as e:
             error_msg = str(e)
+            
+            # 保存提交失敗記錄
+            save_trade({
+                'type': 'fail',
+                'trade_category': 'manual',
+                'raw_data': {
+                    'operation': {
+                        'op_type': 'OrderFail',
+                        'op_code': '99',
+                        'op_msg': error_msg
+                    },
+                    'order': {
+                        'action': action_param,
+                        'quantity': quantity,
+                        'price': price,
+                        'oc_type': octype_param,
+                        'order_type': order_type or 'IOC',
+                        'price_type': price_type or 'MKT'
+                    },
+                    'contract': {
+                        'code': contract_code
+                    }
+                },
+                'contract_name': '大台' if contract_code.startswith('TXF') else '小台' if contract_code.startswith('MXF') else '微台',
+                'contract_code': contract_code,
+                'error_reason': error_msg,
+                'is_manual': True
+            })
+            
             return jsonify({
                 'status': 'error',
                 'message': f'手動下單失敗: {error_msg}'
@@ -6746,6 +6932,25 @@ def send_unified_failure_message(data, reason, order_id="未知"):
     global contract_txf, contract_mxf, contract_tmf
     
     try:
+        # 保存提交失敗記錄
+        save_trade({
+            'type': 'fail',
+            'trade_category': 'auto',
+            'raw_data': {
+                'operation': {
+                    'op_type': 'SignalFail',
+                    'op_code': '99',
+                    'op_msg': reason
+                },
+                'order': {
+                    'id': order_id
+                },
+                'signal_data': data
+            },
+            'error_reason': reason,
+            'is_manual': False,
+            'signal_data': data
+        })
         # 解析訊號數據
         qty_txf = int(float(data.get('txf', 0)))
         qty_mxf = int(float(data.get('mxf', 0)))
@@ -8767,7 +8972,9 @@ def load_historical_open_trades(close_trades):
     return historical_opens
 
 def get_opening_price_from_profit_loss_api(contract_code):
-    """使用list_profit_loss + detail_id獲取真實開倉價格"""
+    """使用list_profit_loss + detail_id獲取真實開倉價格
+    根據官方建議：針對list_profit_loss得到的結果，將id帶入detail_id查詢該筆明細，從該筆明細裡找出原成交價格
+    """
     try:
         if not sinopac_connected or not sinopac_api:
             logger.info(f"[損益API查詢] 永豐API未連接，無法查詢{contract_code}開倉價格")
@@ -8781,42 +8988,67 @@ def get_opening_price_from_profit_loss_api(contract_code):
             if profit_loss_data:
                 logger.info(f"[損益API查詢] 獲取到{len(profit_loss_data) if isinstance(profit_loss_data, list) else 1}筆損益記錄")
                 
-                # 查找與當前合約相關的記錄
+                # 查找與當前合約相關的平倉記錄
                 for item in profit_loss_data:
                     try:
                         # 檢查合約代碼匹配
                         item_contract = getattr(item, 'code', None) or getattr(item, 'contract', None) or getattr(item, 'symbol', None)
                         if item_contract and contract_code in str(item_contract):
-                            logger.info(f"[損益API查詢] 找到{contract_code}相關記錄")
+                            logger.info(f"[損益API查詢] 找到{contract_code}相關損益記錄")
                             
-                            # 獲取detail_id用於進一步查詢
-                            detail_id = getattr(item, 'id', None) or getattr(item, 'detail_id', None) or getattr(item, 'trade_id', None)
-                            if detail_id and hasattr(sinopac_api, 'detail_id'):
-                                logger.info(f"[損益API查詢] 使用detail_id: {detail_id}查詢詳細信息")
-                                detail_data = sinopac_api.detail_id(detail_id)
+                            # 獲取該筆平倉記錄的ID，用於查詢詳細明細
+                            record_id = getattr(item, 'id', None) or getattr(item, 'detail_id', None) or getattr(item, 'trade_id', None)
+                            if record_id:
+                                logger.info(f"[損益API查詢] 獲取到損益記錄ID: {record_id}，準備查詢詳細明細")
                                 
-                                if detail_data:
-                                    # 從詳細信息中提取開倉價格
-                                    entry_price = getattr(detail_data, 'entry_price', None) or getattr(detail_data, 'open_price', None) or getattr(detail_data, 'avg_price', None)
-                                    if entry_price:
-                                        logger.info(f"[損益API查詢] ✅ 從detail_id獲取到{contract_code}真實開倉價格: {entry_price}")
-                                        return float(entry_price)
-                            
-                            # 如果無法使用detail_id，嘗試直接從損益記錄獲取
-                            entry_price = getattr(item, 'entry_price', None) or getattr(item, 'open_price', None) or getattr(item, 'avg_price', None)
-                            if entry_price:
-                                logger.info(f"[損益API查詢] ✅ 從損益記錄獲取到{contract_code}開倉價格: {entry_price}")
-                                return float(entry_price)
+                                # 使用detail_id API查詢該筆明細的原成交價格
+                                if hasattr(sinopac_api, 'detail_id'):
+                                    try:
+                                        detail_data = sinopac_api.detail_id(record_id)
+                                        if detail_data:
+                                            logger.info(f"[損益API查詢] 成功獲取明細數據，類型: {type(detail_data)}")
+                                            
+                                            # 從明細中提取原成交價格（開倉價格）
+                                            # 嘗試各種可能的屬性名稱
+                                            entry_price_attrs = ['entry_price', 'open_price', 'original_price', 'avg_price', 'price']
+                                            entry_price = None
+                                            
+                                            for attr in entry_price_attrs:
+                                                price_value = getattr(detail_data, attr, None)
+                                                if price_value is not None:
+                                                    entry_price = price_value
+                                                    logger.info(f"[損益API查詢] 從{attr}屬性獲取到價格: {entry_price}")
+                                                    break
+                                            
+                                            if entry_price is not None:
+                                                entry_price_float = float(entry_price)
+                                                logger.info(f"[損益API查詢] ✅ 從detail_id獲取到{contract_code}真實開倉價格: {entry_price_float}")
+                                                return entry_price_float
+                                            else:
+                                                logger.warning(f"[損益API查詢] 明細數據中未找到開倉價格，可用屬性: {[attr for attr in dir(detail_data) if not attr.startswith('_')]}")
+                                        else:
+                                            logger.warning(f"[損益API查詢] detail_id({record_id})返回空數據")
+                                    except Exception as detail_error:
+                                        logger.error(f"[損益API查詢] 查詢detail_id({record_id})失敗: {detail_error}")
+                                else:
+                                    logger.warning(f"[損益API查詢] API物件沒有detail_id方法")
+                            else:
+                                logger.warning(f"[損益API查詢] 損益記錄沒有有效的ID")
                                 
                     except Exception as item_error:
                         logger.error(f"[損益API查詢] 處理損益項目時出錯: {item_error}")
                         continue
                         
+        else:
+            logger.info(f"[損益API查詢] API物件沒有list_profit_loss方法")
+            
         logger.info(f"[損益API查詢] ❌ 未能從損益API獲取{contract_code}開倉價格")
         return None
         
     except Exception as e:
         logger.error(f"[損益API查詢] 查詢{contract_code}開倉價格時發生錯誤: {e}")
+        import traceback
+        logger.error(f"[損益API查詢] 詳細錯誤信息: {traceback.format_exc()}")
         return None
 
 def get_opening_price_from_api(contract_code):
@@ -9267,17 +9499,41 @@ def start_tx_service():
     print_console("SYSTEM", "SUCCESS", "TX交易服務初始化完成")
 
 if __name__ == '__main__':
+    # ========== 自動依賴安裝檢查 ==========
+    # 在系統啟動前自動檢查並安裝缺失的依賴套件
+    try:
+        from dependency_manager import auto_install_dependencies_on_startup
+        
+        print("=" * 60)
+        print("Auto91 自動依賴檢查")
+        print("=" * 60)
+        
+        # 執行自動依賴安裝檢查
+        dependency_success = auto_install_dependencies_on_startup()
+        
+        if dependency_success:
+            print("依賴檢查完成")
+        else:
+            print("依賴安裝失敗，系統可能無法正常運行")
+            print("請檢查網絡連接或手動安裝依賴套件")
+        
+        print("=" * 60)
+        
+    except Exception as e:
+        print(f"警告: 依賴檢查過程中發生錯誤: {e}")
+        print("系統將嘗試繼續啟動...")
+
     # ========== 自動更新檢查 ==========
-    # 在程式啟動前先檢查程式更新
+    # 在程式啟動前先檢查程式更新 (支援Telegram通知、配置保護、優雅重啟)
     try:
         from updater import check_and_update
         
         print("=" * 60)
-        print("Auto91 啟動前自動更新檢查")
+        print("Auto91 自動更新檢查")
         print("=" * 60)
         
         # 執行自動更新檢查（自動確認模式）
-        update_success = check_and_update(auto_confirm=True)
+        update_success = check_and_update(auto_confirm=True, silent_mode=True)
         
         if update_success:
             print("版本檢查完成")
@@ -9285,16 +9541,11 @@ if __name__ == '__main__':
             print("更新檢查過程中發生問題，但將繼續啟動程式")
         
         print("=" * 60)
-        print("如果遇到模組導入錯誤，請手動安裝相關Python套件")
         
     except ImportError as e:
-        print(f"警告: 無法導入自動更新器: {e}")
-        print("跳過更新檢查，直接啟動程式...")
-        print("如果遇到模組導入錯誤，請手動安裝相關Python套件")
+        print(f"警告: 無法導入更新器，跳過更新檢查")
     except Exception as e:
-        print(f"警告: 更新檢查過程中發生錯誤: {e}")
-        print("跳過更新檢查，直接啟動程式...")
-        print("如果遇到模組導入錯誤，請手動安裝相關Python套件")
+        print(f"警告: 更新檢查過程中發生錯誤，跳過更新檢查")
     
     try:
         # 設置信號處理器 (只能在主線程中設置)

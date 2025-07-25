@@ -1,44 +1,40 @@
 {
-  "version": "1.4.9",
-  "build": "202507231348",
-  "release_date": "2025-07-23",
-  "description": "v1.4.9",
+  "version": "1.4.11",
+  "build": "202507251930",
+  "release_date": "2025-07-25",
+  "description": "v1.4.11 - 系統更新增強與自動依賴管理實現",
   "github_repo": "LAON7877/Auto91",
   "update_url": "https://api.github.com/repos/LAON7877/Auto91/releases/latest",
   "changelog": [
-    "修復Python語法錯誤，提升系統穩定性",
-    "完成系統完整性檢查和語法修正",
-    "確保所有功能正常運作",
-    "修復進程管理系統，確保程式關閉時正確清理"
+    "實現傻瓜式自動依賴管理系統，新用戶零門檻使用",
+    "系統更新器重構優化，移除冗餘代碼簡化架構",
+    "新增dependency_manager.py和requirements.txt依賴管理",
+    "更新時自動同步安裝新增的依賴套件",
+    "界面簡化移除多餘表情符號，版本信息顯示優化",
+    "完善啟動流程：依賴檢查→版本檢查→系統啟動"
   ],
   "required_files": [
     "main.py",
-    "btcmain.py",
+    "btcmain.py", 
     "tunnel.py",
     "updater.py",
-    "version.json",
-    "version.json",
-    "start.bat",
-    "version.json",
+    "dependency_manager.py",
+    "requirements.txt",
     "version.json",
     "start.bat",
-    "version.json",
-    "version.json",
-    "start.bat",
-    "version.json",
-    "version.json",
-    "start.bat",
-    "version.json"
+    "web/index.html",
+    "web/main.js",
+    "web/style.css"
   ],
   "config_files": [
     "config/tx.env",
     "config/btc.env"
   ],
-  "updated_at": "2025-07-23T13:48:08.972375",
+  "updated_at": "2025-07-24T15:20:00.000000",
   "updated_files": [
-    "start.bat",
-    "start.bat",
-    "start.bat",
-    "start.bat"
+    "main.py",
+    "btcmain.py", 
+    "web/main.js",
+    "version.json"
   ]
 }
