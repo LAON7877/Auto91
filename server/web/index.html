@@ -161,6 +161,15 @@
                             ⚠️目前僅支援永續合約，後續將新增更多合約類型<br>
                         </div>
                     </div>
+
+                    <div class="form-group">
+                        <label for="margin_type">保證金模式</label>
+                        <select id="margin_type" name="MARGIN_TYPE" required>
+                            <option value="CROSS" selected>全倉</option>
+                            <option value="ISOLATED">逐倉</option>
+                        </select>
+                    </div>
+
                     <div class="form-group">
                         <label for="leverage">槓桿倍數</label>
                         <select id="leverage" name="LEVERAGE" required>
@@ -233,14 +242,6 @@
                             <option value="90">90%</option>
                             <option value="95">95%</option>
                             <option value="100">100%</option>
-                        </select>
-                    </div>
-
-                    <div class="form-group">
-                        <label for="margin_type">保證金模式</label>
-                        <select id="margin_type" name="MARGIN_TYPE" required>
-                            <option value="CROSS" selected>全倉</option>
-                            <option value="ISOLATED">逐倉</option>
                         </select>
                     </div>
 
@@ -713,16 +714,16 @@
                                 <span class="info-value" id="btc-contract-type">-</span>
                             </div>
                             <div class="info-item">
+                                <span class="info-label">保證金模式</span>
+                                <span class="info-value" id="btc-margin-type">-</span>
+                            </div>
+                            <div class="info-item">
                                 <span class="info-label">槓桿倍數</span>
                                 <span class="info-value" id="btc-leverage">-</span>
                             </div>
                             <div class="info-item">
                                 <span class="info-label">風險比例</span>
                                 <span class="info-value" id="btc-position-size">-</span>
-                            </div>
-                            <div class="info-item">
-                                <span class="info-label">保證金模式</span>
-                                <span class="info-value" id="btc-margin-type">-</span>
                             </div>
                         </div>
                     </div>

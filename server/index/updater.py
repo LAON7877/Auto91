@@ -62,11 +62,13 @@ class EnhancedAutoUpdater:
         """初始化增強版更新器"""
         if project_root is None:
             current_file = Path(__file__).resolve()
-            self.project_root = current_file.parent
+            self.index_root = current_file.parent  # index目錄
+            self.project_root = current_file.parent.parent  # server目錄
         else:
             self.project_root = Path(project_root)
+            self.index_root = self.project_root / "index"
         
-        self.version_file = self.project_root / "version.json"
+        self.version_file = self.index_root / "version.json"
         self.backup_dir = self.project_root / "backup_update"
         self.temp_dir = None
         self.silent_mode = silent_mode
@@ -282,7 +284,7 @@ class EnhancedAutoUpdater:
             
             # 動態導入依賴管理器
             try:
-                from dependency_manager import DependencyManager
+                from dependencymanager import DependencyManager
                 
                 manager = DependencyManager(self.project_root)
                 success = manager.update_dependencies_from_requirements()

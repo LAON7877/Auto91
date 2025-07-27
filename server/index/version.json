@@ -1,0 +1,40 @@
+{
+  "version": "1.4.12",
+  "build": "202507251945",
+  "release_date": "2025-07-25",
+  "description": "v1.4.12 - 完整程式關閉機制實現與依賴優化",
+  "github_repo": "LAON7877/Auto91",
+  "update_url": "https://api.github.com/repos/LAON7877/Auto91/releases/latest",
+  "changelog": [
+    "實現完整程式關閉機制，確保系統安全退出",
+    "優化依賴管理系統，提升安裝穩定性",
+    "改進錯誤處理機制，增強系統穩定性",
+    "優化記憶體使用，提升程式執行效率",
+    "完善日誌記錄系統，便於問題追蹤",
+    "增強系統監控功能，實時監控程式狀態"
+  ],
+  "required_files": [
+    "main.py",
+    "btcmain.py", 
+    "tunnel.py",
+    "updater.py",
+    "dependencymanager.py",
+    "requirements.txt",
+    "version.json",
+    "start.bat",
+    "web/index.html",
+    "web/main.js",
+    "web/style.css"
+  ],
+  "config_files": [
+    "config/tx.env",
+    "config/btc.env"
+  ],
+  "updated_at": "2025-07-25T19:45:00.000000",
+  "updated_files": [
+    "main.py",
+    "btcmain.py", 
+    "web/main.js",
+    "version.json"
+  ]
+}
