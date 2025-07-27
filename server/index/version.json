@@ -1,26 +1,31 @@
 {
   "version": "1.4.12",
-  "build": "202507251945",
-  "release_date": "2025-07-25",
+  "build": "202507272030",
+  "release_date": "2025-07-27",
   "description": "v1.4.12 - 完整程式關閉機制實現與依賴優化",
   "github_repo": "LAON7877/Auto91",
   "update_url": "https://api.github.com/repos/LAON7877/Auto91/releases/latest",
   "changelog": [
-    "實現完整程式關閉機制，確保系統安全退出",
-    "優化依賴管理系統，提升安裝穩定性",
-    "改進錯誤處理機制，增強系統穩定性",
-    "優化記憶體使用，提升程式執行效率",
-    "完善日誌記錄系統，便於問題追蹤",
-    "增強系統監控功能，實時監控程式狀態"
+    "實現Flask服務器線程追蹤與優雅關閉機制",
+    "新增comprehensive process cleanup系統，支援psutil進程管理",
+    "webview視窗關閉事件與背景清理線程同步處理",
+    "升級至shioaji[speed]版本，永豐API效能大幅提升",
+    "移除start.bat的pause命令，解決程式無法完全退出問題",
+    "psutil從可選依賴提升為必要依賴，增強系統資源管理"
   ],
   "required_files": [
-    "main.py",
-    "btcmain.py", 
-    "tunnel.py",
-    "updater.py",
-    "dependencymanager.py",
-    "requirements.txt",
-    "version.json",
+    "index/main.py",
+    "index/btcmain.py", 
+    "index/tunnel.py",
+    "index/updater.py",
+    "index/dependencymanager.py",
+    "index/requirements.txt",
+    "index/version.json",
+    "index/cloudflared.exe",
+    "index/trade_pairing_BTC.py",
+    "index/trade_pairing_TX.py",
+    "index/trading_config.py",
+    "index/trading_health_check.py",
     "start.bat",
     "web/index.html",
     "web/main.js",
@@ -30,11 +35,14 @@
     "config/tx.env",
     "config/btc.env"
   ],
-  "updated_at": "2025-07-25T19:45:00.000000",
+  "updated_at": "2025-07-27T20:30:00.000000",
   "updated_files": [
-    "main.py",
-    "btcmain.py", 
-    "web/main.js",
-    "version.json"
+    "index/main.py",
+    "index/btcmain.py",
+    "index/dependencymanager.py",
+    "index/requirements.txt",
+    "start.bat",
+    "web/index.html",
+    "index/version.json"
   ]
 }
