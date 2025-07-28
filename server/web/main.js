@@ -77,17 +77,31 @@ function getPnLColorClass(value) {
 const SystemLogManager = {
     // 統一的日誌更新函數
     async updateSystemLogs(systemType = 'tx') {
-        const apiEndpoint = systemType === 'btc' ? '/api/btc_system_log' : '/api/system_log';
+        const apiEndpoint = '/api/logs';  // 統一使用日誌獲取API
         const globalLogsArray = systemType === 'btc' ? 'btcSystemLogs' : 'systemLogs';
         
         try {
             const result = await APIUtils.get(apiEndpoint);
-            if (result.success && result.data && result.data.logs) {
+            if (result.status === 'success' && result.logs) {
                 const filterCondition = systemType === 'btc' ? 
-                    (log => log.uri === '/api/btc_system_log' || (log.extra_info && log.extra_info.system === 'BTC')) :
-                    (log => (log.type === 'custom' || log.type === 'webhook') && !log.uri.includes('btc'));
+                    (log => {
+                        // BTC系統日誌、BTC手動下單、BTC webhook
+                        return log.extra_info && log.extra_info.system === 'BTC' ||
+                               log.uri === '/api/btc/manual_order' ||
+                               log.uri === '/webhook/btc' ||
+                               log.uri === '/api/btc/webhook' ||
+                               log.method === 'BTC_LOG';
+                    }) :
+                    (log => {
+                        // TX系統日誌、TX手動下單、TX webhook (排除BTC相關)
+                        return (log.extra_info && log.extra_info.system === 'TX') ||
+                               log.uri === '/api/manual/order' ||
+                               (log.uri === '/webhook' && !log.uri.includes('btc')) ||
+                               log.method === 'TX_LOG' ||
+                               (!log.uri.includes('btc') && !log.extra_info?.system);
+                    });
                 
-                const filteredLogs = result.data.logs.filter(filterCondition);
+                const filteredLogs = result.logs.filter(filterCondition);
                 
                 // 更新全域變數
                 window[globalLogsArray] = filteredLogs;
@@ -1412,7 +1426,7 @@ function getStatusText(status) {
 
 function updateRequestsLog(tunnelType = 'tx') {
     // 根據隧道類型選擇API端點和DOM元素
-    const apiEndpoint = tunnelType === 'tx' ? '/api/ngrok/requests' : `/api/tunnel/${tunnelType}/requests`;
+    const apiEndpoint = '/api/logs';  // 統一使用日誌API
     const requestsContainer = document.getElementById(tunnelType === 'btc' ? 'requests-container-btc' : 'requests-container');
     const requestsCount = document.getElementById(tunnelType === 'btc' ? 'requests-count-btc' : 'requests-count');
     
@@ -1420,20 +1434,30 @@ function updateRequestsLog(tunnelType = 'tx') {
     .then(res => res.json())
     .then(data => {
         
-        if (data.requests && data.requests.length > 0) {
-            // 只顯示 webhook 請求（type=webhook 或 uri=/webhook）
-            const webhookRequests = data.requests.filter(req => 
-                req.type === 'webhook' || req.uri === '/webhook'
-            );
+        if (data.status === 'success' && data.logs && data.logs.length > 0) {
+            // 根據隧道類型過濾相關請求（webhook和手動下單）
+            const relevantRequests = data.logs.filter(req => {
+                if (tunnelType === 'btc') {
+                    return req.uri === '/webhook/btc' || 
+                           req.uri === '/api/btc/webhook' ||
+                           req.uri === '/api/btc/manual_order' ||
+                           (req.extra_info && req.extra_info.system === 'BTC');
+                } else {
+                    return req.uri === '/webhook' || 
+                           req.uri === '/api/manual/order' ||
+                           (req.extra_info && req.extra_info.system === 'TX') ||
+                           (!req.uri.includes('btc') && req.type === 'custom');
+                }
+            });
             
-            if (webhookRequests.length > 0) {
+            if (relevantRequests.length > 0) {
                 // 更新請求數量顯示
                 if (requestsCount) {
-                    requestsCount.textContent = `${webhookRequests.length}`;
+                    requestsCount.textContent = `${relevantRequests.length}`;
                 }
                 
                 // 限制最多顯示50條記錄，並反轉順序（新的在上面）
-                const limitedRequests = webhookRequests.slice(-50).reverse();
+                const limitedRequests = relevantRequests.slice(-50).reverse();
                 
                 requestsContainer.innerHTML = '';
                 limitedRequests.forEach((req, index) => {
@@ -1601,16 +1625,19 @@ function addBtcSystemLog(message, type = 'info') {
 
 // 新增：從後端同步BTC系統日誌
 function updateBtcSystemLogsFromBackend() {
-    fetch('/api/ngrok/requests')
+    fetch('/api/logs')
         .then(res => res.json())
         .then(data => {
-            if (data.requests && data.requests.length > 0) {
+            if (data.status === 'success' && data.logs && data.logs.length > 0) {
                 // 過濾 BTC 系統日誌
-                const btcCustomLogs = data.requests
+                const btcCustomLogs = data.logs
                     .filter(log => {
-                        // 只接受明確標記為 BTC 系統日誌的記錄
-                        const isBtcLog = log.uri === '/api/btc_system_log' ||
-                                       (log.extra_info && log.extra_info.system === 'BTC');
+                        // BTC相關日誌：系統日誌、手動下單、webhook
+                        const isBtcLog = (log.extra_info && log.extra_info.system === 'BTC') ||
+                                       log.uri === '/api/btc/manual_order' ||
+                                       log.uri === '/webhook/btc' ||
+                                       log.uri === '/api/btc/webhook' ||
+                                       log.method === 'BTC_LOG';
                         return isBtcLog;
                     })
                     .map(log => {
@@ -1702,30 +1729,29 @@ function updateBtcSystemLogsFromBackend() {
 
 // 新增：從後端同步TX系統日誌
 function updateSystemLogsFromBackend() {
-    fetch('/api/ngrok/requests')
+    fetch('/api/logs')
         .then(res => res.json())
         .then(data => {
-            if (data.requests && data.requests.length > 0) {
+            if (data.status === 'success' && data.logs && data.logs.length > 0) {
                 // 過濾 TX 系統日誌（排除 BTC 相關日誌）
-                const customLogs = data.requests
+                const customLogs = data.logs
                     .filter(log => {
-                        const isSystemLog = (log.type === 'custom' || log.type === 'webhook') || 
-                                          (log.uri === '/api/system_log') || 
-                                          (log.extra_info && log.extra_info.message);
+                        // TX相關日誌：系統日誌、手動下單、webhook
+                        const isTxLog = (log.extra_info && log.extra_info.system === 'TX') ||
+                                       log.uri === '/api/manual/order' ||
+                                       (log.uri === '/webhook' && !log.uri.includes('btc')) ||
+                                       log.method === 'TX_LOG' ||
+                                       (log.type === 'custom' && !log.extra_info?.system);
                         
                         // 排除 BTC 相關日誌
                         const isBtcLog = log.uri === '/api/btc_system_log' ||
+                                       log.uri === '/api/btc/manual_order' ||
+                                       log.uri === '/webhook/btc' ||
+                                       log.uri === '/api/btc/webhook' ||
+                                       log.method === 'BTC_LOG' ||
                                        (log.extra_info && log.extra_info.system === 'BTC');
                         
-                        // 排除 webhook 相關日誌
-                        const isWebhookLog = log.uri === '/webhook' || 
-                                           log.uri === '/webhook/btc' || 
-                                           log.uri === '/api/btc/webhook' ||
-                                           (log.extra_info && log.extra_info.message && 
-                                            (log.extra_info.message.includes('來自webhook') ||
-                                             log.extra_info.message.includes('webhook')));
-                        
-                        return isSystemLog && !isBtcLog && !isWebhookLog;
+                        return isTxLog && !isBtcLog;
                     })
                     .map(log => {
                         // 解析後端日誌格式

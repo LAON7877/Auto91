@@ -259,7 +259,7 @@ def print_console(category, status, message, detail=None):
 
 # 導入 Tunnel
 try:
-    from tunnel import CloudflareTunnel, TunnelManager
+    from tunnel import CloudflareTunnel, TunnelManager, QuantTradingTunnelManager
     CLOUDFLARE_TUNNEL_AVAILABLE = True
 except ImportError:
     CLOUDFLARE_TUNNEL_AVAILABLE = False
@@ -468,6 +468,13 @@ def log_response(response):
                 response_time=response_time
             )
         
+        # 對於重要的API請求，也記錄到前端顯示的custom_request_logs中
+        important_paths = ['/api/manual/order', '/api/btc/manual_order', '/webhook', '/webhook/btc', '/api/btc/webhook']
+        if request.path in important_paths:
+            # 只有在沒有被add_custom_request_log記錄的情況下才記錄
+            # 避免重複記錄（手動下單已經在API內部記錄了）
+            pass
+        
     except Exception as e:
         print_console("SYSTEM", "ERROR", "記錄請求響應失敗", str(e))
     
@@ -655,10 +662,11 @@ def init_tunnel_service(mode="temporary"):
     
     try:
         if CLOUDFLARE_TUNNEL_AVAILABLE:
-            tunnel_manager = TunnelManager()
+            # 使用量化交易隧道管理器（帶智能URL變化通知）
+            tunnel_manager = QuantTradingTunnelManager()
             # 為保持向後兼容，創建TX隧道作為默認隧道服務
             tunnel_service = tunnel_manager.create_tunnel('tx', mode)
-            print_console("TUNNEL", "SUCCESS", f"已初始化隧道管理器 (模式: {mode})")
+            print_console("TUNNEL", "SUCCESS", f"已初始化智能隧道管理器 (模式: {mode})")
         else:
             print_console("TUNNEL", "WARNING", "Cloudflare Tunnel 不可用，請檢查模組")
     except Exception as e:
@@ -834,10 +842,11 @@ def add_custom_request_log(method, uri, status, extra_info=None):
     """添加自定義請求記錄"""
     global custom_request_logs
     
-    # 過濾掉 webhook 和系統日誌 API 相關日誌，避免前端顯示
-    if uri in ['/webhook', '/webhook/btc', '/api/btc/webhook', '/api/btc_system_log', '/api/system_log']:
-        # 只在後端記錄，不添加到前端日誌
-        logger.info(f"[WEBHOOK] {method} {uri} - {status} - {extra_info}")
+    # 只過濾重複的系統日誌API調用，保留重要的webhook和交易日誌
+    # 避免系統日誌API本身產生重複記錄，但保留其內容
+    if uri in ['/api/btc_system_log', '/api/system_log'] and method in ['POST', 'GET']:
+        # 系統日誌API調用本身不記錄，但其內容已經通過特殊處理添加
+        logger.info(f"[SYSTEM_LOG_API] {method} {uri} - {status}")
         return
     
     # 建立時間戳（加上日期但前端會只顯示時分秒）
@@ -1506,6 +1515,283 @@ def api_all_tunnels_status():
     
     return jsonify(tunnel_manager.get_all_status())
 
+@app.route('/api/tunnel/<tunnel_type>/health', methods=['GET'])
+def api_tunnel_health_report(tunnel_type):
+    """獲取隧道健康報告 API（量化交易專用）"""
+    global tunnel_manager
+    
+    if not tunnel_manager:
+        return jsonify({
+            'error': '隧道管理器未初始化',
+            'tunnel_type': tunnel_type
+        })
+    
+    # 檢查是否為量化交易專用管理器
+    if hasattr(tunnel_manager, 'get_tunnel_health_report'):
+        health_report = tunnel_manager.get_tunnel_health_report(tunnel_type)
+        if health_report:
+            return jsonify(health_report)
+    
+    return jsonify({
+        'error': f'無法獲取{tunnel_type}隧道健康報告',
+        'tunnel_type': tunnel_type
+    })
+
+@app.route('/api/tunnels/health/summary', methods=['GET'])
+def api_tunnels_health_summary():
+    """獲取所有隧道健康狀況總覽（量化交易監控面板）"""
+    global tunnel_manager
+    
+    if not tunnel_manager or not hasattr(tunnel_manager, 'get_tunnel_health_report'):
+        return jsonify({
+            'error': '量化交易隧道管理器未初始化',
+            'overall_status': 'unknown'
+        })
+    
+    try:
+        summary = {
+            'overall_status': 'healthy',
+            'tunnels': {},
+            'total_uptime_hours': 0,
+            'avg_availability': 0,
+            'last_updated': time.time()
+        }
+        
+        tunnel_types = ['tx', 'btc']
+        availability_scores = []
+        total_uptime = 0
+        
+        for tunnel_type in tunnel_types:
+            health_report = tunnel_manager.get_tunnel_health_report(tunnel_type)
+            if health_report:
+                summary['tunnels'][tunnel_type] = health_report
+                availability_scores.append(health_report['availability_percentage'])
+                total_uptime += health_report['uptime_hours']
+                
+                # 判斷整體狀態
+                if health_report['availability_percentage'] < 95 or health_report['status'] != 'running':
+                    summary['overall_status'] = 'degraded'
+                elif health_report['availability_percentage'] < 90:
+                    summary['overall_status'] = 'unhealthy'
+        
+        # 計算平均值
+        if availability_scores:
+            summary['avg_availability'] = round(sum(availability_scores) / len(availability_scores), 2)
+        summary['total_uptime_hours'] = round(total_uptime, 2)
+        
+        return jsonify(summary)
+        
+    except Exception as e:
+        return jsonify({
+            'error': f'獲取健康狀況總覽失敗: {str(e)}',
+            'overall_status': 'error'
+        })
+
+@app.route('/api/health', methods=['GET'])
+def api_system_health():
+    """系統健康檢查端點（供隧道監控使用）"""
+    try:
+        # 檢查Flask應用狀態
+        flask_status = 'healthy'
+        
+        # 檢查重要服務狀態
+        services_status = {
+            'flask': 'running',
+            'tunnel_manager': 'running' if tunnel_manager else 'stopped',
+            'btc_module': 'available' if BTC_MODULE_AVAILABLE else 'unavailable'
+        }
+        
+        return jsonify({
+            'status': flask_status,
+            'services': services_status,
+            'timestamp': time.time(),
+            'version': '1.4.12'
+        })
+    except Exception as e:
+        return jsonify({
+            'status': 'error',
+            'error': str(e),
+            'timestamp': time.time()
+        }), 500
+
+@app.route('/api/tunnel/<tunnel_type>/persistent_url', methods=['GET'])
+def api_get_persistent_url(tunnel_type):
+    """獲取固定URL（量化交易專用）"""
+    global tunnel_manager
+    
+    if not tunnel_manager:
+        return jsonify({
+            'error': '隧道管理器未初始化',
+            'tunnel_type': tunnel_type
+        })
+    
+    # 檢查是否為持久化隧道管理器
+    if hasattr(tunnel_manager, 'get_persistent_url'):
+        persistent_url = tunnel_manager.get_persistent_url(tunnel_type)
+        if persistent_url:
+            return jsonify({
+                'tunnel_type': tunnel_type,
+                'persistent_url': persistent_url,
+                'url_fixed': True,
+                'message': '此URL在重連後不會改變，適合TradingView等外部服務使用'
+            })
+    
+    # 降級到普通隧道URL
+    tunnel = tunnel_manager.get_tunnel(tunnel_type)
+    if tunnel:
+        status = tunnel.get_status()
+        return jsonify({
+            'tunnel_type': tunnel_type,
+            'persistent_url': status.get('url'),
+            'url_fixed': False,
+            'warning': '此為臨時URL，重連後會改變'
+        })
+    
+    return jsonify({
+        'error': f'{tunnel_type}隧道未啟動',
+        'tunnel_type': tunnel_type
+    })
+
+@app.route('/api/tunnels/webhook_urls', methods=['GET'])
+def api_get_webhook_urls():
+    """獲取所有隧道的Webhook URL（TradingView等外部服務專用）"""
+    global tunnel_manager
+    
+    if not tunnel_manager:
+        return jsonify({
+            'error': '隧道管理器未初始化',
+            'webhook_urls': {}
+        })
+    
+    webhook_urls = {}
+    
+    try:
+        for tunnel_type in ['tx', 'btc']:
+            # 優先獲取固定URL
+            if hasattr(tunnel_manager, 'get_persistent_url'):
+                persistent_url = tunnel_manager.get_persistent_url(tunnel_type)
+                if persistent_url:
+                    webhook_urls[tunnel_type] = {
+                        'base_url': persistent_url,
+                        'webhook_url': f"{persistent_url}/webhook/{tunnel_type}",
+                        'api_webhook_url': f"{persistent_url}/api/{tunnel_type}/webhook",
+                        'url_fixed': True,
+                        'status': 'persistent'
+                    }
+                    continue
+            
+            # 降級到普通隧道
+            tunnel = tunnel_manager.get_tunnel(tunnel_type)
+            if tunnel:
+                status = tunnel.get_status()
+                base_url = status.get('url')
+                if base_url:
+                    webhook_urls[tunnel_type] = {
+                        'base_url': base_url,
+                        'webhook_url': f"{base_url}/webhook/{tunnel_type}",
+                        'api_webhook_url': f"{base_url}/api/{tunnel_type}/webhook",
+                        'url_fixed': False,
+                        'status': tunnel.status,
+                        'warning': '臨時URL，重連後會改變'
+                    }
+        
+        return jsonify({
+            'webhook_urls': webhook_urls,
+            'last_updated': time.time(),
+            'note': '固定URL適合配置在TradingView等外部服務中'
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'error': f'獲取Webhook URL失敗: {str(e)}',
+            'webhook_urls': {}
+        })
+
+@app.route('/api/tunnels/url_history', methods=['GET'])
+def api_get_tunnel_url_history():
+    """獲取隧道URL變化歷史"""
+    try:
+        history_file = os.path.join(os.path.dirname(__file__), 'tunnel_url_history.json')
+        
+        if os.path.exists(history_file):
+            with open(history_file, 'r', encoding='utf-8') as f:
+                history = json.load(f)
+            
+            return jsonify({
+                'success': True,
+                'url_changes': history,
+                'total_changes': len(history),
+                'last_updated': history[-1]['timestamp'] if history else None
+            })
+        else:
+            return jsonify({
+                'success': True,
+                'url_changes': [],
+                'total_changes': 0,
+                'message': '尚無URL變化記錄'
+            })
+            
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': f'獲取URL變化歷史失敗: {str(e)}',
+            'url_changes': []
+        })
+
+@app.route('/api/tunnels/current_urls', methods=['GET'])
+def api_get_current_tunnel_urls():
+    """獲取當前所有隧道URL（TX和BTC分別顯示）"""
+    global tunnel_manager
+    
+    if not tunnel_manager:
+        return jsonify({
+            'error': '隧道管理器未初始化',
+            'urls': {}
+        })
+    
+    try:
+        current_urls = {}
+        
+        for tunnel_type in ['tx', 'btc']:
+            tunnel = tunnel_manager.get_tunnel(tunnel_type)
+            if tunnel:
+                status = tunnel.get_status()
+                if status.get('url'):
+                    current_urls[tunnel_type] = {
+                        'url': status['url'],
+                        'status': status['status'],
+                        'webhook_url': f"{status['url']}/webhook/{tunnel_type}",
+                        'api_webhook_url': f"{status['url']}/api/{tunnel_type}/webhook",
+                        'port': status.get('port', 5000),
+                        'last_updated': time.time()
+                    }
+                else:
+                    current_urls[tunnel_type] = {
+                        'url': None,
+                        'status': status.get('status', 'stopped'),
+                        'message': f'{tunnel_type.upper()}隧道未啟動或URL未生成'
+                    }
+            else:
+                current_urls[tunnel_type] = {
+                    'url': None,
+                    'status': 'not_created',
+                    'message': f'{tunnel_type.upper()}隧道未創建'
+                }
+        
+        return jsonify({
+            'success': True,
+            'current_urls': current_urls,
+            'note': '這些URL在隧道重連後可能會改變，系統會自動發送Telegram通知',
+            'timestamp': time.time()
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': f'獲取當前隧道URL失敗: {str(e)}',
+            'current_urls': {}
+        })
+
 # ========================== BTC 相關 API ==========================
 
 
@@ -1715,10 +2001,33 @@ def api_btc_manual_order():
             is_auto=False
         )
         
+        # 記錄手動下單日誌
+        success = result.get('success', False) if isinstance(result, dict) else True
+        status_code = 200 if success else 500
+        
+        add_custom_request_log('POST', '/api/btc/manual_order', status_code, {
+            'reason': 'BTC手動下單' + ('成功' if success else '失敗'),
+            'quantity': quantity,
+            'action': action,
+            'side': side,
+            'order_type': order_type,
+            'system': 'BTC',
+            'is_manual': True
+        })
+        
         return jsonify(result)
         
     except Exception as e:
         logger.error(f"BTC手動下單失敗: {e}")
+        
+        # 記錄異常日誌
+        add_custom_request_log('POST', '/api/btc/manual_order', 500, {
+            'reason': f'BTC手動下單異常: {str(e)}',
+            'system': 'BTC',
+            'is_manual': True,
+            'error': str(e)
+        })
+        
         return jsonify({
             'success': False,
             'error': str(e)
@@ -3539,7 +3848,9 @@ def api_btc_system_log():
             'uri': 'system_log',
             'status': 200,
             'timestamp': time_str,
-            'display_timestamp': display_time,
+            'display_timestamp': now.strftime('%H:%M:%S.%f')[:-3] + ' CST',
+            'status_text': 'OK',
+            'type': 'custom',
             'extra_info': {
                 'message': message,
                 'type': log_type,
@@ -7297,6 +7608,19 @@ def manual_order():
                 octype_param=octype_param   # 傳遞永豐官方octype參數
             )
             
+            # 記錄手動下單成功日誌
+            add_custom_request_log('POST', '/api/manual/order', 200, {
+                'reason': 'TX手動下單成功',
+                'contract_code': contract_code,
+                'quantity': quantity,
+                'action': action_param,
+                'octype': octype_param,
+                'price': price,
+                'price_type': price_type,
+                'system': 'TX',
+                'is_manual': True
+            })
+            
             return jsonify({
                 'status': 'success',
                 'message': '手動下單成功',
@@ -7305,6 +7629,18 @@ def manual_order():
             
         except Exception as e:
             error_msg = str(e)
+            
+            # 記錄手動下單失敗日誌
+            add_custom_request_log('POST', '/api/manual/order', 500, {
+                'reason': f'TX手動下單失敗: {error_msg}',
+                'contract_code': contract_code,
+                'quantity': quantity,
+                'action': action_param,
+                'octype': octype_param,
+                'system': 'TX',
+                'is_manual': True,
+                'error': error_msg
+            })
             
             # 保存提交失敗記錄
             save_trade({
@@ -7340,6 +7676,14 @@ def manual_order():
             }), 500
             
     except Exception as e:
+        # 記錄請求處理失敗日誌
+        add_custom_request_log('POST', '/api/manual/order', 500, {
+            'reason': f'TX手動下單請求處理失敗: {str(e)}',
+            'system': 'TX',
+            'is_manual': True,
+            'error': str(e)
+        })
+        
         return jsonify({
             'status': 'error',
             'message': f'處理請求失敗: {str(e)}'

@@ -1054,7 +1054,7 @@ def place_btc_futures_order(symbol, side, quantity, price=None, order_type="MARK
                 'price': submitted_price,  # 添加提交價格
                 'order_id': order_id,
                 'order_type': order_type_text,
-                'source': order_source,
+                'source': 'manual' if is_manual else 'webhook',  # 修正source字段用於判斷手動/自動
                 'action_type': parsed_action,
                 'reduceOnly': reduce_only,
                 'is_manual': is_manual
@@ -1136,7 +1136,7 @@ def place_btc_futures_order(symbol, side, quantity, price=None, order_type="MARK
             'quantity': formatted_quantity,
             'order_id': '--',
             'order_type': order_type_text,
-            'source': order_source,
+            'source': 'manual' if is_manual else 'webhook',  # 修正source字段用於判斷手動/自動
             'action_type': parsed_action,
             'reduceOnly': reduce_only,
             'is_manual': is_manual,
@@ -1669,11 +1669,11 @@ def get_btc_order_log_message(symbol, side, quantity, price, order_id, order_typ
             else:
                 direction_display = '空單'
         elif action_type == '平倉':
-            # 平倉：BUY=平空單, SELL=平多單（與TX COVER邏輯一致）
-            if str(side).upper() == 'BUY':
-                direction_display = '空單'  # 平空單
-            else:
+            # 平倉：SELL=平多單, BUY=平空單（與get_btc_action_and_direction邏輯保持一致）
+            if str(side).upper() == 'SELL':
                 direction_display = '多單'  # 平多單
+            else:  # BUY
+                direction_display = '空單'  # 平空單
         else:
             # 備援邏輯（與TX一致）
             if str(side).upper() == 'BUY':
@@ -3241,16 +3241,17 @@ def get_btc_trading_statistics_data(date_str=None):
         buy_total_value = 0.0  # USDT總量（買入做多）
         sell_total_value = 0.0  # USDT總量（賣出做空）
         
-        # 從交易記錄統計
+        # 從交易記錄統計（修正：使用side字段而非isBuyer）
         if today_trades:
             for trade in today_trades:
                 qty = float(trade.get('qty', 0))
                 quote_qty = float(trade.get('quoteQty', 0))  # USDT數量
+                side = trade.get('side', '')
                 
-                if trade.get('isBuyer'):  # 買入（做多）
+                if side == 'BUY':  # 買入交易
                     buy_volume += qty
                     buy_total_value += quote_qty  # 買入總量使用USDT
-                else:  # 賣出（做空）
+                elif side == 'SELL':  # 賣出交易
                     sell_volume += qty
                     sell_total_value += quote_qty  # 賣出總量使用USDT
         
@@ -3740,6 +3741,60 @@ def get_btc_closed_trades_today(date_str):
         except:
             return []
 
+def get_btc_position_open_info(is_long, position_size, entry_price):
+    """從交易歷史獲取持倉的開倉時間和訂單ID"""
+    try:
+        if not binance_client:
+            return 'N/A', 'N/A'
+            
+        # 獲取最近30天的交易記錄
+        end_time = int(datetime.now().timestamp() * 1000)
+        start_time = end_time - (30 * 24 * 60 * 60 * 1000)  # 30天前
+        
+        trades = binance_client._make_request('GET', '/fapi/v1/userTrades', {
+            'symbol': 'BTCUSDT',
+            'startTime': start_time,
+            'endTime': end_time,
+            'limit': 1000  # 最多獲取1000筆記錄
+        })
+        
+        if not trades:
+            return 'N/A', 'N/A'
+        
+        # 尋找符合條件的開倉交易
+        # 根據方向和價格匹配找到最可能的開倉交易
+        target_side = 'BUY' if is_long else 'SELL'
+        price_tolerance = entry_price * 0.001  # 0.1%的價格容差
+        
+        # 從最新的交易開始查找
+        for trade in reversed(trades):
+            trade_side = trade.get('side', '')
+            trade_price = float(trade.get('price', 0))
+            trade_qty = float(trade.get('qty', 0))
+            
+            # 檢查是否是匹配的開倉交易
+            if (trade_side == target_side and 
+                abs(trade_price - entry_price) <= price_tolerance and
+                trade_qty >= position_size * 0.8):  # 數量至少80%匹配
+                
+                # 轉換時間戳為可讀格式
+                trade_time = int(trade.get('time', 0))
+                if trade_time:
+                    open_time = datetime.fromtimestamp(trade_time / 1000).strftime('%Y/%m/%d %H:%M:%S')
+                else:
+                    open_time = 'N/A'
+                
+                order_id = str(trade.get('orderId', 'N/A'))
+                
+                return open_time, order_id
+        
+        # 如果沒找到匹配的交易，返回N/A
+        return 'N/A', 'N/A'
+        
+    except Exception as e:
+        logger.error(f"獲取BTC持倉開倉信息失敗: {e}")
+        return 'N/A', 'N/A'
+
 def get_btc_open_positions_today():
     """獲取當前持倉狀態 - 結合JSON配對數據和真實API數據"""
     try:
@@ -3761,9 +3816,12 @@ def get_btc_open_positions_today():
                         margin_type = pos.get('marginType', 'cross')
                         leverage = pos.get('leverage', '20')
                         
+                        # 嘗試從交易歷史獲取開倉時間和訂單ID
+                        open_time, order_id = get_btc_position_open_info(position_amt > 0, abs(position_amt), entry_price)
+                        
                         open_position = {
-                            'open_time': 'N/A',  # 開倉時間需要從交易歷史獲取
-                            'order_id': 'N/A',   # 開倉訂單ID需要從交易歷史獲取
+                            'open_time': open_time,  # 從交易歷史獲取開倉時間
+                            'order_id': order_id,    # 從交易歷史獲取開倉訂單ID
                             'position_amt': abs(position_amt),  # 持倉數量（絕對值）
                             'entry_price': entry_price,         # 開倉價格
                             'liquidation_price': liquidation_price,  # 強平價格
@@ -4814,7 +4872,7 @@ def btc_place_order(quantity, action, side, order_type='MARKET', is_auto=False):
                     'price': submitted_price,  # 添加提交價格
                     'order_id': order_id,
                     'order_type': order_type_text,
-                    'source': order_source,
+                    'source': 'manual' if not is_auto else 'webhook',  # 修正source字段用於判斷手動/自動
                     'action_type': parsed_action,
                     'reduceOnly': action == 'cover',
                     'is_manual': not is_auto
@@ -4874,7 +4932,7 @@ def btc_place_order(quantity, action, side, order_type='MARKET', is_auto=False):
                 'quantity': formatted_quantity,
                 'order_id': '--',
                 'order_type': order_type_text,
-                'source': order_source,
+                'source': 'manual' if not is_auto else 'webhook',  # 修正source字段用於判斷手動/自動
                 'action_type': parsed_action,
                 'reduceOnly': action == 'cover',
                 'is_manual': not is_auto,
@@ -6537,7 +6595,7 @@ def handle_manual_binance_order(order_data, is_success=True):
         
         # 解析動作和方向 - 平倉時方向相反
         if reduce_only:
-            # 平倉：SELL = 平多單，BUY = 平空單
+            # 平倉：SELL = 平多單，BUY = 平空單（與get_btc_action_and_direction邏輯一致）
             direction = '多單' if side == 'SELL' else '空單'
             parsed_action = '平倉'
         else:
@@ -6583,7 +6641,7 @@ def handle_manual_binance_order(order_data, is_success=True):
             'price': submitted_price,  # 添加提交價格
             'order_id': order_id,
             'order_type': order_type_text,
-            'source': order_source,
+            'source': 'manual',  # 手動訂單source固定為manual
             'action_type': parsed_action,
             'reduceOnly': reduce_only,
             'is_manual': True
@@ -6610,7 +6668,7 @@ def handle_manual_binance_fill(order_data):
         
         # 解析動作和方向 - 平倉時方向相反
         if reduce_only:
-            # 平倉：SELL = 平多單，BUY = 平空單
+            # 平倉：SELL = 平多單，BUY = 平空單（與get_btc_action_and_direction邏輯一致）
             direction = '多單' if side == 'SELL' else '空單'
             action = '平倉'
         else:

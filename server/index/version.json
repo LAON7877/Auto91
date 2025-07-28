@@ -1,17 +1,18 @@
 {
-  "version": "1.4.12",
-  "build": "202507272030",
-  "release_date": "2025-07-27",
-  "description": "v1.4.12 - 完整程式關閉機制實現與依賴優化",
+  "version": "1.4.14",
+  "build": "202507281800",
+  "release_date": "2025-07-28",
+  "description": "v1.4.14 - 日誌記錄系統全面修復與架構優化",
   "github_repo": "LAON7877/Auto91",
   "update_url": "https://api.github.com/repos/LAON7877/Auto91/releases/latest",
   "changelog": [
-    "實現Flask服務器線程追蹤與優雅關閉機制",
-    "新增comprehensive process cleanup系統，支援psutil進程管理",
-    "webview視窗關閉事件與背景清理線程同步處理",
-    "升級至shioaji[speed]版本，永豐API效能大幅提升",
-    "移除start.bat的pause命令，解決程式無法完全退出問題",
-    "psutil從可選依賴提升為必要依賴，增強系統資源管理"
+    "修復add_custom_request_log函數過度過濾問題，確保重要交易日誌正常記錄",
+    "為TX和BTC手動下單添加完整日誌記錄系統，包含成功失敗狀態和詳細參數",
+    "統一前端日誌API端點為/api/logs，修復前端使用錯誤API導致的日誌缺失",
+    "實現TX和BTC完全獨立的日誌過濾系統，TX歸TX、BTC歸BTC",
+    "修復SystemLogManager等關鍵日誌更新函數，確保5秒自動刷新正常運作",
+    "完善Flask請求日誌機制和線程安全機制，避免日誌記錄衝突",
+    "實現雙系統獨立日誌架構，手動下單、自動交易、系統狀態完整分離記錄"
   ],
   "required_files": [
     "index/main.py",
@@ -35,14 +36,10 @@
     "config/tx.env",
     "config/btc.env"
   ],
-  "updated_at": "2025-07-27T20:30:00.000000",
+  "updated_at": "2025-07-28T18:00:00.000000",
   "updated_files": [
     "index/main.py",
-    "index/btcmain.py",
-    "index/dependencymanager.py",
-    "index/requirements.txt",
-    "start.bat",
-    "web/index.html",
+    "web/main.js",
     "index/version.json"
   ]
 }
