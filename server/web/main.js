@@ -85,20 +85,18 @@ const SystemLogManager = {
             if (result.status === 'success' && result.logs) {
                 const filterCondition = systemType === 'btc' ? 
                     (log => {
-                        // BTC系統日誌、BTC手動下單、BTC webhook
+                        // BTC系統日誌、BTC手動下單 (排除webhook請求本身，與TX一致)
                         return log.extra_info && log.extra_info.system === 'BTC' ||
                                log.uri === '/api/btc/manual_order' ||
-                               log.uri === '/webhook/btc' ||
-                               log.uri === '/api/btc/webhook' ||
                                log.method === 'BTC_LOG';
                     }) :
                     (log => {
-                        // TX系統日誌、TX手動下單、TX webhook (排除BTC相關)
+                        // TX系統日誌、TX手動下單 (排除webhook請求本身，保持一致性)
                         return (log.extra_info && log.extra_info.system === 'TX') ||
                                log.uri === '/api/manual/order' ||
-                               (log.uri === '/webhook' && !log.uri.includes('btc')) ||
                                log.method === 'TX_LOG' ||
-                               (!log.uri.includes('btc') && !log.extra_info?.system);
+                               (!log.uri.includes('btc') && !log.extra_info?.system && 
+                                !log.uri.includes('webhook'));
                     });
                 
                 const filteredLogs = result.logs.filter(filterCondition);
@@ -950,8 +948,6 @@ function closeHolidayModal() {
         }, 300);
     }
 }
-
-
 // 新的隧道設置函數
 function showTunnelSetupModal(tunnelType = 'tx') {
     // 保存隧道類型到全局變量
@@ -1049,8 +1045,6 @@ function setupNgrok() {
         setupBtn.textContent = '儲存並啟動';
     });
 }
-
-
 
 // Token管理函數
 function clearNgrokToken() {
@@ -1269,8 +1263,6 @@ function toggleAccountInfo() {
         toggleIcon.classList.add('collapsed');
     }
 }
-
-
 // 獲取shioaji版本信息
 function getSinopacVersion() {
     fetch('/api/sinopac/version')
@@ -1297,12 +1289,6 @@ function getSinopacVersion() {
         document.getElementById('sinopac-version').textContent = 'Error';
     });
 }
-
-
-
-
-
-
 function updateTunnelStatus(statusData, tunnelType = 'tx') {
     const statusElement = document.getElementById(tunnelType === 'btc' ? 'tunnel-status-btc' : 'tunnel-status');
     // 已移除延遲和TTL元素引用 - Cloudflare Tunnel 不需要這些監控
@@ -1360,18 +1346,36 @@ function updateTunnelStatus(statusData, tunnelType = 'tx') {
     }
     
     if (url) {
+        // 清理URL - 移除重複的https://前綴和異常長度
+        let cleanUrl = url.toString().trim();
+        if (cleanUrl.indexOf('https://https://') !== -1) {
+            cleanUrl = cleanUrl.replace('https://https://', 'https://');
+        }
+        
+        // 添加webhook後綴
+        let webhookUrl = cleanUrl;
+        if (tunnelType === 'tx') {
+            webhookUrl = cleanUrl + '/webhook';
+        } else if (tunnelType === 'btc') {
+            webhookUrl = cleanUrl + '/api/btc/webhook';
+        }
+        
+        // 限制URL長度顯示，防止異常長的URL
+        const displayUrl = webhookUrl.length > 100 ? webhookUrl.substring(0, 97) + '...' : webhookUrl;
+        
         const urlItem = document.createElement('div');
         urlItem.className = 'url-item';
         
         const urlValue = document.createElement('span');
         urlValue.className = 'url-value';
-        urlValue.textContent = url;
+        urlValue.textContent = displayUrl;
+        urlValue.title = webhookUrl; // 完整webhook URL作為tooltip
         
         const copyBtn = document.createElement('button');
         copyBtn.className = 'url-copy-btn';
         copyBtn.textContent = '複製';
         copyBtn.onclick = function() {
-            copyToClipboard(url, this);
+            copyToClipboard(webhookUrl, this); // 複製完整的webhook URL
         };
         
         urlItem.appendChild(urlValue);
@@ -1438,15 +1442,14 @@ function updateRequestsLog(tunnelType = 'tx') {
             // 根據隧道類型過濾相關請求（webhook和手動下單）
             const relevantRequests = data.logs.filter(req => {
                 if (tunnelType === 'btc') {
+                    // BTC請求日誌：只顯示實際的API請求
                     return req.uri === '/webhook/btc' || 
                            req.uri === '/api/btc/webhook' ||
-                           req.uri === '/api/btc/manual_order' ||
-                           (req.extra_info && req.extra_info.system === 'BTC');
+                           req.uri === '/api/btc/manual_order';
                 } else {
+                    // TX請求日誌：只顯示實際的API請求
                     return req.uri === '/webhook' || 
-                           req.uri === '/api/manual/order' ||
-                           (req.extra_info && req.extra_info.system === 'TX') ||
-                           (!req.uri.includes('btc') && req.type === 'custom');
+                           req.uri === '/api/manual/order';
                 }
             });
             
@@ -1629,14 +1632,12 @@ function updateBtcSystemLogsFromBackend() {
         .then(res => res.json())
         .then(data => {
             if (data.status === 'success' && data.logs && data.logs.length > 0) {
-                // 過濾 BTC 系統日誌
+                // 過濾 BTC 系統日誌 (排除webhook請求，只顯示系統日誌和手動下單)
                 const btcCustomLogs = data.logs
                     .filter(log => {
-                        // BTC相關日誌：系統日誌、手動下單、webhook
+                        // BTC相關日誌：系統日誌、手動下單 (排除webhook)
                         const isBtcLog = (log.extra_info && log.extra_info.system === 'BTC') ||
                                        log.uri === '/api/btc/manual_order' ||
-                                       log.uri === '/webhook/btc' ||
-                                       log.uri === '/api/btc/webhook' ||
                                        log.method === 'BTC_LOG';
                         return isBtcLog;
                     })
@@ -2569,6 +2570,9 @@ document.addEventListener('DOMContentLoaded', () => {
     
     // 載入程式版本信息
     loadAppVersion();
+    
+    // 載入隧道設定（量化交易系統持久化）
+    loadTunnelSettings();
     
     // 定期檢查版本更新 (每5分鐘檢查一次)
     setInterval(loadAppVersion, 300000);
@@ -3524,8 +3528,6 @@ async function refreshContractInfo() {
             throw new Error(`HTTP error! status: ${response.status}`);
         }
         const data = await response.json();
-
-
         // 更新合約資訊顯示
         if (data.selected_contracts) {
             document.getElementById('txf-contract').textContent = data.selected_contracts.TXF || '-';
@@ -3584,81 +3586,191 @@ function loadTunnelTokens() {
 
 let selectedDomainMode = 'temporary'; // 預設為免費臨時域名（最可靠）
 
-function setDomainMode(mode, event = null) {
+// 量化交易系統設定持久化功能（純共用域名模式）
+function loadTunnelSettings() {
+    try {
+        fetch('/api/tunnel/settings')
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                return response.text().then(text => {
+                    try {
+                        return JSON.parse(text);
+                    } catch (e) {
+                        console.error('JSON解析失敗:', e);
+                        throw new Error('API響應不是有效的JSON');
+                    }
+                });
+            })
+            .then(data => {
+                if (data.success && data.settings) {
+                    selectedDomainMode = data.settings.domain_mode || 'temporary';
+                    
+                    // 雙邊模式同步：TX和BTC都使用同樣設定
+                    setDomainModeForBothSides(selectedDomainMode);
+                    
+                    // 如果是高級用戶模式且有保存的數據，自動填入到雙邊
+                    if (selectedDomainMode === 'custom' && data.settings.has_saved_data) {
+                        fillSavedDataToBothSides(data.settings);
+                    }
+                    
+                } else {
+                    if (!data.success) {
+                        console.error('API錯誤:', data.message);
+                    }
+                }
+            })
+            .catch(error => {
+                console.error('載入隧道設定失敗:', error);
+                selectedDomainMode = 'temporary'; // fallback to default
+            });
+    } catch (error) {
+        console.error('載入隧道設定異常:', error);
+    }
+}
+
+// 雙邊域名模式同步（TX和BTC使用相同設定）
+function setDomainModeForBothSides(mode) {
+    // 純共用域名模式：直接調用setDomainMode函數設定UI狀態
+    setDomainMode(mode, null, false); // 不保存設定，因為是從已保存設定載入
+}
+
+// 填入共用數據到雙邊系統
+function fillSavedDataToBothSides(settings) {
+    // 共用輸入框（純共用模式，只有一套輸入框）
+    const tokenInput = document.getElementById('cloudflare-token-custom');
+    const certInput = document.getElementById('origin-certificate');
+    const keyInput = document.getElementById('private-key');
+    
+    // 填入共用數據
+    if (settings.token && tokenInput) {
+        tokenInput.value = settings.token;
+    }
+    if (settings.origin_cert && certInput) {
+        certInput.value = settings.origin_cert;
+    }
+    if (settings.private_key && keyInput) {
+        keyInput.value = settings.private_key;
+    }
+    
+    // 顯示共用模式提示
+    showSharedModeHint();
+}
+
+// 顯示共用模式提示
+function showSharedModeHint() {
+    const hint = document.createElement('div');
+    hint.id = 'shared-mode-hint';
+    hint.innerHTML = `
+        <div style="background: #e8f5e8; color: #2e7d32; padding: 12px; border-radius: 6px; margin: 10px 0; font-size: 14px; border-left: 4px solid #4caf50;">
+            <strong>💰 共用域名模式已啟用</strong><br>
+            TX和BTC系統將使用相同的域名和憑證，透過不同路徑分流（/webhook vs /api/btc/webhook）
+        </div>
+    `;
+    
+    // 添加到TX區域
+    const txArea = document.querySelector('.tx-tunnel-area');
+    if (txArea && !document.getElementById('shared-mode-hint')) {
+        txArea.insertBefore(hint, txArea.firstChild);
+    }
+}
+
+// 保存隧道設定
+function saveTunnelSettings(mode, config = {}) {
+    try {
+        fetch('/api/tunnel/settings', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                domain_mode: mode,
+                tunnel_type: currentTunnelType || 'tx',
+                ...config
+            })
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+            }
+        })
+        .catch(error => console.warn('保存隧道設定失敗:', error));
+    } catch (error) {
+        console.warn('保存隧道設定異常:', error);
+    }
+}
+
+// 載入已保存的自訂域名資料（當切換到自訂域名模式時）
+function loadSavedCustomDomainData() {
+    // 檢查輸入框是否為空
+    const tokenInput = document.getElementById('cloudflare-token-custom');
+    const certInput = document.getElementById('origin-certificate');
+    const keyInput = document.getElementById('private-key');
+    
+    const isTokenEmpty = !tokenInput || !tokenInput.value.trim();
+    const isCertEmpty = !certInput || !certInput.value.trim();
+    const isKeyEmpty = !keyInput || !keyInput.value.trim();
+    
+    // 如果所有輸入框都是空的，才載入已保存的資料
+    if (isTokenEmpty && isCertEmpty && isKeyEmpty) {
+        
+        fetch('/api/tunnel/settings')
+            .then(response => response.json())
+            .then(data => {
+                if (data.success && data.settings) {
+                    
+                    // 只在輸入框仍然為空時才填入數據（避免覆蓋用戶正在輸入的內容）
+                    if (data.settings.token && tokenInput && !tokenInput.value.trim()) {
+                        tokenInput.value = data.settings.token;
+                    }
+                    if (data.settings.origin_cert && certInput && !certInput.value.trim()) {
+                        certInput.value = data.settings.origin_cert;
+                    }
+                    if (data.settings.private_key && keyInput && !keyInput.value.trim()) {
+                        keyInput.value = data.settings.private_key;
+                    }
+                }
+            })
+            .catch(error => {
+                console.error('載入已保存設定失敗:', error);
+            });
+    } else {
+    }
+}
+
+function setDomainMode(mode, event = null, saveSettings = true) {
     selectedDomainMode = mode;
     const instructionsDiv = document.getElementById('setup-instructions');
-    const tokenInput = document.getElementById('cloudflare-token');
+    const customDomainConfig = document.getElementById('custom-domain-config');
     
-    // 更新選中狀態
+    // 移除所有選項的選中狀態
     document.querySelectorAll('.domain-option').forEach(option => {
-        option.style.borderColor = '#e0e0e0';
+        option.classList.remove('selected');
     });
     
-    // 只有在有事件對象時才設定邊框顏色
-    if (event && event.target && event.target.parentElement) {
-        event.target.parentElement.style.borderColor = '#2196F3';
+    // 設置當前選中選項
+    const targetOption = event ? event.target.closest('.domain-option') : 
+                        document.querySelector(`.domain-option button[onclick*="${mode}"]`)?.closest('.domain-option');
+    if (targetOption) {
+        targetOption.classList.add('selected');
+    }
+    
+    // 控制憑證設置區域的顯示
+    if (mode === 'custom') {
+        instructionsDiv.style.display = 'none';
+        customDomainConfig.style.display = 'block';
+        
+        // 立即載入已保存的自訂域名資料（如果輸入框是空的）
+        loadSavedCustomDomainData();
     } else {
-        // 當直接調用時，根據模式找到對應的選項
-        const targetOption = document.querySelector(`[onclick*="${mode}"]`);
-        if (targetOption) {
-            targetOption.parentElement.style.borderColor = '#2196F3';
-        }
+        instructionsDiv.style.display = 'block';
+        customDomainConfig.style.display = 'none';
     }
     
-    switch(mode) {
-        case 'workers':
-            instructionsDiv.innerHTML = `
-                <h6>固定域名設置：</h6>
-                <p style="margin-bottom: 15px; background: #e8f5e8; padding: 10px; border-radius: 5px;">
-                    注意：此功能需要 Cloudflare 帳戶設置，建議有經驗的使用者選擇。
-                </p>
-                <ol>
-                    <li>前往 <a href="https://dash.cloudflare.com/sign-up" target="_blank">Cloudflare 註冊免費帳戶</a></li>
-                    <li>登入後，左側選單找到「Zero Trust」</li>
-                    <li>點選「網路」→「Tunnels」</li>
-                    <li>點選「建立通道」，選擇「Cloudflared」</li>
-                    <li>輸入通道名稱（如：my-trading-app）</li>
-                    <li>在「安裝連接器」頁面，複製 Token（以 eyJ 開頭的長字串）</li>
-                    <li>回到此頁面，選擇「自訂域名」模式並貼上 Token</li>
-                    <li>在 Cloudflare 中設置「Public hostname」指向 localhost:5000</li>
-                </ol>
-                <p style="color: #2196F3;">如不熟悉上述流程，建議選擇「臨時域名（立即可用）」</p>
-            `;
-            tokenInput.value = 'workers-mode';
-            break;
-            
-        case 'custom':
-            instructionsDiv.innerHTML = `
-                <h6>自訂域名設置：</h6>
-                <ol>
-                    <li>前往 <a href="https://dash.cloudflare.com/sign-up" target="_blank">Cloudflare 註冊</a></li>
-                    <li>在 Zero Trust → 網路 → Tunnels → 新增通道 → 選取Cloudflared → 命名通道名稱後儲存通道</li>
-                    <li>複製 Token（以 eyJ 開頭）</li>
-                    <li>在 Public hostname 設置您的域名</li>
-                </ol>
-                <div style="margin: 10px 0;">
-                    <label>請輸入您的 Cloudflare Token：</label>
-                    <input type="text" id="custom-token" placeholder="eyJ..." style="width: 100%; padding: 8px; margin: 5px 0;">
-                </div>
-            `;
-            break;
-            
-        case 'temporary':
-            instructionsDiv.innerHTML = `
-                <h6>免費域名設置：</h6>
-                <ol>
-                    <li>無需任何準備工作</li>
-                    <li>無需註冊帳戶</li>
-                    <li>直接點選「儲存並啟動」</li>
-                    <li>立即獲得可用域名</li>
-                </ol>
-                <p style="color: #2196F3;">完全免費，立即可用</p>
-            `;
-            tokenInput.value = 'temporary-mode';
-            break;
+    // 保存設定（量化交易系統持久化）
+    if (saveSettings) {
+        // 用戶主動選擇時保存設定
+        saveTunnelSettings(mode);
     }
-    
-    instructionsDiv.style.display = 'block';
 }
 
 function setupTunnel() {
@@ -3668,62 +3780,100 @@ function setupTunnel() {
     // 獲取當前隧道類型，默認為 tx
     const tunnelType = window.currentTunnelType || 'tx';
     
-    let token = 'temporary-mode'; // 預設值
+    let token = ''; // 預設值
+    let originCert = '';
+    let privateKey = '';
     
     if (selectedDomainMode === 'custom') {
-        const customToken = document.getElementById('custom-token');
-        if (!customToken || !customToken.value.trim()) {
-            statusDiv.innerHTML = '<div style="color: red;">請輸入 Cloudflare Token</div>';
+        // 獲取自訂域名配置的 token
+        const customTokenInput = document.getElementById('cloudflare-token-custom');
+        if (!customTokenInput || !customTokenInput.value.trim()) {
+            statusDiv.innerHTML = '<div style="color: red;">請輸入 Cloudflare Tunnel Token</div>';
             return;
         }
-        token = customToken.value.trim();
+        token = customTokenInput.value.trim();
         
         // 驗證token格式
         if (!token.startsWith('eyJ') || token.length < 50) {
             statusDiv.innerHTML = '<div style="color: red;">Token 格式不正確！請確認您複製的是正確的 Cloudflare Tunnel Token</div>';
             return;
         }
+        
+        // 獲取憑證資料
+        const originCertInput = document.getElementById('origin-certificate');
+        const privateKeyInput = document.getElementById('private-key');
+        
+        if (!originCertInput || !originCertInput.value.trim()) {
+            statusDiv.innerHTML = '<div style="color: red;">請輸入 Origin Certificate</div>';
+            return;
+        }
+        
+        if (!privateKeyInput || !privateKeyInput.value.trim()) {
+            statusDiv.innerHTML = '<div style="color: red;">請輸入 Private Key</div>';
+            return;
+        }
+        
+        originCert = originCertInput.value.trim();
+        privateKey = privateKeyInput.value.trim();
+        
+        // 簡單驗證憑證格式
+        if (!originCert.includes('-----BEGIN CERTIFICATE-----') || !originCert.includes('-----END CERTIFICATE-----')) {
+            statusDiv.innerHTML = '<div style="color: red;">Origin Certificate 格式不正確</div>';
+            return;
+        }
+        
+        if (!privateKey.includes('-----BEGIN PRIVATE KEY-----') || !privateKey.includes('-----END PRIVATE KEY-----')) {
+            statusDiv.innerHTML = '<div style="color: red;">Private Key 格式不正確</div>';
+            return;
+        }
     } else if (selectedDomainMode === 'temporary') {
-        token = 'temporary-mode';
+        // 臨時模式不需要token
+        token = '';
     }
     
     setupBtn.disabled = true;
     setupBtn.textContent = '設置中...';
     statusDiv.innerHTML = `<div style="color: blue;">正在設置${tunnelType.toUpperCase()}隧道服務，請稍候...</div>`;
     
-    // 先設置隧道配置，再啟動
-    fetch('/api/ngrok/setup', {
+    // 使用新的隧道設置API
+    fetch('/api/tunnel/setup', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-            authtoken: token,
-            mode: selectedDomainMode
+            token: token,
+            service_type: 'cloudflare',
+            tunnel_type: tunnelType,
+            mode: selectedDomainMode,
+            origin_certificate: originCert,
+            private_key: privateKey
         })
     })
     .then(res => res.json())
     .then(data => {
-        if (data.status === 'success') {
-            statusDiv.innerHTML = `<div style="color: blue;">設置成功！正在啟動${tunnelType.toUpperCase()}隧道...</div>`;
-            
-            // 啟動指定類型的隧道
-            return fetch(`/api/tunnel/${tunnelType}/start`, {
-                method: 'POST'
-            });
-        } else {
-            throw new Error(data.message);
-        }
-    })
-    .then(res => res.json())
-    .then(data => {
         if (data.success) {
-            statusDiv.innerHTML = `<div style="color: green;">${tunnelType.toUpperCase()}隧道啟動成功！</div>`;
+            statusDiv.innerHTML = '<div style="color: green;">隧道設置成功！</div>';
+            
+            // 只在自訂域名模式時才保存配置
+            if (selectedDomainMode === 'custom') {
+                const configToSave = {
+                    token: token,
+                    origin_cert: originCert,
+                    private_key: privateKey,
+                    use_shared_domain: true,  // 純共用域名模式
+                    last_setup_time: new Date().toISOString()
+                };
+                saveTunnelSettings(selectedDomainMode, configToSave);
+            } else {
+                // 臨時模式只保存模式選擇，不保存憑證資料
+                saveTunnelSettings(selectedDomainMode, {});
+            }
             
             // 延遲關閉模態窗口
             setTimeout(() => {
                 closeTunnelSetupModal();
-            }, 2000);
+            }, 3000);
         } else {
-            statusDiv.innerHTML = `<div style="color: red;">隧道啟動失敗：${data.error || '未知錯誤'}</div>`;
+            statusDiv.innerHTML = `<div style="color: red;">設置失敗：${data.message || '未知錯誤'}</div>`;
         }
     })
     .catch(error => {
@@ -3736,9 +3886,19 @@ function setupTunnel() {
 }
 
 function clearTunnelToken() {
-    // 現在只支援 Cloudflare Tunnel
-    document.getElementById('cloudflare-token').value = '';
+    // 清除所有輸入欄位
+    const tokenInput = document.getElementById('cloudflare-token-custom');
+    const certInput = document.getElementById('origin-certificate');
+    const keyInput = document.getElementById('private-key');
+    
+    if (tokenInput) tokenInput.value = '';
+    if (certInput) certInput.value = '';
+    if (keyInput) keyInput.value = '';
+    
     document.getElementById('setup-status').innerHTML = '';
+    
+    // 重置為臨時域名模式
+    setDomainMode('temporary');
 }
 
 function closeTunnelSetupModal() {
@@ -4098,8 +4258,6 @@ function updateBtcRealtimeData() {
         console.error('更新BTC實時數據失敗:', error);
     });
 }
-
-
 // 輔助函數：更新元素內容
 function updateElementIfExists(elementId, value, formatter) {
     const element = document.getElementById(elementId);
@@ -4107,8 +4265,6 @@ function updateElementIfExists(elementId, value, formatter) {
         element.textContent = formatter ? formatter(value) : value;
     }
 }
-
-
 // Complex calculation functions removed - all calculations moved to backend
 
 // BTC帳戶資訊函數 - 新版本支援完整格式化
@@ -4123,7 +4279,6 @@ function updateBtcAccountInfo() {
     .then(data => {
         if (data.success && data.account) {
             const account = data.account;
-            console.log('BTC Account updated (with formatting):', account);
             
             // 指定小數位數的欄位更新函數
             const updateFieldWithDecimals = (id, value, unit = '', decimals = 2, isPnL = false, isPercentage = false) => {
@@ -4407,7 +4562,6 @@ function sendBtcStartupNotification() {
     .then(res => res.json())
     .then(data => {
         if (data.success) {
-            console.log('BTC啟動通知發送成功');
         } else {
             console.error('BTC啟動通知發送失敗:', data.error || data.message);
         }
@@ -4432,7 +4586,6 @@ function sendBtcTradingStatistics(date = null) {
     .then(res => res.json())
     .then(data => {
         if (data.success) {
-            console.log('BTC交易統計通知發送成功');
         } else {
             console.error('BTC交易統計通知發送失敗:', data.error || data.message);
         }
@@ -4457,7 +4610,6 @@ function generateBtcDailyReport(date = null) {
     .then(res => res.json())
     .then(data => {
         if (data.success) {
-            console.log('BTC日報生成成功:', data.filename);
             alert(`BTC日報生成成功！\n文件名：${data.filename}\n日期：${data.date}`);
         } else {
             console.error('BTC日報生成失敗:', data.error || data.message);
@@ -4484,7 +4636,6 @@ function generateBtcMonthlyReport(year = null, month = null) {
     .then(res => res.json())
     .then(data => {
         if (data.success) {
-            console.log('BTC月報生成成功:', data.filename);
             alert(`BTC月報生成成功！\n文件名：${data.filename}\n年月：${data.year}年${data.month}月`);
         } else {
             console.error('BTC月報生成失敗:', data.error || data.message);
@@ -4514,7 +4665,6 @@ function btcManualOrder(quantity, action, side, orderType = 'MARKET') {
     .then(res => res.json())
     .then(data => {
         if (data.success) {
-            console.log('BTC手動下單成功:', data);
             // 如果有成交價格，可以調用成交通知
             if (data.order_result && data.order_result.price) {
                 // 模擬成交通知
@@ -4549,7 +4699,6 @@ function btcOrderFillNotification(fillData) {
     .then(res => res.json())
     .then(data => {
         if (data.success) {
-            console.log('BTC成交通知處理成功');
         } else {
             console.error('BTC成交通知處理失敗:', data.error || data.message);
         }
@@ -4600,13 +4749,8 @@ function updateBtcPositionInfo() {
         })
     ])
     .then(([positionData, accountData]) => {
-        console.log('API responses:', { positionData, accountData });
-        console.log('AccountData structure:', Object.keys(accountData));
-        console.log('AccountData maintMargin:', accountData.maintMargin);
-        console.log('AccountData marginBalance:', accountData.marginBalance);
         
         if (positionData.success && positionData.positions) {
-            console.log('BTC Position updated (silent):', positionData.positions);
             
             const positions = positionData.positions;
             if (positions.length > 0 && accountData.success) {
@@ -4641,13 +4785,18 @@ function updateBtcPositionInfo() {
                 const tradingPairInfo = document.getElementById('trading-pair-info');
                 
                 if (tradingPairType) {
+                    // 動態判斷合約類型（目前幣安期貨都是永續）
                     tradingPairType.textContent = '永續';
                 }
                 
                 if (tradingPairMargin) {
-                    // 從配置或API獲取槓桿信息
+                    // 從幣安API動態獲取保證金模式和槓桿
                     const leverage = position.leverage || '20';
-                    tradingPairMargin.textContent = `全倉${leverage}x`;
+                    const marginType = position.marginType || 'cross';
+                    
+                    // 根據API返回的保證金模式顯示中文
+                    const marginTypeText = marginType === 'isolated' ? '逐倉' : '全倉';
+                    tradingPairMargin.textContent = `${marginTypeText}${leverage}x`;
                 }
                 
                 if (tradingPairInfo) {
@@ -4683,27 +4832,12 @@ function updateBtcPositionInfo() {
                 const marginRatio = marginBalance > 0 ? (maintMargin / marginBalance) * 100 : 0;
                 
                 // 調試：輸出API字段值
-                console.log('Margin calculation with account data:', {
-                    account_maintMargin: account.maintMargin,
-                    account_marginBalance: account.marginBalance,
-                    calculated_margin: margin,
-                    marginRatio_calculated: marginRatio,
-                    maintMargin_parsed: maintMargin,
-                    marginBalance_parsed: marginBalance
-                });
                 
                 // 計算收益率：未實現盈虧 ÷ 初始保證金 × 100%
                 // 初始保證金 = 標記價格計算的保證金 = 當前持倉價值 ÷ 槓桿倍數
                 const initialMargin = currentPositionValue / leverage;
                 const roe = initialMargin > 0 ? (unrealizedPnl / initialMargin) * 100 : 0;
                 
-                console.log('ROE calculation:', {
-                    unrealizedPnl: unrealizedPnl,
-                    initialMargin: initialMargin,
-                    currentPositionValue: currentPositionValue,
-                    leverage: leverage,
-                    roe_calculated: roe
-                });
                 
                 // 更新持倉數量 - 顯示BTC數量和動態USDT價值
                 const sizeElement = document.getElementById('position-btc-size');
@@ -4792,14 +4926,28 @@ function updateBtcPositionInfo() {
                     directionBadge.className = 'position-direction-badge';
                 }
                 
+                // 無持倉時不顯示交易對，因為無持倉就沒有交易對數據
                 if (tradingPairMain) {
-                    tradingPairMain.textContent = 'BTCUSDT';
+                    tradingPairMain.textContent = '';
                 }
                 
                 if (tradingPairInfo) {
                     tradingPairInfo.style.display = 'none';
                 }
                 
+                // 重置交易對相關信息
+                const tradingPairType = document.getElementById('trading-pair-type');
+                const tradingPairMargin = document.getElementById('trading-pair-margin');
+                
+                if (tradingPairType) {
+                    tradingPairType.textContent = '';
+                }
+                
+                if (tradingPairMargin) {
+                    tradingPairMargin.textContent = '';
+                }
+                
+                // 重置其他持倉數據
                 const resetElements = [
                     'position-btc-side', 'position-btc-size', 'position-btc-margin-ratio', 
                     'position-total-pnl-btc', 'position-btc-entry-price', 'position-btc-mark-price', 

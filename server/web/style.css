@@ -2980,4 +2980,109 @@ button[type="submit"]:hover {
     color: white;
 }
 
+/* 域名選擇模式樣式 */
+.domain-options {
+    margin: 20px 0;
+}
+
+.domain-option {
+    position: relative;
+    border: 3px solid transparent;
+    border-radius: 12px;
+    padding: 20px;
+    margin: 15px 0;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    background: #fff;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.domain-option:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.15);
+}
+
+.domain-option.selected {
+    border-color: #2196f3;
+    background: #f3f8ff;
+    box-shadow: 0 0 0 2px rgba(33, 150, 243, 0.2);
+}
+
+.domain-option.selected::before {
+    content: "✓ 已選擇";
+    position: absolute;
+    top: 10px;
+    right: 15px;
+    background: #2196f3;
+    color: white;
+    padding: 4px 8px;
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: bold;
+}
+
+.domain-option h6 {
+    margin: 0 0 12px 0;
+    font-weight: bold;
+    font-size: 16px;
+}
+
+.domain-option p {
+    margin: 8px 0;
+    line-height: 1.5;
+}
+
+.domain-option button {
+    margin-top: 15px;
+    padding: 12px 24px;
+    border: none;
+    border-radius: 8px;
+    font-weight: bold;
+    font-size: 14px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    min-width: 120px;
+}
+
+.domain-option button:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+}
+
+.domain-option button:active {
+    transform: translateY(0);
+}
+
+/* 臨時域名樣式 */
+.domain-option:first-child {
+    border-color: #27ae60;
+    background: #f8fff8;
+}
+
+.domain-option:first-child.selected {
+    border-color: #27ae60;
+    background: #e8f5e8;
+    box-shadow: 0 0 0 2px rgba(39, 174, 96, 0.2);
+}
+
+.domain-option:first-child.selected::before {
+    background: #27ae60;
+}
+
+/* 自訂域名樣式 */
+.domain-option:last-child {
+    border-color: #ff9800;
+    background: #fff8e1;
+}
+
+.domain-option:last-child.selected {
+    border-color: #ff9800;
+    background: #fff3e0;
+    box-shadow: 0 0 0 2px rgba(255, 152, 0, 0.2);
+}
+
+.domain-option:last-child.selected::before {
+    background: #ff9800;
+}
+
  

@@ -1,18 +1,21 @@
 {
-  "version": "1.4.14",
-  "build": "202507281800",
-  "release_date": "2025-07-28",
-  "description": "v1.4.14 - 日誌記錄系統全面修復與架構優化",
+  "version": "1.4.16",
+  "build": "202507301130",
+  "release_date": "2025-07-30",
+  "description": "v1.4.16 - Cloudflare Tunnel系統完整重構與穩定性大幅提升",
   "github_repo": "LAON7877/Auto91",
   "update_url": "https://api.github.com/repos/LAON7877/Auto91/releases/latest",
   "changelog": [
-    "修復add_custom_request_log函數過度過濾問題，確保重要交易日誌正常記錄",
-    "為TX和BTC手動下單添加完整日誌記錄系統，包含成功失敗狀態和詳細參數",
-    "統一前端日誌API端點為/api/logs，修復前端使用錯誤API導致的日誌缺失",
-    "實現TX和BTC完全獨立的日誌過濾系統，TX歸TX、BTC歸BTC",
-    "修復SystemLogManager等關鍵日誌更新函數，確保5秒自動刷新正常運作",
-    "完善Flask請求日誌機制和線程安全機制，避免日誌記錄衝突",
-    "實現雙系統獨立日誌架構，手動下單、自動交易、系統狀態完整分離記錄"
+    "修復臨時域名模式中platform變數未導入錯誤，確保Cloudflare Tunnel正常啟動",
+    "實現URL自動加上webhook後綴功能，TX系統添加/webhook，BTC系統添加/api/btc/webhook",
+    "完全重新設計域名選擇UI界面，提供清晰的視覺狀態指示和懸停效果",
+    "修復切換到自訂域名時輸入欄不自動載入已保存資料的問題，實現智能資料載入",
+    "全面清理測試用代碼、無用代碼和重複代碼，提升系統執行效率和代碼品質",
+    "修復程式關閉時BTC模組線程卡住問題，實現可中斷的睡眠機制和daemon線程管理",
+    "優化所有WebSocket重連邏輯，防止關閉時的干擾重連行為",
+    "改進所有Timer管理機制，確保程式關閉時正確取消所有背景任務",
+    "實現BTC風險監控、連接監控等所有長時間運行線程的快速停止機制",
+    "大幅縮短程式關閉時間，從可能的無限等待優化至2秒內完成"
   ],
   "required_files": [
     "index/main.py",
@@ -36,10 +39,14 @@
     "config/tx.env",
     "config/btc.env"
   ],
-  "updated_at": "2025-07-28T18:00:00.000000",
+  "updated_at": "2025-07-30T11:30:00.000000",
   "updated_files": [
-    "index/main.py",
+    "index/tunnel.py",
+    "index/main.py", 
+    "index/btcmain.py",
     "web/main.js",
+    "web/style.css",
+    "web/index.html",
     "index/version.json"
   ]
 }

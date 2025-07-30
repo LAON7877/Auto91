@@ -6,8 +6,9 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-# JSON檔案目錄
-TRADE_RECORDS_DIR = os.path.join(os.path.dirname(__file__), '..', 'TXtraderecords')
+# 使用標準化的JSON檔案目錄
+from trading_config import TradingConfig
+TRADE_RECORDS_DIR = TradingConfig.TX_RECORDS_DIR
 
 def get_today_str():
     """獲取今日日期字串"""
@@ -387,8 +388,8 @@ def cleanup_old_tx_files():
                 except Exception as e:
                     logger.warning(f"清理檔案失敗 {file_path}: {e}")
         
-        # 清理TXtradedata目錄（如果存在）
-        tx_transdata_dir = os.path.join(os.path.dirname(__file__), '..', 'TXtradedata')
+        # 清理TX交易數據目錄
+        tx_transdata_dir = TradingConfig.TX_DATA_DIR
         if os.path.exists(tx_transdata_dir):
             for file_name in os.listdir(tx_transdata_dir):
                 if file_name.startswith('TXtransdata_') and file_name.endswith('.json'):
@@ -415,8 +416,8 @@ def save_tx_transdata(trade_data):
         trade_data: 交易數據
     """
     try:
-        # 創建TXtradedata目錄（有數據時才創建）
-        tx_transdata_dir = os.path.join(os.path.dirname(__file__), '..', 'TXtradedata')
+        # 創建TX交易數據目錄（使用標準化路徑）
+        tx_transdata_dir = TradingConfig.TX_DATA_DIR
         os.makedirs(tx_transdata_dir, exist_ok=True)
         
         # 按日期分檔儲存
@@ -434,7 +435,7 @@ def save_tx_transdata(trade_data):
         
         # 儲存
         save_json_file(transdata_file, existing_data)
-        logger.info(f"✅ TX交易數據已儲存至TXtradedata: {transdata_file}")
+        logger.info(f"✅ TX交易數據已儲存至標準化路徑: {transdata_file}")
         
         # 執行清理（每次保存時檢查一次，但加入隨機性避免頻繁執行）
         import random

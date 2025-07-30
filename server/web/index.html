@@ -901,49 +901,108 @@
             <div class="modal-body">
                 <!-- Cloudflare Tunnel 設定 -->
                 <div id="cloudflare-config" class="service-config">
-                    <!-- 隱藏的token輸入框 -->
-                    <input type="hidden" id="cloudflare-token" value="temporary-mode">
-                    
                     <div class="service-features">
-                        <h5>Cloudflare Tunnel 優勢</h5>
-                        <ul>
-                            <li>完全免費．無流量限制</li>
-                            <li>自訂域名．客製化配置</li>
-                            <li>全球CDN優化加速</li>
-                            <li>擁有企業級安全性</li>
+                        <h5 style="color: #1976d2; margin-bottom: 15px; font-weight: bold;">Cloudflare Tunnel 優勢</h5>
+                        <ul style="background: #f3f8ff; padding: 15px; border-radius: 8px; margin-bottom: 20px;">
+                            <li style="color: #2e7d32; margin: 8px 0; font-weight: 500;">完全免費・無流量限制</li>
+                            <li style="color: #2e7d32; margin: 8px 0; font-weight: 500;">自訂域名・客製化配置</li>
+                            <li style="color: #2e7d32; margin: 8px 0; font-weight: 500;">全球CDN優化加速</li>
+                            <li style="color: #2e7d32; margin: 8px 0; font-weight: 500;">擁有企業級安全性</li>
                         </ul>
                     </div>
                     
                     <div class="service-setup">
-                        <h5>選擇您的域名模式：</h5>
+                        <h5 style="color: #333; margin-bottom: 15px;">選擇您的域名模式：</h5>
                         
                         <div class="domain-options" style="margin: 15px 0;">
-                            <div class="domain-option" style="border: 2px solid #27ae60; border-radius: 8px; padding: 15px; margin: 10px 0; background: #f8fff8;">
-                                <h6 style="color: #27ae60; margin: 0 0 10px 0;">臨時域名（推薦使用）</h6>
-                                <p style="margin: 5px 0; color: #666;">無需註冊，立即獲得可用域名</p>
-                                <p style="margin: 5px 0; font-weight: bold;">域名格式：<code>random.trycloudflare.com</code></p>
-                                <p style="margin: 5px 0; color: #27ae60; font-size: 0.9rem;">✓ 完全免費 ✓ 立即可用 ✓ 無需設定</p>
-                                <button onclick="setDomainMode('temporary')" style="background: #27ae60; color: white; border: none; padding: 8px 15px; border-radius: 4px; cursor: pointer;">選擇此模式</button>
+                            <div class="domain-option" onclick="setDomainMode('temporary', event)">
+                                <h6 style="color: #1b5e20; margin: 0 0 10px 0; font-weight: bold;">臨時域名（推薦使用）</h6>
+                                <p style="margin: 5px 0; color: #333;">無需註冊，立即獲得可用域名</p>
+                                <p style="margin: 5px 0; font-weight: bold; background: #e8f5e8; padding: 5px; border-radius: 4px;">域名格式：<code style="color: #d32f2f;">random.trycloudflare.com</code></p>
+                                <p style="margin: 5px 0; color: #2e7d32; font-size: 0.9rem;">完全免費 | 立即可用 | 無需設定</p>
+                                <button onclick="setDomainMode('temporary', event)" style="background: #27ae60; color: white; border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer; font-weight: bold;">選擇此模式</button>
                             </div>
                             
-                            <div class="domain-option" style="border: 2px solid #e0e0e0; border-radius: 8px; padding: 15px; margin: 10px 0;">
-                                <h6 style="color: #FF9800; margin: 0 0 10px 0;">自訂域名（高級用戶）</h6>
-                                <p style="margin: 5px 0; color: #666;">使用您擁有的域名，完全自主控制</p>
-                                <p style="margin: 5px 0; font-weight: bold;">域名格式：<code>app.yourdomain.com</code></p>
-                                <p style="margin: 5px 0; color: #FF9800; font-size: 0.9rem;">需要：域名 + Cloudflare 帳戶 + DNS 設定</p>
-                                <button onclick="setDomainMode('custom')" style="background: #FF9800; color: white; border: none; padding: 8px 15px; border-radius: 4px; cursor: pointer;">選擇此模式</button>
+                            <div class="domain-option" onclick="setDomainMode('custom', event)">
+                                <h6 style="color: #e65100; margin: 0 0 10px 0; font-weight: bold;">自訂域名（高級用戶）</h6>
+                                <p style="margin: 5px 0; color: #333;">使用您擁有的域名，完全自主控制</p>
+                                <p style="margin: 5px 0; font-weight: bold; background: #fff3e0; padding: 5px; border-radius: 4px;">域名格式：<code style="color: #d32f2f;">app.yourdomain.com</code></p>
+                                <p style="margin: 5px 0; color: #f57c00; font-size: 0.9rem;">需要：域名 + Cloudflare 帳戶 + Origin Certificate</p>
+                                <button onclick="setDomainMode('custom', event)" style="background: #ff9800; color: white; border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer; font-weight: bold;">選擇此模式</button>
                             </div>
                         </div>
                         
-                        <div id="setup-instructions" style="display: block; background: #f0f8ff; padding: 15px; border-radius: 8px; margin: 15px 0;">
-                            <h6>臨時域名設置：</h6>
-                            <ol>
+                        <div id="setup-instructions" style="display: block; background: #e3f2fd; padding: 20px; border-radius: 8px; margin: 15px 0; border-left: 4px solid #2196f3;">
+                            <h6 style="color: #1565c0; margin-bottom: 15px; font-weight: bold;">臨時域名設置步驟：</h6>
+                            <ol style="color: #333; line-height: 1.6;">
                                 <li>無需任何準備工作</li>
                                 <li>無需註冊帳戶</li>
                                 <li>直接點選「儲存並啟動」</li>
                                 <li>立即獲得可用域名</li>
                             </ol>
-                            <p style="color: #2196F3;">完全免費，立即可用</p>
+                            <div style="background: #1976d2; color: white; padding: 10px; border-radius: 4px; margin-top: 10px; text-align: center; font-weight: bold;">
+                                完全免費，立即可用！
+                            </div>
+                        </div>
+                        
+                        <!-- 自訂域名憑證設置區域 -->
+                        <div id="custom-domain-config" style="display: none; background: #e3f2fd; padding: 20px; border-radius: 8px; margin: 15px 0; border-left: 4px solid #2196f3;">
+                            <h6 style="color: #1565c0; margin-bottom: 15px; font-weight: bold;">自訂域名憑證設置：</h6>
+                            
+                            <ol style="color: #333; line-height: 1.6; margin-bottom: 20px;">
+                                <li>輸入 Cloudflare Tunnel Token</li>
+                                <li>貼上 Origin Certificate 憑證內容</li>
+                                <li>貼上對應的 Private Key 私鑰</li>
+                                <li>選擇域名使用模式</li>
+                                <li>點擊「儲存並啟動」完成設置</li>
+                            </ol>
+                            
+                            <!-- 純共用域名模式說明 -->
+                            <div style="background: #e8f5e8; border: 2px solid #4caf50; border-radius: 8px; padding: 18px; margin-bottom: 20px;">
+                                <div style="display: flex; align-items: center; margin-bottom: 12px;">
+                                    <h6 style="color: #2e7d32; margin: 0; font-size: 14px; font-weight: bold;">自訂域名模式</h6>
+                                    <span style="background: #4caf50; color: white; font-size: 10px; padding: 2px 6px; border-radius: 3px; margin-left: 10px;">推薦</span>
+                                </div>
+                                
+                                <div style="font-size: 12px; color: #2e7d32; line-height: 1.5; margin-bottom: 12px;">
+                                    • TX和BTC系統共用同一個域名和憑證<br>
+                                    • 透過不同路徑分流：<br>
+                                       /webhook (TX)<br>
+                                       /api/btc/webhook (BTC)<br>
+                                    • 只需一組 Token、Certificate、Private Key<br>
+                                </div>
+
+                            
+                            <div class="form-group" style="margin-bottom: 15px;">
+                                <label for="cloudflare-token-custom" style="display: block; margin-bottom: 8px; font-weight: bold; color: #333; font-size: 14px;">
+                                    Cloudflare Tunnel Token:
+                                </label>
+                                <textarea id="cloudflare-token-custom" rows="3" 
+                                    placeholder="請貼上從 Cloudflare Dashboard 複製的 Tunnel Token..." 
+                                    style="width: calc(100% - 24px); padding: 10px; border: 1px solid #ddd; border-radius: 4px; font-family: 'Courier New', monospace; font-size: 12px; background: #ffffff; color: #333; resize: vertical; box-sizing: border-box;"></textarea>
+                            </div>
+                            
+                            <div class="form-group" style="margin-bottom: 15px;">
+                                <label for="origin-certificate" style="display: block; margin-bottom: 8px; font-weight: bold; color: #333; font-size: 14px;">
+                                    Origin Certificate:
+                                </label>
+                                <textarea id="origin-certificate" rows="6" 
+                                    placeholder="請貼上 Origin Certificate 內容...&#10;格式：&#10;-----BEGIN CERTIFICATE-----&#10;...&#10;-----END CERTIFICATE-----" 
+                                    style="width: calc(100% - 24px); padding: 10px; border: 1px solid #ddd; border-radius: 4px; font-family: 'Courier New', monospace; font-size: 12px; background: #ffffff; color: #333; resize: vertical; box-sizing: border-box;"></textarea>
+                            </div>
+                            
+                            <div class="form-group" style="margin-bottom: 15px;">
+                                <label for="private-key" style="display: block; margin-bottom: 8px; font-weight: bold; color: #333; font-size: 14px;">
+                                    Private Key:
+                                </label>
+                                <textarea id="private-key" rows="6" 
+                                    placeholder="請貼上 Private Key 內容...&#10;格式：&#10;-----BEGIN PRIVATE KEY-----&#10;...&#10;-----END PRIVATE KEY-----" 
+                                    style="width: calc(100% - 24px); padding: 10px; border: 1px solid #ddd; border-radius: 4px; font-family: 'Courier New', monospace; font-size: 12px; background: #ffffff; color: #333; resize: vertical; box-sizing: border-box;"></textarea>
+                            </div>
+                            
+                            <div style="background: #1976d2; color: white; padding: 10px; border-radius: 4px; margin-top: 10px; text-align: center; font-weight: bold;">
+                                憑證將安全儲存並自動區分 TX/BTC 系統
+                            </div>
                         </div>
                     </div>
                 </div>

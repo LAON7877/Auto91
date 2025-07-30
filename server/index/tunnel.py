@@ -204,7 +204,7 @@ class CloudflareTunnel:
             return False
     
     def create_tunnel(self, tunnel_name=None):
-        """建立隧道"""
+        """建立隧道（支援Origin Certificate）"""
         try:
             if not tunnel_name:
                 tunnel_name = f"autotx-{int(time.time())}"
@@ -213,10 +213,17 @@ class CloudflareTunnel:
             
             logger.info(f"正在建立隧道: {tunnel_name}")
             
-            # 建立隧道
-            result = subprocess.run([
-                self.exe_path, 'tunnel', 'create', tunnel_name
-            ], capture_output=True, text=True, timeout=30)
+            # 檢查是否有Origin Certificate
+            cert_content, key_content = self.load_certificates()
+            
+            # 建立隧道命令 (tunnel create 不需要 --origincert 參數)
+            cmd = [self.exe_path, 'tunnel', 'create', tunnel_name]
+            
+            # 檢查是否有Origin Certificate (僅用於日誌)
+            if cert_content and key_content:
+                logger.info(f"將在運行時使用Origin Certificate進行自訂域名連接")
+            
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
             
             if result.returncode == 0:
                 logger.info(f"隧道 {tunnel_name} 建立成功!")
@@ -272,42 +279,176 @@ ingress:
             raise
     
     def start_tunnel(self, retry_count=0, max_retries=2):
-        """啟動隧道"""
+        """啟動隧道（量化交易系統優化版）"""
         try:
             if self.status == "running":
-                logger.info("隧道已經在運行中")
+                logger.info(f"{self.tunnel_type}隧道已在運行中")
                 return True
             
-            logger.info(f"正在啟動 Cloudflare Tunnel... (嘗試 {retry_count + 1}/{max_retries + 1})")
+            logger.info(f"啟動{self.tunnel_type}隧道 (嘗試 {retry_count + 1}/{max_retries + 1})")
             self.status = "starting"
             
-            # 根據模式選擇啟動方式
-            if self.mode == 'temporary':
-                # 臨時域名模式
+            # 根據用戶設定決定模式（而非自動判斷檔案存在）
+            # 檢查用戶實際選擇的模式
+            config_dir = os.path.join(os.path.dirname(__file__), '..', 'config')
+            settings_file = os.path.join(config_dir, 'tunnel_settings.json')
+            user_selected_mode = 'temporary'  # 預設臨時模式
+            
+            if os.path.exists(settings_file):
+                try:
+                    with open(settings_file, 'r', encoding='utf-8') as f:
+                        settings = json.load(f)
+                        user_selected_mode = settings.get('domain_mode', 'temporary')
+                except:
+                    pass
+            
+            logger.info(f"用戶選擇的模式: {user_selected_mode}")
+            
+            # 初始化環境變數
+            env = os.environ.copy()
+            # 初始化證書內容變量
+            cert_content = None
+            key_content = None
+            token = None
+            
+            if user_selected_mode == 'temporary':
+                # 用戶明確選擇臨時域名模式 - 直接使用，不檢查任何配置檔案
+                self.mode = 'temporary'
+                logger.info(f"用戶選擇臨時域名模式 - {self.tunnel_type}系統")
+                
                 cmd = [
                     self.exe_path, 'tunnel', 
-                    '--url', f'http://localhost:{self.port}'
+                    '--url', f'http://localhost:{self.port}',
+                    '--loglevel', 'info'
                 ]
-            else:
-                # 自訂域名模式 (需要token)
+                
+            elif user_selected_mode == 'custom':
+                # 用戶選擇自定義域名模式 - 檢查證書和token
+                cert_content, key_content = self.load_certificates()
                 token = self.load_token()
-                if not token:
-                    raise Exception("自訂域名模式需要有效的 Cloudflare Token")
+                
+                logger.info(f"檢查自定義模式資源 - Token: {'有' if token and len(token.strip()) > 10 else '無'}, Cert: {'有' if cert_content else '無'}, Key: {'有' if key_content else '無'}")
+                
+                # 檢查token是否為有效的實際token（不是placeholder）
+                if (cert_content and key_content and token and 
+                    token != 'temporary-mode' and token.strip() and 
+                    len(token.strip()) > 50):  # 真實token通常很長
+                    # 有完整憑證對和token - 直接使用Token+Origin Certificate模式
+                    self.mode = 'custom'
+                    logger.info(f"使用Origin Certificate模式 - {self.tunnel_type}系統")
+                    
+                    cert_file = os.path.join(config_dir, 'cert.pem')  # 使用統一的共用證書
+                
+                    # 確保使用絕對路徑並驗證憑證檔案存在
+                    cert_file = os.path.abspath(cert_file)
+                    
+                    if not os.path.exists(cert_file):
+                        raise Exception(f"Origin Certificate檔案不存在: {cert_file}")
+                    
+                    # 檢查是否為WSL環境（避免使用os.uname()在Windows中會出錯）
+                    try:
+                        # 嘗試檢查是否在WSL環境中
+                        system_info = platform.uname()
+                        if hasattr(system_info, 'release') and 'microsoft' in system_info.release.lower():
+                            # 在WSL中，保持原始路徑格式
+                            logger.info(f"WSL環境，使用原始路徑: {cert_file}")
+                        else:
+                            # Windows原生環境，轉換為Windows路徑
+                            cert_file_win = cert_file.replace('/mnt/c/', 'C:\\').replace('/', '\\')
+                            logger.info(f"Windows環境路徑轉換: {cert_file} -> {cert_file_win}")
+                            cert_file = cert_file_win
+                    except:
+                        # 如果檢測失敗，使用Windows路徑格式作為備用
+                        cert_file_win = cert_file.replace('/mnt/c/', 'C:\\').replace('/', '\\')
+                        logger.info(f"路徑檢測失敗，使用Windows格式: {cert_file} -> {cert_file_win}")
+                        cert_file = cert_file_win
+                    
+                    # 使用Token + Origin Certificate，直接通過參數指定
+                    # 正確的參數順序：--origincert 是 TUNNEL COMMAND OPTIONS，必須在 tunnel 之前
+                    # 添加 --origin-ca-pool 參數指定證書池路徑
+                    cmd_args = [
+                        '--origincert', cert_file,
+                        '--loglevel', 'info',
+                        'tunnel', 'run',
+                        '--token', token,
+                        '--origin-ca-pool', cert_file,
+                        '--url', f'http://localhost:{self.port}'
+                    ]
+                    
+                    logger.info(f"使用Origin Certificate直接運行: {cert_file}")
+                    logger.info(f"隧道將連接到本地端口: {self.port}")
+                    logger.info(f"詳細參數檢查:")
+                    for i, arg in enumerate(cmd_args):
+                        logger.info(f"  參數 {i}: '{arg}' (長度: {len(arg)})")
+                    
+                    # 完整命令
+                    cmd = [self.exe_path] + cmd_args
+                    logger.info(f"完整命令: {' '.join(cmd)}")
+                    
+                elif (token and token != 'temporary-mode' and token.strip() and 
+                      len(token.strip()) > 50 and not (cert_content and key_content)):
+                    # 僅有token - 使用標準自訂域名模式
+                    self.mode = 'custom'
+                    logger.info(f"使用標準自訂域名模式 - {self.tunnel_type}系統")
+                    
+                    cmd = [
+                        self.exe_path, 'tunnel', 
+                        'run', '--token', token,
+                        '--loglevel', 'info'
+                    ]
+                    
+                else:
+                    # 自定義模式但缺少必要檔案 - 降級到臨時模式
+                    logger.warning(f"自定義模式缺少必要檔案，降級到臨時模式")
+                    self.mode = 'temporary'
+                    logger.info(f"使用臨時域名模式 - {self.tunnel_type}系統")
+                    
+                    cmd = [
+                        self.exe_path, 'tunnel', 
+                        '--url', f'http://localhost:{self.port}',
+                        '--loglevel', 'info'
+                    ]
+            else:
+                # 預設使用臨時域名模式
+                self.mode = 'temporary'
+                logger.info(f"預設使用臨時域名模式 - {self.tunnel_type}系統")
+                
                 cmd = [
                     self.exe_path, 'tunnel', 
-                    'run', '--token', token
+                    '--url', f'http://localhost:{self.port}',
+                    '--loglevel', 'info'
                 ]
             
             logger.info(f"執行命令: {' '.join(cmd)}")
             
-            self.process = subprocess.Popen(
-                cmd, 
-                stdout=subprocess.PIPE, 
-                stderr=subprocess.STDOUT,  # 合併stderr到stdout
-                text=True,
-                bufsize=1,  # 行緩沖
-                universal_newlines=True
-            )
+            # Windows平台使用shell=True避免參數解析問題
+            if platform.system() == "Windows" and self.mode == 'custom' and cert_content:
+                # Origin Certificate模式在Windows下使用shell=True
+                cmd_str = ' '.join(f'"{arg}"' if ' ' in arg else arg for arg in cmd)
+                logger.info(f"Windows Shell命令: {cmd_str}")
+                logger.info(f"設置環境變數 TUNNEL_ORIGIN_CERT: {env.get('TUNNEL_ORIGIN_CERT', 'None')}")
+                
+                self.process = subprocess.Popen(
+                    cmd_str,
+                    shell=True,
+                    stdout=subprocess.PIPE, 
+                    stderr=subprocess.STDOUT,  # 合併stderr到stdout
+                    text=True,
+                    bufsize=1,  # 行緩沖
+                    universal_newlines=True,
+                    env=env  # 使用包含TUNNEL_ORIGIN_CERT的環境變數
+                )
+            else:
+                # 其他情況使用標準列表模式
+                self.process = subprocess.Popen(
+                    cmd, 
+                    stdout=subprocess.PIPE, 
+                    stderr=subprocess.STDOUT,  # 合併stderr到stdout
+                    text=True,
+                    bufsize=1,  # 行緩沖
+                    universal_newlines=True,
+                    env=env  # 使用環境變數
+                )
             
             # ====== 新增：記錄進程到 main.ALL_CHILD_PROCESSES ======
             if self.child_process_list is not None:
@@ -333,13 +474,23 @@ ingress:
                     full_output = ''.join(output_buffer)
                     logger.info(f"隧道進程結束，完整輸出：\n{full_output}")
                     
-                    # 檢查完整輸出中是否有URL
+                    # 檢查完整輸出中是否有臨時隧道URL
                     url_match = re.search(r'https://[a-zA-Z0-9\-]+\.trycloudflare\.com', full_output)
                     if url_match:
                         self.tunnel_url = url_match.group(0)
                         self.tunnel_name = url_match.group(0).split('//')[1].split('.')[0]
                         url_found = True
-                        logger.info(f"從完整輸出中找到隧道URL: {self.tunnel_url}")
+                        logger.info(f"從完整輸出中找到臨時隧道URL: {self.tunnel_url}")
+                    
+                    # 檢查Origin Certificate模式的配置
+                    elif 'Updated to new configuration' in full_output and 'hostname' in full_output:
+                        hostname_match = re.search(r'"hostname":"([^"]+)"', full_output)
+                        if hostname_match:
+                            hostname = hostname_match.group(1)
+                            self.tunnel_url = f"https://{hostname}"
+                            self.tunnel_name = hostname.split('.')[0]
+                            url_found = True
+                            logger.info(f"從完整輸出中找到Origin Certificate隧道URL: {self.tunnel_url}")
                         # 重新啟動進程以保持運行
                         self.process = subprocess.Popen(
                             cmd, 
@@ -372,13 +523,26 @@ ingress:
                         output_buffer.append(line)
                         logger.info(f"讀取輸出: {line.strip()}")
                         
+                        # 檢查臨時隧道URL
                         if 'trycloudflare.com' in line:
                             url_match = re.search(r'https://[a-zA-Z0-9\-]+\.trycloudflare\.com', line)
                             if url_match:
                                 self.tunnel_url = url_match.group(0)
                                 self.tunnel_name = url_match.group(0).split('//')[1].split('.')[0]
                                 url_found = True
-                                logger.info(f"找到隧道URL: {self.tunnel_url}")
+                                logger.info(f"找到臨時隧道URL: {self.tunnel_url}")
+                                break
+                        
+                        # 檢查Origin Certificate模式的配置輸出
+                        elif 'Updated to new configuration' in line and 'hostname' in line:
+                            # 提取hostname配置，支持轉義的JSON格式
+                            hostname_match = re.search(r'["\\"]*hostname["\\"]*:["\\"]*([^"\\,}]+)["\\"]*', line)
+                            if hostname_match:
+                                hostname = hostname_match.group(1)
+                                self.tunnel_url = f"https://{hostname}"
+                                self.tunnel_name = hostname.split('.')[0]
+                                url_found = True
+                                logger.info(f"找到Origin Certificate隧道URL: {self.tunnel_url}")
                                 break
                         
                         # 檢查隧道創建狀態
@@ -558,29 +722,150 @@ ingress:
     def load_token(self):
         """載入儲存的 Cloudflare Token"""
         try:
-            # 這裡可以從配置文件或環境變數載入 token
-            # 目前返回 None，表示沒有配置 token
+            # 優先從新的配置JSON文件載入 token
+            config_path = os.path.join(os.path.dirname(__file__), '..', 'config', 'tunnel_config.json')
+            if os.path.exists(config_path):
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    config = json.load(f)
+                    token = config.get('token')
+                    if token:
+                        return token
+            
+            # 其次從統一的共用token文件載入
+            token_file = os.path.join(os.path.dirname(__file__), '..', 'config', 'token.txt')
+            if os.path.exists(token_file):
+                with open(token_file, 'r', encoding='utf-8') as f:
+                    token = f.read().strip()
+                    if token:
+                        return token
+            
+            # 最後從舊格式文件載入（兼容性）
+            legacy_token_file = os.path.join(os.path.dirname(__file__), '..', 'config', 'token.txt')
+            if os.path.exists(legacy_token_file):
+                with open(legacy_token_file, 'r', encoding='utf-8') as f:
+                    token = f.read().strip()
+                    if token:
+                        return token
+            
             return None
         except Exception as e:
             logger.error(f"載入 token 失敗: {e}")
             return None
     
+    def load_certificates(self):
+        """載入Origin Certificate和Private Key（量化交易優化版）"""
+        try:
+            config_dir = os.path.join(os.path.dirname(__file__), '..', 'config')
+            # 統一使用共用證書檔案
+            cert_file = os.path.join(config_dir, 'cert.pem')
+            key_file = os.path.join(config_dir, 'key.pem')
+            
+            cert_content = None
+            key_content = None
+            
+            # 優化：並行讀取證書文件提升性能
+            import concurrent.futures
+            
+            def read_file_safe(file_path, file_type):
+                if os.path.exists(file_path):
+                    try:
+                        with open(file_path, 'r', encoding='utf-8') as f:
+                            data = f.read().strip()
+                        # 驗證證書格式（量化交易安全要求）
+                        if file_type == 'cert' and not ('BEGIN CERTIFICATE' in data and 'END CERTIFICATE' in data):
+                            logger.warning(f"證書格式驗證失敗: {file_path}")
+                            return None
+                        elif file_type == 'key' and not ('BEGIN' in data and 'KEY' in data and 'END' in data):
+                            logger.warning(f"私鑰格式驗證失敗: {file_path}")
+                            return None
+                        logger.info(f"已載入{file_type}: {file_path}")
+                        return data
+                    except Exception as e:
+                        logger.error(f"讀取{file_type}檔案失敗 {file_path}: {e}")
+                return None
+            
+            # 並行讀取證書和私鑰（提升量化交易系統啟動速度）
+            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+                cert_future = executor.submit(read_file_safe, cert_file, 'cert')
+                key_future = executor.submit(read_file_safe, key_file, 'key')
+                
+                cert_content = cert_future.result(timeout=5)
+                key_content = key_future.result(timeout=5)
+            
+            # 驗證證書對的完整性
+            if cert_content and key_content:
+                logger.info(f"Origin Certificate對已完整載入 - {self.tunnel_type}系統")
+                return cert_content, key_content
+            elif cert_content or key_content:
+                logger.warning(f"證書對不完整 - 僅找到{'證書' if cert_content else '私鑰'}")
+                return None, None
+            else:
+                logger.info(f"未找到{self.tunnel_type}系統的Origin Certificate")
+                return None, None
+            
+        except Exception as e:
+            logger.error(f"載入憑證失敗: {e}")
+            return None, None
+    
+    def save_tunnel_config(self, token, origin_cert=None, private_key=None):
+        """儲存隧道配置（包含token和憑證）"""
+        try:
+            config_dir = os.path.join(os.path.dirname(__file__), '..', 'config')
+            os.makedirs(config_dir, exist_ok=True)
+            
+            # 儲存配置文件
+            config_data = {
+                'token': token,
+                'tunnel_type': self.tunnel_type,
+                'port': self.port,
+                'created_at': datetime.now().isoformat()
+            }
+            
+            config_file = os.path.join(config_dir, 'tunnel_config.json')
+            with open(config_file, 'w', encoding='utf-8') as f:
+                json.dump(config_data, f, indent=2, ensure_ascii=False)
+            
+            # 儲存Origin Certificate（統一使用共用檔案）
+            if origin_cert:
+                cert_file = os.path.join(config_dir, 'cert.pem')
+                with open(cert_file, 'w', encoding='utf-8') as f:
+                    f.write(origin_cert)
+                logger.info(f"Origin Certificate已儲存: {cert_file}")
+            
+            # 儲存Private Key（統一使用共用檔案）
+            if private_key:
+                key_file = os.path.join(config_dir, 'key.pem')
+                with open(key_file, 'w', encoding='utf-8') as f:
+                    f.write(private_key)
+                os.chmod(key_file, 0o600)  # 設置私鑰文件權限
+                logger.info(f"Private Key已儲存: {key_file}")
+            
+            logger.info(f"{self.tunnel_type}隧道配置已儲存")
+            return True
+            
+        except Exception as e:
+            logger.error(f"儲存隧道配置失敗: {e}")
+            return False
+    
     def start_health_monitor(self):
-        """啟動隧道健康監控（量化交易專用）"""
+        """啟動隧道健康監控（量化交易專用高可用性版本）"""
         if hasattr(self, '_health_monitor_running') and self._health_monitor_running:
-            logger.info("健康監控已在運行中")
+            logger.info(f"{self.tunnel_type}隧道健康監控已在運行中")
             return
         
         self._health_monitor_running = True
         self._failed_checks = 0
         self._last_successful_check = time.time()
+        self._connection_quality_score = 100  # 連線品質分數（量化交易專用）
+        self._latency_samples = []  # 延遲樣本（用於計算平均延遲）
         
         def health_check_loop():
-            """健康檢查循環（適合量化交易的高頻檢查）"""
+            """健康檢查循環（量化交易高頻監控）"""
+            check_interval = 30 if self.tunnel_type == 'tx' else 45  # TX系統更頻繁檢查
+            
             while self._health_monitor_running and self.status != "stopped":
                 try:
-                    # 每60秒檢查一次連線狀況（降低檢查頻率避免過度重連）
-                    time.sleep(60)
+                    time.sleep(check_interval)
                     
                     if not self._health_monitor_running:
                         break
