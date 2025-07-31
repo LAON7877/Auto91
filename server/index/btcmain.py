@@ -2312,7 +2312,7 @@ def send_btc_trading_statistics():
                         # 判斷持倉方向
                         direction = "多單" if position_amt > 0 else "空單"
                         
-                        position_info += f"{direction}｜{abs(position_amt):.8f}BTC｜{entry_price:,.2f} USDT｜${unrealized_pnl:.2f} USDT"
+                        position_info += f"{direction}｜{abs(position_amt):.8f}BTC｜{entry_price:,.2f} USDT｜＄{unrealized_pnl:.2f} USDT"
                         
             except Exception as e:
                 logger.error(f"獲取BTC持倉信息失敗: {e}")
@@ -3265,31 +3265,96 @@ def get_btc_trading_statistics_data(date_str=None):
         cancel_count = get_btc_message_count_today('提交失敗')  # 取消次數（提交失敗訊息則數）
         fill_count = get_btc_message_count_today('成交通知')   # 成交次數（成交通知訊息則數）
         
-        # 2. 從Binance API獲取交易數據計算買賣總量
-        today_trades = get_today_trades()
-        
-        buy_volume = 0.0  # BTC數量
-        sell_volume = 0.0  # BTC數量
-        buy_total_value = 0.0  # USDT總量（買入做多）
-        sell_total_value = 0.0  # USDT總量（賣出做空）
-        
-        # 從交易記錄統計（修正：使用side字段而非isBuyer）
-        if today_trades:
-            for trade in today_trades:
-                qty = float(trade.get('qty', 0))
-                quote_qty = float(trade.get('quoteQty', 0))  # USDT數量
-                side = trade.get('side', '')
-                
-                if side == 'BUY':  # 買入交易
-                    buy_volume += qty
-                    buy_total_value += quote_qty  # 買入總量使用USDT
-                elif side == 'SELL':  # 賣出交易
-                    sell_volume += qty
-                    sell_total_value += quote_qty  # 賣出總量使用USDT
-        
-        # 計算平均價格
-        avg_buy_price = buy_total_value / buy_volume if buy_volume > 0 else 0.0
-        avg_sell_price = sell_total_value / sell_volume if sell_volume > 0 else 0.0
+        # 2. 從JSON配對系統獲取正確的交易統計數據
+        try:
+            # 使用JSON配對系統獲取當日所有交易記錄
+            today_date_str = datetime.now().strftime('%Y-%m-%d')
+            
+            # 讀取當日交易數據文件
+            transdata_file = f"/mnt/c/Users/CLAY/Desktop/Auto91/server/BTCtransdata/trades_{today_date_str.replace('-', '')}.json"
+            all_trades = []
+            
+            try:
+                with open(transdata_file, 'r', encoding='utf-8') as f:
+                    for line in f:
+                        if line.strip():
+                            all_trades.append(json.loads(line.strip()))
+            except FileNotFoundError:
+                logger.warning(f"當日交易記錄文件不存在: {transdata_file}")
+            except Exception as e:
+                logger.error(f"讀取交易記錄失敗: {e}")
+            
+            # 初始化統計變數
+            buy_volume = 0.0      # 做多BTC數量
+            sell_volume = 0.0     # 做空BTC數量  
+            buy_total_value = 0.0 # 做多USDT總量
+            sell_total_value = 0.0 # 做空USDT總量
+            
+            # 從JSON交易記錄統計（正確區分開倉/平倉）
+            for trade in all_trades:
+                try:
+                    action = trade.get('action', '').upper()  # BUY/SELL
+                    oc_type = trade.get('oc_type', '').upper()  # Open/Cover
+                    quantity = float(trade.get('quantity', 0))
+                    price = float(trade.get('price', 0))
+                    usdt_value = quantity * price
+                    
+                    # 根據開平倉類型和動作正確分類
+                    if oc_type == 'OPEN':  # 開倉交易
+                        if action == 'BUY':  # 開多倉
+                            buy_volume += quantity
+                            buy_total_value += usdt_value
+                        elif action == 'SELL':  # 開空倉
+                            sell_volume += quantity
+                            sell_total_value += usdt_value
+                    elif oc_type == 'COVER':  # 平倉交易
+                        if action == 'SELL':  # 平多倉（賣出平倉）
+                            sell_volume += quantity
+                            sell_total_value += usdt_value
+                        elif action == 'BUY':  # 平空倉（買入平倉）
+                            buy_volume += quantity
+                            buy_total_value += usdt_value
+                            
+                except Exception as e:
+                    logger.error(f"處理交易記錄失敗: {trade}, 錯誤: {e}")
+                    continue
+            
+            # 計算平均價格
+            avg_buy_price = buy_total_value / buy_volume if buy_volume > 0 else 0.0
+            avg_sell_price = sell_total_value / sell_volume if sell_volume > 0 else 0.0
+            
+            logger.info(f"BTC統計數據來源: JSON配對系統")
+            logger.info(f"買入總量: {buy_total_value:.2f} USDT, 賣出總量: {sell_total_value:.2f} USDT")
+            logger.info(f"平均買價: {avg_buy_price:.2f} USDT, 平均賣價: {avg_sell_price:.2f} USDT")
+            
+        except Exception as e:
+            logger.error(f"使用JSON配對系統統計失敗，回退到Binance API: {e}")
+            
+            # 回退邏輯：使用Binance API數據（保留原有邏輯作為備份）
+            today_trades = get_today_trades()
+            
+            buy_volume = 0.0
+            sell_volume = 0.0  
+            buy_total_value = 0.0
+            sell_total_value = 0.0
+            
+            if today_trades:
+                for trade in today_trades:
+                    qty = float(trade.get('qty', 0))
+                    quote_qty = float(trade.get('quoteQty', 0))
+                    side = trade.get('side', '')
+                    
+                    if side == 'BUY':
+                        buy_volume += qty
+                        buy_total_value += quote_qty
+                    elif side == 'SELL':
+                        sell_volume += qty
+                        sell_total_value += quote_qty
+            
+            avg_buy_price = buy_total_value / buy_volume if buy_volume > 0 else 0.0
+            avg_sell_price = sell_total_value / sell_volume if sell_volume > 0 else 0.0
+            
+            logger.info(f"BTC統計數據來源: Binance API (回退)")
         
         # 3. 獲取已實現盈虧
         today_realized_pnl = get_today_realized_pnl()
@@ -3565,12 +3630,13 @@ def generate_btc_daily_report(date_str=None):
                 position_usdt = btc_quantity * entry_price
                 
                 # 獲取交易來源和真實合約信息
-                trade_source = trade.get('source', '手動')
+                source_value = trade.get('source', 'manual')
+                trade_source = '自動' if source_value == 'webhook' else '手動'
                 margin_info = get_btc_contract_info()  # 獲取真實合約信息
                 
                 values3 = [
-                    trade.get('close_time', 'N/A'),
-                    trade.get('order_id', 'N/A'),
+                    trade.get('close_time', 'N/A'),  # 這個已經在上面的close_time處理中設置
+                    trade.get('order_id', 'N/A'),   # 這個已經在上面的order_id處理中設置
                     margin_info,
                     f"{trade_source}平倉",
                     f"{trade.get('order_type', '市價')}單",
@@ -3719,26 +3785,41 @@ def get_btc_closed_trades_today(date_str):
         closed_trades = []
         
         for trade in cover_trades:
-            # 解析時間戳
-            cover_time = datetime.fromisoformat(trade['cover_timestamp'].replace('Z', '+00:00'))
-            
-            # 判斷是否為指定日期的交易
-            if cover_time.date() == target_date.date():
-                closed_trade = {
-                    'close_time': cover_time.strftime('%H:%M:%S'),
-                    'order_id': trade['cover_order_id'],
-                    'side': 'SHORT' if trade['cover_action'] == 'BUY' else 'LONG',  # BUY=平空單(顯示空單), SELL=平多單(顯示多單)
-                    'quantity': float(trade['matched_quantity']),
-                    'position_size': float(trade['matched_quantity']),
-                    'entry_price': float(trade['open_price']),  # 從配對數據獲取真實開倉價
-                    'exit_price': float(trade['cover_price']),
-                    'realized_pnl': float(trade['pnl']),  # 從配對計算獲取真實損益
-                    'action': '平倉',
-                    'order_type': '市價',
-                    'open_trade_id': trade['open_trade_id'],  # 額外信息
-                    'open_timestamp': trade['open_timestamp']
-                }
-                closed_trades.append(closed_trade)
+            try:
+                # 解析時間戳
+                cover_timestamp = trade.get('cover_timestamp', '')
+                if cover_timestamp:
+                    # 處理多種時間戳格式
+                    if 'T' in cover_timestamp:
+                        cover_time = datetime.fromisoformat(cover_timestamp.replace('Z', '+00:00'))
+                    else:
+                        cover_time = datetime.fromisoformat(cover_timestamp)
+                else:
+                    logger.warning(f"BTC平倉記錄缺少時間戳: {trade}")
+                    continue
+                
+                # 判斷是否為指定日期的交易
+                if cover_time.date() == target_date.date():
+                    closed_trade = {
+                        'close_time': cover_time.strftime('%H:%M:%S'),
+                        'order_id': trade.get('cover_order_id', 'N/A'),
+                        'side': 'SHORT' if trade['cover_action'] == 'BUY' else 'LONG',  # BUY=平空單(顯示空單), SELL=平多單(顯示多單)
+                        'quantity': float(trade['matched_quantity']),
+                        'position_size': float(trade['matched_quantity']),
+                        'entry_price': float(trade['open_price']),  # 從配對數據獲取真實開倉價
+                        'exit_price': float(trade['cover_price']),
+                        'realized_pnl': float(trade['pnl']),  # 從配對計算獲取真實損益
+                        'action': '平倉',
+                        'order_type': '市價',
+                        'source': trade.get('source', 'manual'),  # 添加交易來源
+                        'open_trade_id': trade['open_trade_id'],  # 額外信息
+                        'open_timestamp': trade['open_timestamp']
+                    }
+                    closed_trades.append(closed_trade)
+                    
+            except Exception as e:
+                logger.error(f"處理BTC平倉記錄失敗: {trade}, 錯誤: {e}")
+                continue
         
         logger.info(f"✅ 使用JSON配對數據獲取BTC平倉記錄: {len(closed_trades)}筆")
         return closed_trades
@@ -3773,6 +3854,71 @@ def get_btc_closed_trades_today(date_str):
             return closed_trades
         except:
             return []
+
+def get_btc_position_from_json(is_long, position_size, entry_price):
+    """從JSON配對系統獲取持倉的開倉信息"""
+    try:
+        # 載入最近30天的開倉記錄
+        from datetime import timedelta
+        import os
+        import json
+        from trading_config import TradingConfig
+        
+        BTC_RECORDS_DIR = TradingConfig.BTC_RECORDS_DIR
+        today = datetime.now()
+        
+        target_action = 'BUY' if is_long else 'SELL'
+        price_tolerance = entry_price * 0.005  # 0.5%的價格容差
+        quantity_tolerance = position_size * 0.1  # 10%的數量容差
+        
+        # 查找最近30天的開倉記錄
+        for i in range(30):
+            check_date = today - timedelta(days=i)
+            date_str = check_date.strftime('%Y%m%d')
+            open_file = os.path.join(BTC_RECORDS_DIR, f'btc_open_positions_{date_str}.json')
+            
+            if os.path.exists(open_file):
+                try:
+                    with open(open_file, 'r', encoding='utf-8') as f:
+                        opens = json.load(f)
+                    
+                    # 查找匹配的開倉記錄
+                    for open_record in opens:
+                        if (open_record.get('action') == target_action and
+                            open_record.get('status') == 'open' and  # 只查找未完全平倉的記錄
+                            abs(float(open_record.get('price', 0)) - entry_price) <= price_tolerance and
+                            abs(float(open_record.get('remaining_quantity', 0)) - position_size) <= quantity_tolerance):
+                            
+                            # 找到匹配的開倉記錄
+                            timestamp = open_record.get('timestamp', '')
+                            if timestamp:
+                                try:
+                                    if 'T' in timestamp:
+                                        open_time = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+                                    else:
+                                        open_time = datetime.fromisoformat(timestamp)
+                                    open_time_str = open_time.strftime('%Y/%m/%d %H:%M:%S')
+                                except:
+                                    open_time_str = 'N/A'
+                            else:
+                                open_time_str = 'N/A'
+                            
+                            order_id = str(open_record.get('order_id', 'N/A'))
+                            source = open_record.get('source', 'manual')
+                            
+                            logger.info(f"✅ 從JSON找到持倉開倉記錄: {open_time_str}, 訂單ID: {order_id}, 來源: {source}")
+                            return open_time_str, order_id, source
+                            
+                except Exception as e:
+                    logger.error(f"讀取BTC開倉記錄失敗 {open_file}: {e}")
+                    continue
+        
+        logger.warning(f"未從JSON找到匹配的開倉記錄: {target_action} {position_size}BTC @ ${entry_price}")
+        return 'N/A', 'N/A', 'manual'
+        
+    except Exception as e:
+        logger.error(f"從JSON獲取開倉信息失敗: {e}")
+        return 'N/A', 'N/A', 'manual'
 
 def get_btc_position_open_info(is_long, position_size, entry_price):
     """從交易歷史獲取持倉的開倉時間和訂單ID"""
@@ -3849,12 +3995,20 @@ def get_btc_open_positions_today():
                         margin_type = pos.get('marginType', 'cross')
                         leverage = pos.get('leverage', '20')
                         
-                        # 嘗試從交易歷史獲取開倉時間和訂單ID
-                        open_time, order_id = get_btc_position_open_info(position_amt > 0, abs(position_amt), entry_price)
+                        # 首先嘗試從JSON配對系統獲取開倉信息
+                        open_time, order_id, source = get_btc_position_from_json(position_amt > 0, abs(position_amt), entry_price)
+                        
+                        # 如果JSON系統找不到，回退到API歷史查找
+                        if open_time == 'N/A' or order_id == 'N/A':
+                            api_open_time, api_order_id = get_btc_position_open_info(position_amt > 0, abs(position_amt), entry_price)
+                            if open_time == 'N/A':
+                                open_time = api_open_time
+                            if order_id == 'N/A':
+                                order_id = api_order_id
                         
                         open_position = {
-                            'open_time': open_time,  # 從交易歷史獲取開倉時間
-                            'order_id': order_id,    # 從交易歷史獲取開倉訂單ID
+                            'open_time': open_time,  # 從JSON配對系統或交易歷史獲取開倉時間
+                            'order_id': order_id,    # 從JSON配對系統或交易歷史獲取開倉訂單ID
                             'position_amt': position_amt,  # 持倉數量（保留符號用於方向判斷）
                             'abs_position_amt': abs(position_amt),  # 持倉數量絕對值（用於顯示）
                             'entry_price': entry_price,         # 開倉價格
@@ -3862,7 +4016,7 @@ def get_btc_open_positions_today():
                             'unrealized_pnl': unrealized_pnl,   # 未實現盈虧
                             'action': '開倉',
                             'order_type': '市價',
-                            'source': '手動',  # 默認為手動，可以從JSON系統獲取更精確信息
+                            'source': '自動' if source == 'webhook' else '手動',  # 使用智能判斷的來源
                             'symbol': 'BTCUSDT',
                             'margin_type': margin_type,  # 保證金模式
                             'leverage': leverage,        # 槓桿倍數
@@ -4514,7 +4668,8 @@ def process_order_fill(order_id, fill_price, fill_quantity):
                     action=trade_action,
                     quantity=float(fill_quantity),
                     price=float(fill_price),
-                    order_id=order_id
+                    order_id=order_id,
+                    source=source
                 )
                 logger.info(f"✅ BTC開倉記錄已保存: {trade_id}")
                 
@@ -4524,7 +4679,8 @@ def process_order_fill(order_id, fill_price, fill_quantity):
                     action=trade_action,
                     quantity=float(fill_quantity),
                     price=float(fill_price),
-                    order_id=order_id
+                    order_id=order_id,
+                    source=source
                 )
                 if cover_record:
                     logger.info(f"✅ BTC平倉記錄已保存並配對完成: {cover_record['trade_id']}")
@@ -6518,16 +6674,27 @@ BTC訂單監控WebSocket工作線程"""
                         # 檢查是否為系統已知訂單
                         is_system_order = (str(order_id) in pending_orders or 
                                          int(order_id) in btc_active_trades)
-                        order_source = '系統' if is_system_order else '手動'
+                        
+                        # 智能判斷：根據訂單特徵推斷是否為WEBHOOK
+                        if is_system_order:
+                            order_source = '系統'  # 已知系統訂單
+                        else:
+                            # 如果不在映射中，根據訂單特徵智能判斷
+                            if order_type == 'MARKET':
+                                order_source = 'WEBHOOK'  # WEBHOOK特徵：市價單
+                                logger.info(f"根據WebSocket訂單特徵推斷為WEBHOOK自動交易: 市價單")
+                            else:
+                                order_source = '手動'  # 限價單通常是手動操作
+                                logger.info(f"根據WebSocket訂單特徵推斷為手動交易: 限價單")
                         
                         logger.info(f"訂單{order_id}判斷: pending_orders中有={str(order_id) in pending_orders}, active_trades中有={int(order_id) in btc_active_trades}, 判定為={order_source}")
                         logger.info(f"當前pending_orders內容: {list(pending_orders.keys())}")
                         logger.info(f"當前btc_active_trades內容: {list(btc_active_trades.keys())}")
                         
                         if status == 'NEW':
-                            # 新訂單提交 - 只處理手動訂單
+                            # 新訂單提交 - 處理非系統已知訂單（包含手動和智能判斷的WEBHOOK）
                             if not is_system_order and symbol == 'BTCUSDT':
-                                logger.info(f"WebSocket處理手動訂單: {order_id}")
+                                logger.info(f"WebSocket處理{order_source}訂單: {order_id}")
                                 handle_manual_binance_order(order_data, True)
                             else:
                                 logger.info(f"WebSocket跳過系統訂單: {order_id}, is_system_order={is_system_order}, symbol={symbol}")
@@ -6541,7 +6708,7 @@ BTC訂單監控WebSocket工作線程"""
                                 # 系統訂單成交 - 使用現有邏輯
                                 process_order_fill(order_id, fill_price, fill_quantity)
                             else:
-                                # 手動訂單成交 - 發送手動成交通知
+                                # 非系統已知訂單成交 - 發送成交通知（包含手動和智能判斷的WEBHOOK）
                                 if symbol == 'BTCUSDT':
                                     handle_manual_binance_fill(order_data)
                                     
@@ -6697,14 +6864,9 @@ def handle_manual_binance_order(order_data, is_success=True):
             # 開倉：BUY = 多單，SELL = 空單
             direction = '多單' if side == 'BUY' else '空單'
             parsed_action = '開倉'
-        order_source = '手動'
+        order_source = '待判斷'  # 初始設定，稍後會根據智能判斷更新
         formatted_quantity = f"{float(quantity):.8f}"
         order_type_text = '市價單' if order_type == 'MARKET' else '限價單'
-        
-        # 只記錄後端日誌，前端日誌由Websocket成交回調統一處理
-        price_display = "市價" if order_type == 'MARKET' else f"{float(order_data.get('p', 0)):,.2f}"
-        commit_log = f"{order_source}{parsed_action}：{direction}｜{formatted_quantity} BTC｜{price_display}｜{order_type_text}"
-        logger.info(f"({order_source}委託) {commit_log}")
         
         # 獲取提交價格
         submitted_price = 0
@@ -6727,6 +6889,24 @@ def handle_manual_binance_order(order_data, is_success=True):
         
         logger.info(f"手動訂單最終設置的提交價格: {submitted_price}")
         
+        # 智能判斷：根據訂單特徵推斷是否為WEBHOOK
+        is_manual = None  # 初始為None，待智能判斷
+        
+        # 如果是市價單，很可能是WEBHOOK自動交易
+        if order_type == 'MARKET':
+            is_manual = False  # WEBHOOK特徵：市價單
+            order_source = 'WEBHOOK'
+            logger.info(f"根據訂單特徵推斷為WEBHOOK自動交易: 市價單")
+        else:
+            is_manual = True  # 限價單通常是手動操作
+            order_source = '手動'
+            logger.info(f"根據訂單特徵推斷為手動交易: 限價單")
+        
+        # 記錄後端日誌，包含智能判斷結果
+        price_display = "市價" if order_type == 'MARKET' else f"{float(order_data.get('p', 0)):,.2f}"
+        commit_log = f"{order_source}{parsed_action}：{direction}｜{formatted_quantity} BTC｜{price_display}｜{order_type_text}"
+        logger.info(f"({order_source}委託) {commit_log}")
+        
         # 構建trade_record用於通知
         trade_record = {
             'symbol': symbol,
@@ -6735,16 +6915,17 @@ def handle_manual_binance_order(order_data, is_success=True):
             'price': submitted_price,  # 添加提交價格
             'order_id': order_id,
             'order_type': order_type_text,
-            'source': 'manual',  # 手動訂單source固定為manual
+            'source': 'manual' if is_manual else 'webhook',  # 根據智能判斷設置source
             'action_type': parsed_action,
             'reduceOnly': reduce_only,
-            'is_manual': True
+            'is_manual': is_manual
         }
         
         # 發送延遲提交成功通知（1秒延遲）
-        logger.info(f"準備發送手動幣安訂單延遲提交通知: {trade_record}")
+        order_source_display = "手動" if is_manual else "WEBHOOK"
+        logger.info(f"準備發送{order_source_display}幣安訂單延遲提交通知: {trade_record}")
         submit_success = send_btc_order_submit_notification_delayed(trade_record, is_success, 1)
-        logger.info(f"手動幣安訂單延遲提交通知已啟動: {submit_success}")
+        logger.info(f"{order_source_display}幣安訂單延遲提交通知已啟動: {submit_success}")
         
     except Exception as e:
         logger.error(f"處理手動幣安訂單失敗: {e}")
@@ -6769,15 +6950,26 @@ def handle_manual_binance_fill(order_data):
             # 開倉：BUY = 多單，SELL = 空單
             direction = '多單' if side == 'BUY' else '空單'
             action = '開倉'
-        order_source = '手動'
+        
+        # 智能判斷：根據訂單特徵推斷是否為WEBHOOK
+        if order_type == 'MARKET':
+            order_source = 'WEBHOOK'  # WEBHOOK特徵：市價單
+            logger.info(f"根據成交訂單特徵推斷為WEBHOOK自動交易: 市價單")
+        else:
+            order_source = '手動'  # 限價單通常是手動操作
+            logger.info(f"根據成交訂單特徵推斷為手動交易: 限價單")
+        
         order_type_text = '市價單' if order_type == 'MARKET' else '限價單'
         
         # 前端日誌記錄（成交）- 暫時移除立即輸出，改為延遲輸出
         
-        # 🔥 新增：BTC JSON交易記錄系統（手動訂單）
+        # 🔥 新增：BTC JSON交易記錄系統（含智能來源判斷）
         try:
             # 判斷交易類型並記錄到JSON配對系統
             trade_action = side  # BUY/SELL 直接使用
+            
+            # 轉換來源格式：order_source ("手動"/"WEBHOOK") -> source ("manual"/"webhook")
+            source = 'manual' if order_source == '手動' else 'webhook'
             
             if action == '開倉':
                 # 開倉記錄
@@ -6785,9 +6977,10 @@ def handle_manual_binance_fill(order_data):
                     action=trade_action,
                     quantity=float(quantity),
                     price=avg_price,
-                    order_id=order_id
+                    order_id=order_id,
+                    source=source
                 )
-                logger.info(f"✅ BTC手動開倉記錄已保存: {trade_id}")
+                logger.info(f"✅ BTC{order_source}開倉記錄已保存: {trade_id}")
                 
             elif action == '平倉':
                 # 平倉記錄並自動配對
@@ -6795,10 +6988,11 @@ def handle_manual_binance_fill(order_data):
                     action=trade_action,
                     quantity=float(quantity),
                     price=avg_price,
-                    order_id=order_id
+                    order_id=order_id,
+                    source=source
                 )
                 if cover_record:
-                    logger.info(f"✅ BTC手動平倉記錄已保存並配對完成: {cover_record['trade_id']}")
+                    logger.info(f"✅ BTC{order_source}平倉記錄已保存並配對完成: {cover_record['trade_id']}")
                     logger.info(f"   配對{len(cover_record.get('matched_opens', []))}筆開倉，總損益: ${cover_record.get('total_pnl', 0)}")
             
             # 保存到BTCtransdata目錄
@@ -6829,18 +7023,18 @@ def handle_manual_binance_fill(order_data):
                 fill_success = send_btc_telegram_fill_notification(
                     order_id, action, direction, quantity, avg_price, order_type_text, order_source
                 )
-                logger.info(f"手動幣安訂單成交通知發送結果: {fill_success}")
+                logger.info(f"{order_source}幣安訂單成交通知發送結果: {fill_success}")
             except Exception as e:
-                logger.error(f"延遲處理手動訂單成交事件失敗: {e}")
+                logger.error(f"延遲處理{order_source}訂單成交事件失敗: {e}")
         
         # 使用線程延遲5秒處理成交日誌和通知
         timer = threading.Timer(5.0, delayed_fill_processing)
         timer.start()
         
-        logger.info(f"手動幣安訂單成交處理已安排5秒延遲執行，訂單ID: {order_id}")
+        logger.info(f"{order_source}幣安訂單成交處理已安排5秒延遲執行，訂單ID: {order_id}")
         
     except Exception as e:
-        logger.error(f"處理手動幣安訂單成交失敗: {e}")
+        logger.error(f"處理幣安訂單成交失敗: {e}")
 
 def cleanup_processed_orders():
     """清理過期的已處理訂單記錄"""

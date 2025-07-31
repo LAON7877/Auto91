@@ -4509,18 +4509,28 @@ def order_callback(state, deal, order=None):
                     order_type = deal.get('order', {}).get('order_type', 'IOC')
                     price_type = deal.get('order', {}).get('price_type', 'MKT')
                     
-                    # 簡化判斷：如果找不到資訊，預設為手動操作
+                    # 智能判斷：根據訂單特徵推斷是否為WEBHOOK
                     if is_manual is None:
-                        is_manual = True  # 無法判斷時，預設為手動操作
+                        # 如果是市價單IOC，很可能是WEBHOOK自動交易
+                        if order_type == 'IOC' and price_type == 'MKT':
+                            is_manual = False  # WEBHOOK特徵：市價單IOC
+                            logger.info(f"根據訂單特徵推斷為WEBHOOK自動交易: {order_type}/{price_type}")
+                        else:
+                            is_manual = True  # 其他情況預設為手動操作
                 except:
                     oc_type = 'New'
                     direction = deal.get('order', {}).get('action', 'Sell')
                     order_type = deal.get('order', {}).get('order_type', 'IOC')
                     price_type = deal.get('order', {}).get('price_type', 'MKT')
                     
-                    # 簡化判斷：如果找不到資訊，預設為手動操作
+                    # 智能判斷：根據訂單特徵推斷是否為WEBHOOK
                     if is_manual is None:
-                        is_manual = True  # 無法判斷時，預設為手動操作
+                        # 如果是市價單IOC，很可能是WEBHOOK自動交易
+                        if order_type == 'IOC' and price_type == 'MKT':
+                            is_manual = False  # WEBHOOK特徵：市價單IOC
+                            logger.info(f"根據訂單特徵推斷為WEBHOOK自動交易: {order_type}/{price_type}")
+                        else:
+                            is_manual = True  # 其他情況預設為手動操作
             
             octype_info = {
                 'octype': oc_type,
@@ -6512,7 +6522,7 @@ def generate_trading_report(trades, account_data, position_data, cover_trades, t
             cell.border = thin_border
         
         # 交易明細標題
-        detail_titles = ['平倉時間', '平倉單號', '選用合約', '訂單類型', '成交類型', '成交部位', 
+        detail_titles = ['平倉時間', '交易單號', '選用合約', '訂單類型', '成交類型', '成交部位', 
                         '成交動作', '成交數量', '開倉價格', '平倉價格', '已實現損益']
         for i, title in enumerate(detail_titles):
             col = get_column_letter(i + 1)
@@ -6673,7 +6683,7 @@ def generate_trading_report(trades, account_data, position_data, cover_trades, t
             cell.alignment = center_alignment
         
         # 持倉狀態標題
-        position_titles = ['成交時間', '成交單號', '選用合約', '訂單類型', '成交類型', '成交部位', 
+        position_titles = ['開倉時間', '交易單號', '選用合約', '訂單類型', '成交類型', '成交部位', 
                          '成交動作', '成交數量', '開倉價格', '平倉價格', '未實現損益']
         for i, title in enumerate(position_titles):
             col = get_column_letter(i + 1)

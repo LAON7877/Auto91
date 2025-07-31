@@ -58,7 +58,7 @@ def calculate_btc_pnl(open_price, close_price, quantity, close_action):
         logger.error(f"計算BTC損益失敗: {e}")
         return 0.0
 
-def record_btc_opening_trade(action, quantity, price, order_id):
+def record_btc_opening_trade(action, quantity, price, order_id, source='manual'):
     """記錄BTC開倉交易
     
     Args:
@@ -66,6 +66,7 @@ def record_btc_opening_trade(action, quantity, price, order_id):
         quantity: 數量 (BTC)
         price: 成交價格 (USDT)
         order_id: 訂單ID
+        source: 交易來源 ('manual'/'webhook')
     """
     try:
         trade_id = generate_btc_trade_id(action, "Open")
@@ -79,6 +80,7 @@ def record_btc_opening_trade(action, quantity, price, order_id):
             "quantity": float(quantity),
             "price": float(price),
             "order_id": str(order_id),
+            "source": source,  # 添加交易來源
             "pair_key": f"BTC_{action.upper()}",
             "remaining_quantity": float(quantity),  # 剩餘未平倉數量
             "status": "open",  # open/partial_covered/fully_covered
@@ -104,7 +106,7 @@ def record_btc_opening_trade(action, quantity, price, order_id):
         logger.error(f"記錄BTC開倉交易失敗: {e}")
         return None
 
-def record_btc_covering_trade(action, quantity, price, order_id):
+def record_btc_covering_trade(action, quantity, price, order_id, source='manual'):
     """記錄BTC平倉交易並自動配對
     
     Args:
@@ -112,6 +114,7 @@ def record_btc_covering_trade(action, quantity, price, order_id):
         quantity: 數量 (BTC)
         price: 成交價格 (USDT)
         order_id: 訂單ID
+        source: 交易來源 ('manual'/'webhook')
         
     Returns:
         dict: 平倉記錄（包含配對信息）
@@ -230,6 +233,7 @@ def record_btc_covering_trade(action, quantity, price, order_id):
             "quantity": float(quantity),
             "price": float(price),
             "order_id": str(order_id),
+            "source": source,  # 添加交易來源
             "matched_opens": matched_opens,
             "total_pnl": sum(m["pnl"] for m in matched_opens),
             "unmatched_quantity": remaining_to_cover  # 無法配對的數量
@@ -327,18 +331,38 @@ def get_btc_cover_trades_for_report(date_range_days=1):
         # 展開為每筆配對的明細
         detailed_covers = []
         for cover in all_covers:
-            for match in cover.get('matched_opens', []):
+            matched_opens = cover.get('matched_opens', [])
+            
+            if matched_opens:
+                # 有配對成功的記錄：展開每筆配對
+                for match in matched_opens:
+                    detailed_covers.append({
+                        'cover_timestamp': cover['timestamp'],
+                        'cover_order_id': cover['order_id'],
+                        'symbol': cover['symbol'],
+                        'cover_action': cover['action'],
+                        'matched_quantity': match['matched_quantity'],
+                        'open_price': match['open_price'],
+                        'cover_price': cover['price'],
+                        'pnl': match['pnl'],
+                        'open_timestamp': match['open_timestamp'],
+                        'open_trade_id': match['open_trade_id'],
+                        'source': cover.get('source', 'manual')  # 添加交易來源信息
+                    })
+            else:
+                # 沒有配對成功的記錄：仍然顯示平倉記錄（開倉價格和損益顯示為未知）
                 detailed_covers.append({
                     'cover_timestamp': cover['timestamp'],
                     'cover_order_id': cover['order_id'],
                     'symbol': cover['symbol'],
                     'cover_action': cover['action'],
-                    'matched_quantity': match['matched_quantity'],
-                    'open_price': match['open_price'],
+                    'matched_quantity': cover['quantity'],  # 使用全部平倉數量
+                    'open_price': 0,  # 無配對時開倉價格未知
                     'cover_price': cover['price'],
-                    'pnl': match['pnl'],
-                    'open_timestamp': match['open_timestamp'],
-                    'open_trade_id': match['open_trade_id']
+                    'pnl': 0,  # 無配對時損益未知
+                    'open_timestamp': '',  # 無配對時開倉時間未知
+                    'open_trade_id': '',  # 無配對時開倉ID未知
+                    'source': cover.get('source', 'manual')  # 添加交易來源信息
                 })
         
         return detailed_covers
