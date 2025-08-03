@@ -48,6 +48,7 @@ processed_orders = set()  # 記錄已處理的訂單，避免重複處理
 
 # 訂單監控相關
 pending_orders = {}  # 存儲待成交訂單 {order_id: order_info}
+btc_order_history = {}  # 存儲訂單歷史狀態，用於檢測修改 {order_id: {price, quantity, status}}
 order_monitor_ws = None
 order_monitor_thread = None
 user_data_stream_key = None
@@ -1098,9 +1099,9 @@ def place_btc_futures_order(symbol, side, quantity, price=None, order_type="MARK
             else:
                 logger.info(f"系統下單訂單{order_id}已存在於pending_orders中")
             
-            # 發送延遲提交成功通知（1秒延遲）
+            # 發送延遲提交成功通知（5秒延遲）
             logger.info(f"準備發送BTC延遲提交成功通知: {trade_record}")
-            submit_success = send_btc_order_submit_notification_delayed(trade_record, True, 1)
+            submit_success = send_btc_order_submit_notification_delayed(trade_record, True, 3)
             logger.info(f"BTC延遲提交成功通知已啟動: {submit_success}")
             
             # 啟動訂單成交監控
@@ -1121,7 +1122,8 @@ def place_btc_futures_order(symbol, side, quantity, price=None, order_type="MARK
                 'timestamp': datetime.now().isoformat()
             }
             
-            btc_active_trades[order_id] = active_trade_record
+            btc_active_trades[str(order_id)] = active_trade_record
+            logger.info(f"📝 訂單已添加到btc_active_trades: {str(order_id)}")
             
             return {
                 'success': True,
@@ -1160,8 +1162,8 @@ def place_btc_futures_order(symbol, side, quantity, price=None, order_type="MARK
             'error': str(e)
         }
         
-        # 發送延遲提交失敗通知（1秒延遲）
-        fail_success = send_btc_order_submit_notification_delayed(error_record, False, 1)
+        # 發送延遲提交失敗通知（5秒延遲）
+        fail_success = send_btc_order_submit_notification_delayed(error_record, False, 3)
         
         return {
             'success': False,
@@ -1233,7 +1235,7 @@ def check_btc_order_fill(order_id, symbol):
                 # 延遲記錄成交成功到系統日誌（與TX系統格式統一）
                 def delayed_success_log():
                     try:
-                        time.sleep(2)  # 延遲2秒，在提交通知(1秒)之後，成交通知(5秒)之前
+                        time.sleep(5)  # 延遲5秒，在提交通知(5秒)之後，與成交通知(5秒)同步
                         success_log = get_btc_order_log_message(
                             symbol=symbol,
                             side=trade_record.get('side', ''),
@@ -1246,7 +1248,7 @@ def check_btc_order_fill(order_id, symbol):
                             is_success=True
                         )
                         log_btc_frontend_message(success_log, "success")
-                        logger.info(f"延遲2秒後記錄BTC成交日誌: {success_log}")
+                        logger.info(f"延遲5秒後記錄BTC成交日誌: {success_log}")
                     except Exception as e:
                         logger.error(f"延遲成交日誌記錄失敗: {e}")
                 
@@ -1260,9 +1262,12 @@ def check_btc_order_fill(order_id, symbol):
                 
             elif status in ['CANCELED', 'REJECTED', 'EXPIRED']:
                 # 訂單失效 - 這也屬於"掛單沒成功"，應觸發提交失敗通知
-                trade_record = btc_active_trades.get(order_id, {})
+                trade_record = btc_active_trades.get(str(order_id), {})
                 trade_record.update({'status': status})
-                logger.info(f"BTC訂單失效: OrderID={order_id}, 狀態={status}")
+                logger.info(f"🔴 BTC訂單失效觸發: OrderID={order_id}, 狀態={status}")
+                logger.info(f"🔍 從btc_active_trades查找 {str(order_id)}: 找到={str(order_id) in btc_active_trades}")
+                logger.info(f"🔍 當前btc_active_trades keys: {list(btc_active_trades.keys())}")
+                logger.info(f"🔍 訂單記錄內容: {trade_record}")
                 
                 # 記錄失效日誌到系統日誌
                 symbol = trade_record.get('symbol', 'BTCUSDT')
@@ -1282,12 +1287,13 @@ def check_btc_order_fill(order_id, symbol):
                     }
                     failure_reason = status_mapping.get(status, f'訂單失效({status})')
                     
-                    # 使用現有的訂單信息構建失敗記錄
+                    # 使用現有的訂單信息構建失敗記錄，包含價格信息
                     error_record = {
                         'symbol': symbol,
                         'side': side,
                         'quantity': quantity,
                         'order_id': order_id,
+                        'price': trade_record.get('price', 0),  # 添加價格信息
                         'order_type': trade_record.get('order_type', '市價單'),
                         'source': trade_record.get('source', '手動'),
                         'action_type': trade_record.get('action_type', '開倉'),
@@ -1296,21 +1302,60 @@ def check_btc_order_fill(order_id, symbol):
                         'error': failure_reason
                     }
                     
-                    # 發送延遲提交失敗通知（1秒延遲）
-                    fail_success = send_btc_order_submit_notification_delayed(error_record, False, 1)
-                    logger.info(f"📱 訂單失效提交失敗通知已發送: {order_id} - {failure_reason}")
+                    # 發送延遲提交失敗通知（5秒延遲）
+                    logger.info(f"🚀 準備發送BTC失效通知: {error_record}")
+                    fail_success = send_btc_order_submit_notification_delayed(error_record, False, 3)
+                    logger.info(f"📱 訂單失效提交失敗通知已發送: {order_id} - {failure_reason}, 結果: {fail_success}")
                     
                 except Exception as e:
                     logger.error(f"發送訂單失效提交失敗通知失敗: {e}")
                 
         # 從活躍交易中移除已完成的訂單
-        if order_id in btc_active_trades:
-            final_status = btc_active_trades[order_id].get('status')
+        if str(order_id) in btc_active_trades:
+            final_status = btc_active_trades[str(order_id)].get('status')
             if final_status in ['FILLED', 'CANCELED', 'REJECTED', 'EXPIRED']:
-                del btc_active_trades[order_id]
+                logger.info(f"從活躍交易中移除已完成訂單: {order_id}")
+                del btc_active_trades[str(order_id)]
                 
     except Exception as e:
         logger.error(f"檢查BTC訂單狀態失敗: {e}")
+
+def check_opposite_position(action):
+    """檢查是否存在反向持倉
+    
+    Args:
+        action: 'LONG' 或 'SHORT'
+        
+    Returns:
+        bool: True if 存在反向持倉
+    """
+    try:
+        if not binance_client:
+            return False
+            
+        positions = binance_client.get_position_info()
+        if not positions:
+            return False
+            
+        for pos in positions:
+            if pos.get('symbol') == 'BTCUSDT':
+                position_amt = float(pos.get('positionAmt', 0))
+                
+                # 檢查是否有持倉
+                if abs(position_amt) > 0.00000001:
+                    current_side = 'LONG' if position_amt > 0 else 'SHORT'
+                    
+                    # 檢查是否為反向
+                    if (action == 'LONG' and current_side == 'SHORT') or \
+                       (action == 'SHORT' and current_side == 'LONG'):
+                        logger.info(f"發現反向持倉: 當前{current_side}，嘗試開{action}")
+                        return True
+                        
+        return False
+        
+    except Exception as e:
+        logger.error(f"檢查反向持倉失敗: {e}")
+        return False
 
 def process_btc_entry_signal(signal_data, parsed_action=None):
     """處理BTC進場信號"""
@@ -1345,6 +1390,42 @@ def process_btc_entry_signal(signal_data, parsed_action=None):
         
         # 計算交易數量
         quantity = calculate_btc_quantity(signal_data, usdt_balance)
+        
+        # 檢查反向持倉
+        has_opposite_position = check_opposite_position(action)
+        
+        if has_opposite_position:
+            # 發送提交成功通知
+            trade_record = {
+                'symbol': symbol,
+                'side': side,
+                'quantity': quantity,
+                'order_type': 'MARKET',
+                'source': 'webhook',
+                'action_type': '開倉',
+                'is_manual': False
+            }
+            send_btc_order_submit_notification_delayed(trade_record, success=True, delay_seconds=5)
+            
+            # 延遲發送失敗通知
+            def send_failure_notification():
+                time.sleep(6)  # 比成功通知晚1秒
+                opposite_type = '多單' if action == 'SHORT' else '空單'
+                
+                # 構建失敗通知的trade_record，加入錯誤原因
+                failure_trade_record = trade_record.copy()
+                failure_trade_record['error'] = f"存在反向持倉({opposite_type})"
+                
+                # 發送完整格式的失敗通知
+                send_btc_order_submit_notification(failure_trade_record, success=False)
+                logger.warning(f"BTC {action} 被拒絕：存在反向持倉({opposite_type})")
+            
+            import threading
+            thread = threading.Thread(target=send_failure_notification)
+            thread.daemon = True
+            thread.start()
+            
+            return {'error': f'存在反向持倉，無法開{action.lower()}'}
         
         # 執行下單（webhook為自動交易，預設為開倉）
         order_result = place_btc_futures_order(
@@ -1548,9 +1629,9 @@ def send_btc_telegram_message(message, chat_id=None, bot_token=None):
             logger.info(f"BTC Telegram 訊息發送完成！成功發送到 {success_count}/{total_count} 個接收者")
             
             # 根據訊息內容判斷發送狀態類型（參考TX系統）
-            if "訂單提交成功" in message or "提交成功" in message:
+            if "訂單提交成功" in message or "提交成功" in message or "⭕ 提交成功" in message:
                 log_message = "Telegram［提交成功］訊息發送成功！！！"
-            elif "訂單提交失敗" in message or "提交失敗" in message:
+            elif "訂單提交失敗" in message or "提交失敗" in message or "❌ 提交失敗" in message:
                 log_message = "Telegram［提交失敗］訊息發送成功！！！"
             elif "成交通知" in message or "訂單成交" in message:
                 log_message = "Telegram［成交通知］訊息發送成功！！！"
@@ -1564,6 +1645,8 @@ def send_btc_telegram_message(message, chat_id=None, bot_token=None):
                 log_message = "Telegram［生成報表］訊息發送成功！！！"
             elif "系統啟動" in message or "啟動通知" in message or "正在啟動中" in message:
                 log_message = "Telegram［啟動通知］訊息發送成功！！！"
+            elif "風險管理警報" in message or "虧損金額" in message:
+                log_message = "Telegram［風險管理］訊息發送成功！！！"
             else:
                 log_message = "Telegram 訊息發送成功！！！"
             
@@ -1737,9 +1820,21 @@ def log_btc_frontend_message(message, log_type="info"):
         current_port = 5000  # 預設端口
         try:
             # 嘗試從主模組獲取當前端口
-            import main
-            if hasattr(main, 'CURRENT_PORT'):
-                current_port = main.CURRENT_PORT
+            import sys
+            if 'main' in sys.modules:
+                main_module = sys.modules['main']
+                if hasattr(main_module, 'CURRENT_PORT'):
+                    current_port = main_module.CURRENT_PORT
+            else:
+                # 嘗試讀取port.txt文件
+                import os
+                port_file = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'port.txt')
+                if os.path.exists(port_file):
+                    with open(port_file, 'r', encoding='utf-8') as f:
+                        for line in f:
+                            if line.startswith('port:'):
+                                current_port = int(line.split(':')[1].strip())
+                                break
         except:
             pass
         
@@ -1752,25 +1847,29 @@ def log_btc_frontend_message(message, log_type="info"):
         
         # 使用BTC專用的日誌端點
         url = f'http://127.0.0.1:{current_port}/api/btc_system_log'
-        logger.debug(f"嘗試發送BTC日誌到: {url}")
-        logger.debug(f"日誌內容: {log_data}")
+        logger.info(f"嘗試發送BTC日誌到: {url}")
+        logger.info(f"日誌內容: {log_data}")
         
         response = requests.post(url, json=log_data, timeout=5)
         
         # 檢查響應狀態
         if response.status_code == 200:
-            logger.debug(f"BTC前端日誌發送成功: {message}")
+            logger.info(f"BTC前端日誌發送成功: {message}")
+            return True
         else:
-            logger.warning(f"BTC前端日誌發送失敗: HTTP {response.status_code}")
-            logger.warning(f"響應內容: {response.text}")
+            logger.error(f"BTC前端日誌發送失敗: HTTP {response.status_code}")
+            logger.error(f"響應內容: {response.text}")
+            return False
             
     except requests.exceptions.RequestException as e:
         # 網絡相關錯誤
-        logger.warning(f"BTC前端日誌網絡錯誤: {e}")
-        logger.warning(f"嘗試的URL: http://127.0.0.1:{current_port}/api/btc_system_log")
+        logger.error(f"BTC前端日誌網絡錯誤: {e}")
+        logger.error(f"嘗試的URL: http://127.0.0.1:{current_port}/api/btc_system_log")
+        return False
     except Exception as e:
         # 其他錯誤
-        logger.warning(f"BTC前端日誌發送異常: {e}")
+        logger.error(f"BTC前端日誌發送異常: {e}")
+        return False
     
     # 無論如何都記錄到後端日誌作為備份
     try:
@@ -1816,7 +1915,7 @@ def get_btc_leverage_info():
     except:
         return "5x", "全倉"
 
-def send_btc_order_submit_notification_delayed(trade_record, success=True, delay_seconds=1):
+def send_btc_order_submit_notification_delayed(trade_record, success=True, delay_seconds=3):
     """發送延遲的BTC訂單提交通知"""
     def delayed_send():
         time.sleep(delay_seconds)
@@ -1864,93 +1963,169 @@ def send_btc_order_submit_notification(trade_record, success=True):
         # 交易類別 - 直接使用trade_record中的已轉換文字
         order_type_display = order_type
         
-        # 計算持倉數量(USDT) = BTC數量 * 開倉價格
-        btc_quantity = float(quantity)
-        entry_price = position_data.get('entry_price', 0)
-        position_usdt = btc_quantity * entry_price if entry_price > 0 else 0
-        liquidation_price = position_data.get('liquidation_price', 0)
-        
-        # 格式化顯示 - 平倉時也顯示數據
+        # 判斷是否為平倉操作
         is_close_action = reduce_only or 'cover' in action_type.lower()
         
+        # 🔥 修復：對於平倉操作，使用實際持倉信息而不是訂單信息
         if is_close_action:
-            # 平倉操作：使用提交價格計算（提交通知應該顯示提交時的信息）
-            submitted_price = trade_record.get('price', 0)
+            # 獲取實際持倉數量和開倉價格
+            actual_position_amt, actual_entry_price = get_btc_actual_position_info(symbol)
             
-            if submitted_price > 0:
-                # 持倉數量 = 提交的平倉價格 × BTC數量
-                position_usdt_display = f"{btc_quantity * submitted_price:,.2f}"
+            if actual_position_amt > 0 and actual_entry_price > 0:
+                # 使用實際持倉信息
+                btc_quantity = actual_position_amt
+                entry_price = actual_entry_price
+                position_usdt = btc_quantity * entry_price
                 
-                # 平倉價格顯示：市價單顯示"市價"，限價單顯示提交的限價
-                if order_type_display == "市價單":
-                    entry_price_display = "市價"
-                else:
-                    entry_price_display = f"{submitted_price:,.2f}"
-                
-                # 平倉時嘗試獲取當前強平價格，無法獲取則顯示N/A
-                try:
-                    position_info = binance_client.get_position_risk(symbol='BTCUSDT')
-                    real_liquidation_price = 0
-                    
-                    if position_info:
-                        for pos in position_info:
-                            if pos['symbol'] == 'BTCUSDT' and float(pos['positionAmt']) != 0:
-                                real_liquidation_price = float(pos.get('liquidationPrice', 0))
-                                break
-                    
-                    if real_liquidation_price > 0:
-                        liquidation_price_display = f"{real_liquidation_price:,.2f}"
-                    else:
-                        liquidation_price_display = "N/A"
-                        
-                except Exception as e:
-                    logger.error(f"平倉時獲取強平價格失敗: {e}")
-                    liquidation_price_display = "N/A"
+                logger.info(f"🔧 使用實際持倉信息 - BTC數量: {btc_quantity:.8f}, 開倉價格: {entry_price:.2f}")
             else:
-                # 無法獲取提交價格時的降級處理
-                position_usdt_display = "N/A"
-                entry_price_display = "市價" if order_type_display == "市價單" else "限價"
+                # 回退到訂單信息
+                btc_quantity = float(quantity)
+                entry_price = position_data.get('entry_price', 0)
+                position_usdt = btc_quantity * entry_price if entry_price > 0 else 0
+                logger.warning(f"⚠️ 無法獲取實際持倉信息，使用訂單信息")
+        else:
+            # 開倉操作：使用訂單信息
+            btc_quantity = float(quantity)
+            entry_price = position_data.get('entry_price', 0)
+            position_usdt = btc_quantity * entry_price if entry_price > 0 else 0
+        
+        liquidation_price = position_data.get('liquidation_price', 0)
+        
+        if is_close_action:
+            # 平倉操作：顯示實際持倉信息
+            # 持倉數量(USDT) = 實際BTC數量 * 實際開倉價格
+            position_usdt_display = f"{position_usdt:,.2f}"
+            
+            # 平倉時嘗試獲取當前強平價格，無法獲取則顯示N/A
+            try:
+                position_info = binance_client.get_position_risk(symbol='BTCUSDT')
+                real_liquidation_price = 0
+                
+                if position_info:
+                    for pos in position_info:
+                        if pos['symbol'] == 'BTCUSDT' and float(pos['positionAmt']) != 0:
+                            real_liquidation_price = float(pos.get('liquidationPrice', 0))
+                            break
+                
+                if real_liquidation_price > 0:
+                    liquidation_price_display = f"{real_liquidation_price:,.2f}"
+                else:
+                    liquidation_price_display = "N/A"
+                    
+            except Exception as e:
+                logger.error(f"平倉時獲取強平價格失敗: {e}")
                 liquidation_price_display = "N/A"
         else:
-            # 開倉操作：使用提交價格計算（提交通知應該顯示提交時的信息）
+            # 開倉操作：計算持倉數量(USDT)
             submitted_price = trade_record.get('price', 0)
-            
             if submitted_price > 0:
-                # 持倉數量 = 提交的開倉價格 * BTC數量
                 position_usdt_display = f"{btc_quantity * submitted_price:,.2f}"
-                
-                # 開倉價格顯示：市價單顯示"市價"，限價單顯示提交的限價
-                if order_type_display == "市價單":
-                    entry_price_display = "市價"
-                else:
-                    entry_price_display = f"{submitted_price:,.2f}"
-                
-                # 強平價格：嘗試獲取真實強平價格，無法獲取則顯示N/A
-                try:
-                    position_info = binance_client.get_position_risk(symbol='BTCUSDT')
-                    real_liquidation_price = 0
-                    
-                    if position_info:
-                        for pos in position_info:
-                            if pos['symbol'] == 'BTCUSDT' and float(pos['positionAmt']) != 0:
-                                real_liquidation_price = float(pos.get('liquidationPrice', 0))
-                                break
-                    
-                    if real_liquidation_price > 0:
-                        liquidation_price_display = f"{real_liquidation_price:,.2f}"
-                    else:
-                        liquidation_price_display = "N/A"
-                        
-                except Exception as e:
-                    logger.error(f"獲取強平價格失敗: {e}")
-                    liquidation_price_display = "N/A"
             else:
-                # 無法獲取提交價格時的降級處理
-                position_usdt_display = "N/A"
-                entry_price_display = "市價" if order_type_display == "市價單" else "限價"
+                position_usdt_display = f"{position_usdt:,.2f}" if position_usdt > 0 else "N/A"
+            
+            # 獲取強平價格
+            try:
+                position_info = binance_client.get_position_risk(symbol='BTCUSDT')
+                real_liquidation_price = 0
+                
+                if position_info:
+                    for pos in position_info:
+                        if pos['symbol'] == 'BTCUSDT' and float(pos['positionAmt']) != 0:
+                            real_liquidation_price = float(pos.get('liquidationPrice', 0))
+                            break
+                
+                liquidation_price_display = f"{real_liquidation_price:,.2f}" if real_liquidation_price > 0 else "N/A"
+                        
+            except Exception as e:
+                logger.error(f"獲取強平價格失敗: {e}")
                 liquidation_price_display = "N/A"
         
         price_label = "平倉價格(USDT)" if is_close_action else "開倉價格(USDT)"
+        
+        # 🔥 新增：獲取止盈止損信息
+        tp_sl_display = ""
+        take_profit_price = None
+        stop_loss_price = None
+        
+        # 首先檢查訂單記錄中是否包含止盈止損價格（適用於取消的訂單）
+        if reduce_only and 'stopPrice' in trade_record:
+            stop_price = float(trade_record.get('stopPrice', 0))
+            if stop_price > 0:
+                # 從訂單本身判斷是止盈還是止損
+                side = trade_record.get('side', '')
+                try:
+                    current_price = float(binance_client.get_mark_price(symbol).get('markPrice', 0)) if binance_client else 0
+                    
+                    if side == 'SELL':  # 多頭持倉的平倉訂單
+                        if stop_price > current_price:
+                            take_profit_price = stop_price  # 止盈
+                        else:
+                            stop_loss_price = stop_price   # 止損
+                    elif side == 'BUY':  # 空頭持倉的平倉訂單
+                        if stop_price < current_price:
+                            take_profit_price = stop_price  # 止盈
+                        else:
+                            stop_loss_price = stop_price   # 止損
+                    
+                    logger.info(f"🎯 從訂單記錄獲取止盈止損: stopPrice={stop_price}, side={side}, 判定為={'止盈' if take_profit_price else '止損'}")
+                except Exception as e:
+                    logger.error(f"判斷止盈止損類型失敗: {e}")
+                    # 如果無法判斷，預設為止盈
+                    take_profit_price = stop_price
+        
+        # 如果從訂單記錄中沒有獲取到，再查詢現有的開放訂單
+        if take_profit_price is None and stop_loss_price is None:
+            try:
+                take_profit_price, stop_loss_price = get_btc_tp_sl_orders(symbol)
+                logger.info(f"📊 從開放訂單獲取止盈止損信息")
+            except Exception as e:
+                logger.error(f"獲取開放訂單止盈止損信息失敗: {e}")
+        
+        # 🔥 統一邏輯：確保成功和失敗都有相同的止盈止損顯示
+        # 如果是平倉操作（reduceOnly=True），無論是否獲取到止盈止損，都顯示查詢結果
+        if reduce_only:
+            tp_text = f"{take_profit_price:,.2f}" if take_profit_price is not None else "--"
+            sl_text = f"{stop_loss_price:,.2f}" if stop_loss_price is not None else "--"
+            tp_sl_display = f"\n止盈/止損：{tp_text}/{sl_text}"
+            logger.info(f"📊 平倉操作止盈止損顯示: 止盈={tp_text}, 止損={sl_text}")
+        else:
+            # 開倉操作：只有獲取到止盈止損時才顯示
+            if take_profit_price is not None or stop_loss_price is not None:
+                tp_text = f"{take_profit_price:,.2f}" if take_profit_price else "--"
+                sl_text = f"{stop_loss_price:,.2f}" if stop_loss_price else "--"
+                tp_sl_display = f"\n止盈/止損：{tp_text}/{sl_text}"
+                logger.info(f"📊 開倉操作止盈止損顯示: 止盈={tp_text}, 止損={sl_text}")
+        
+        # 🔥 修正：設置平倉價格顯示邏輯（成功和失敗都使用同樣邏輯）
+        if is_close_action:
+            # 對於平倉操作，優先使用止盈止損價格
+            if reduce_only and (take_profit_price is not None or stop_loss_price is not None):
+                # 如果有止盈價格，優先顯示止盈價格作為平倉價格
+                if take_profit_price is not None:
+                    entry_price_display = f"{take_profit_price:,.2f}"
+                    logger.info(f"🎯 使用止盈價格作為平倉價格: {take_profit_price:,.2f}")
+                else:
+                    entry_price_display = f"{stop_loss_price:,.2f}"
+                    logger.info(f"🛑 使用止損價格作為平倉價格: {stop_loss_price:,.2f}")
+            else:
+                # 沒有止盈止損，使用提交的限價
+                submitted_price = trade_record.get('price', 0)
+                if order_type_display == "市價單":
+                    entry_price_display = "市價"
+                elif submitted_price > 0:
+                    entry_price_display = f"{submitted_price:,.2f}"
+                else:
+                    entry_price_display = "限價"
+        else:
+            # 開倉操作的價格顯示邏輯
+            submitted_price = trade_record.get('price', 0)
+            if order_type_display == "市價單":
+                entry_price_display = "市價"
+            elif submitted_price > 0:
+                entry_price_display = f"{submitted_price:,.2f}"
+            else:
+                entry_price_display = "限價"
         
         if success:
             msg = (f"⭕ 提交成功（{current_date}）\n"
@@ -1962,7 +2137,7 @@ def send_btc_order_submit_notification(trade_record, success=True):
                    f"交易數量：{btc_quantity:.8f} BTC\n"
                    f"持倉數量(USDT)：{position_usdt_display}\n"
                    f"{price_label}：{entry_price_display}\n"
-                   f"強平價格(USDT)：{liquidation_price_display}")
+                   f"強平價格(USDT)：{liquidation_price_display}{tp_sl_display}")
         else:
             error = trade_record.get('error', '未知錯誤')
             msg = (f"❌ 提交失敗（{current_date}）\n"
@@ -1974,18 +2149,32 @@ def send_btc_order_submit_notification(trade_record, success=True):
                    f"交易數量：{btc_quantity:.8f} BTC\n"
                    f"持倉數量(USDT)：{position_usdt_display}\n"
                    f"{price_label}：{entry_price_display}\n"
-                   f"強平價格(USDT)：{liquidation_price_display}\n"
+                   f"強平價格(USDT)：{liquidation_price_display}{tp_sl_display}\n"
                    f"原因：{error}")
         
         # 先添加前端日誌記錄（包含交易信息）
+        # 為前端日誌添加USDT單位（除非是"市價"或"限價"文字）
+        frontend_price_display = entry_price_display
+        if entry_price_display not in ["市價", "限價"] and not entry_price_display.endswith("USDT"):
+            frontend_price_display = f"{entry_price_display} USDT"
+        
+        # 為前端日誌格式化止盈止損信息
+        frontend_tp_sl_display = ""
+        if tp_sl_display:
+            # 移除換行符，用｜分隔
+            frontend_tp_sl_display = f"｜{tp_sl_display.strip()}"
+        
         if success:
             # 提交成功時，前端日誌記錄交易詳情
-            frontend_log = f"{submit_type}{action_type}：{direction_display}｜{btc_quantity:.8f} BTC｜{entry_price_display}｜{order_type_display}"
-            log_btc_frontend_message(frontend_log, "success")
+            frontend_log = f"{submit_type}{action_type}：{direction_display}｜{btc_quantity:.8f} BTC｜{frontend_price_display}｜{order_type_display}{frontend_tp_sl_display}"
+            frontend_result = log_btc_frontend_message(frontend_log, "success")
+            logger.info(f"BTC前端日誌發送結果: {frontend_result}")
         else:
-            # 提交失敗時，前端日誌記錄交易詳情（紅色顯示）
-            frontend_log = f"{submit_type}{action_type}：{direction_display}｜{btc_quantity:.8f} BTC｜{entry_price_display}｜{order_type_display}"
-            log_btc_frontend_message(frontend_log, "error")
+            # 提交失敗時，前端日誌記錄交易詳情和失敗原因（紅色顯示）
+            error_reason = trade_record.get('error', '未知錯誤')
+            frontend_log = f"{submit_type}{action_type}：{direction_display}｜{btc_quantity:.8f} BTC｜{frontend_price_display}｜{order_type_display}｜失敗原因：{error_reason}{frontend_tp_sl_display}"
+            frontend_result = log_btc_frontend_message(frontend_log, "error")
+            logger.info(f"BTC前端日誌發送結果: {frontend_result}")
         
         # 然後發送 Telegram 訊息
         logger.info(f"準備發送BTC Telegram訊息: {msg[:100]}...")
@@ -2051,6 +2240,153 @@ def get_btc_position_data_for_notification(symbol):
             'entry_price': 0,
             'liquidation_price': 0
         }
+
+def get_btc_tp_sl_orders(symbol='BTCUSDT'):
+    """獲取BTC止盈止損訂單信息"""
+    try:
+        if not binance_client:
+            return None, None
+        
+        # 獲取所有未成交訂單
+        open_orders = binance_client.get_open_orders(symbol)
+        if not open_orders:
+            return None, None
+        
+        take_profit_price = None
+        stop_loss_price = None
+        
+        for order in open_orders:
+            # 檢查是否為止盈止損訂單（reduceOnly=True）
+            if order.get('reduceOnly', False):
+                order_type = order.get('type', '')
+                stop_price = order.get('stopPrice', 0)
+                
+                # 判斷是止盈還是止損
+                # 通常止盈止損訂單會有stopPrice
+                if stop_price and float(stop_price) > 0:
+                    side = order.get('side', '')
+                    
+                    # 根據訂單方向判斷是止盈還是止損
+                    # 多頭持倉：賣出止盈（價格高於當前）、賣出止損（價格低於當前）
+                    # 空頭持倉：買入止盈（價格低於當前）、買入止損（價格高於當前）
+                    
+                    # 獲取當前標記價格作為參考
+                    try:
+                        current_price = float(binance_client.get_mark_price(symbol).get('markPrice', 0))
+                        stop_price_float = float(stop_price)
+                        
+                        if side == 'SELL':  # 多頭持倉的平倉訂單
+                            if stop_price_float > current_price:
+                                take_profit_price = stop_price_float  # 止盈
+                            else:
+                                stop_loss_price = stop_price_float   # 止損
+                        elif side == 'BUY':  # 空頭持倉的平倉訂單
+                            if stop_price_float < current_price:
+                                take_profit_price = stop_price_float  # 止盈
+                            else:
+                                stop_loss_price = stop_price_float   # 止損
+                    except:
+                        # 如果無法判斷，根據訂單類型猜測
+                        if 'TAKE_PROFIT' in order_type:
+                            take_profit_price = float(stop_price)
+                        elif 'STOP' in order_type:
+                            stop_loss_price = float(stop_price)
+        
+        return take_profit_price, stop_loss_price
+        
+    except Exception as e:
+        logger.error(f"獲取止盈止損訂單失敗: {e}")
+        return None, None
+
+def convert_order_type_to_display(order_type):
+    """統一轉換訂單類型格式為XLSX顯示格式"""
+    if not order_type:
+        return '市價單'
+    
+    # 統一轉換邏輯
+    if order_type in ['MARKET', '市價單', '市價']:
+        return '市價單'
+    elif order_type in ['LIMIT', '限價單', '限價']:
+        return '限價單'
+    else:
+        # 如果是其他格式，嘗試智能判斷
+        if 'market' in str(order_type).lower() or '市價' in str(order_type):
+            return '市價單'
+        else:
+            return '限價單'
+
+def get_btc_actual_position_info(symbol='BTCUSDT'):
+    """獲取BTC實際持倉信息（數量和開倉價格）"""
+    try:
+        if not binance_client:
+            return 0, 0
+        
+        # 獲取持倉信息
+        positions = binance_client.get_position_info()
+        if positions:
+            for pos in positions:
+                if pos.get('symbol') == symbol:
+                    position_amt = float(pos.get('positionAmt', 0))
+                    entry_price = float(pos.get('entryPrice', 0))
+                    
+                    # 返回絕對值的持倉數量和開倉價格
+                    return abs(position_amt), entry_price
+        
+        return 0, 0
+        
+    except Exception as e:
+        logger.error(f"獲取BTC實際持倉信息失敗: {e}")
+        return 0, 0
+
+def send_btc_order_modify_notification(order_data, old_data, new_data):
+    """發送BTC訂單修改通知"""
+    try:
+        current_date = datetime.now().strftime('%Y/%m/%d')
+        
+        # 提取基本信息
+        symbol = order_data.get('s', 'BTCUSDT')
+        side = order_data.get('S', '')
+        order_id = order_data.get('i', '')
+        order_type = order_data.get('o', 'LIMIT')
+        
+        # 判斷修改類型
+        price_changed = old_data.get('price') != new_data.get('price')
+        quantity_changed = old_data.get('quantity') != new_data.get('quantity')
+        
+        # 格式化變更信息
+        changes = []
+        if price_changed:
+            changes.append(f"價格：{old_data.get('price')} → {new_data.get('price')}")
+        if quantity_changed:
+            changes.append(f"數量：{old_data.get('quantity')} → {new_data.get('quantity')}")
+        
+        change_info = "、".join(changes) if changes else "未知變更"
+        
+        # 判斷動作方向
+        direction = "買入" if side == 'BUY' else "賣出"
+        order_type_display = "市價單" if order_type == 'MARKET' else "限價單"
+        
+        # 構建通知消息
+        msg = f"""⭕ 修改成功（{current_date}）
+交易對：{symbol}
+動作：{direction}
+類型：{order_type_display}
+修改內容：{change_info}
+訂單號：{order_id}"""
+        
+        # 發送Telegram通知
+        result = send_btc_telegram_message(msg)
+        logger.info(f"BTC修改訂單Telegram通知發送結果: {result}")
+        
+        # 記錄前端日誌
+        log_btc_frontend_message(f"⭕ 修改成功 - {direction} {order_type_display} - {change_info}", "success")
+        logger.info(f"BTC訂單修改通知: {msg}")
+        
+        return result
+        
+    except Exception as e:
+        logger.error(f"發送BTC訂單修改通知失敗: {e}")
+        return False
 
 def get_btc_action_and_direction(trade_record):
     """判斷BTC交易動作和方向"""
@@ -2312,7 +2648,7 @@ def send_btc_trading_statistics():
                         # 判斷持倉方向
                         direction = "多單" if position_amt > 0 else "空單"
                         
-                        position_info += f"{direction}｜{abs(position_amt):.8f}BTC｜{entry_price:,.2f} USDT｜＄{unrealized_pnl:.2f} USDT"
+                        position_info += f"{direction}｜{abs(position_amt):.8f}BTC｜{entry_price:,.2f} USDT｜{unrealized_pnl:.2f} USDT"
                         
             except Exception as e:
                 logger.error(f"獲取BTC持倉信息失敗: {e}")
@@ -2364,9 +2700,9 @@ def check_btc_daily_trading_statistics():
         send_btc_trading_statistics()
         logger.info("BTC每日交易統計發送完成")
         
-        # 延遲生成報表 - 與TX邏輯一致
+        # 延遲生成報表 - 統一時間控制：23:58:30日報，23:59:00月報
         def delayed_generate_btc_reports():
-            # 先等待30秒後生成日報，可中斷睡眠
+            # 等待30秒後生成日報 (23:58:30)，可中斷睡眠
             for _ in range(30):
                 if btc_shutdown_flag.is_set():
                     logger.info("BTC模組關閉中，取消報表生成")
@@ -2376,7 +2712,7 @@ def check_btc_daily_trading_statistics():
             logger.info("開始生成BTC交易報表...")
             daily_report_result = generate_btc_daily_report() if not btc_shutdown_flag.is_set() else False
             
-            # 如果是月末且日報生成成功，再等待30秒後生成月報
+            # 如果是月末且日報生成成功，再等待30秒後生成月報 (23:59:00)
             if daily_report_result and is_last_day_of_month() and not btc_shutdown_flag.is_set():
                 for _ in range(30):
                     if btc_shutdown_flag.is_set():
@@ -2479,7 +2815,9 @@ def btc_webhook():
                     break
             
             if not action_found:
-                logger.debug(f"[BTC] 未能解析動作，保持原始值: '{original_action}'")
+                logger.warning(f"[BTC] 未能解析動作 - 原始action: '{original_action}', 訊息: '{raw_message}'")
+                logger.warning(f"[BTC] 完整數據: {data}")
+                log_btc_frontend_message(f"BTC動作解析失敗 - action: '{original_action}', message: '{raw_message}'", "error")
                 action = 'UNKNOWN'
         
         # 執行交易
@@ -2494,8 +2832,9 @@ def btc_webhook():
             logger.debug(f"[BTC] 識別為出場信號: {original_action} -> {action}")
             order_result = process_btc_exit_signal(data, action)
         else:
-            logger.info(f"BTC未知的動作類型: {original_action} (解析後: {action})")
-            log_btc_frontend_message(f"BTC未知的動作類型: {original_action}", "warning")
+            # 動作類型未知，不執行交易
+            logger.warning(f"BTC未知的動作類型，跳過處理: {original_action} (解析後: {action})")
+            return None
         
         # 處理交易策略信號記錄
         strategy_data = {
@@ -3270,15 +3609,15 @@ def get_btc_trading_statistics_data(date_str=None):
             # 使用JSON配對系統獲取當日所有交易記錄
             today_date_str = datetime.now().strftime('%Y-%m-%d')
             
-            # 讀取當日交易數據文件
-            transdata_file = f"/mnt/c/Users/CLAY/Desktop/Auto91/server/BTCtransdata/trades_{today_date_str.replace('-', '')}.json"
+            # 讀取當日交易數據文件 (使用正確的路徑)
+            from trading_config import TradingConfig
+            import os
+            transdata_file = os.path.join(TradingConfig.BTC_DATA_DIR, f"BTCtransdata_{today_date_str.replace('-', '')}.json")
             all_trades = []
             
             try:
                 with open(transdata_file, 'r', encoding='utf-8') as f:
-                    for line in f:
-                        if line.strip():
-                            all_trades.append(json.loads(line.strip()))
+                    all_trades = json.load(f)
             except FileNotFoundError:
                 logger.warning(f"當日交易記錄文件不存在: {transdata_file}")
             except Exception as e:
@@ -3300,14 +3639,14 @@ def get_btc_trading_statistics_data(date_str=None):
                     usdt_value = quantity * price
                     
                     # 根據開平倉類型和動作正確分類
-                    if oc_type == 'OPEN':  # 開倉交易
+                    if oc_type == 'OPEN' or oc_type == 'Open':  # 開倉交易
                         if action == 'BUY':  # 開多倉
                             buy_volume += quantity
                             buy_total_value += usdt_value
                         elif action == 'SELL':  # 開空倉
                             sell_volume += quantity
                             sell_total_value += usdt_value
-                    elif oc_type == 'COVER':  # 平倉交易
+                    elif oc_type == 'COVER' or oc_type == 'Cover':  # 平倉交易
                         if action == 'SELL':  # 平多倉（賣出平倉）
                             sell_volume += quantity
                             sell_total_value += usdt_value
@@ -3457,8 +3796,8 @@ def get_btc_contract_info():
         logger.error(f"獲取BTC合約信息失敗: {e}")
         return 'BTCUSDT｜永續｜全倉20X'
 
-def generate_btc_daily_report(date_str=None):
-    """生成BTC日報Excel文件 - 四大區塊格式（主要函數）"""
+def generate_btc_daily_report(date_str=None, custom_filename=None, is_monthly=False, monthly_data=None):
+    """生成BTC日報/月報Excel文件 - 四大區塊格式（主要函數）"""
     try:
         if not binance_client:
             return {
@@ -3471,22 +3810,32 @@ def generate_btc_daily_report(date_str=None):
             from datetime import datetime
             date_str = datetime.now().strftime('%Y-%m-%d')
         
-        # 獲取統計數據
-        stats_data = get_btc_trading_statistics_data(date_str)
-        if not stats_data['success']:
-            return stats_data
-        
-        data = stats_data['data']
-        account = data['account']
-        
-        # 獲取詳細交易記錄
-        closed_trades_data = get_btc_closed_trades_today(date_str)
-        open_positions_data = get_btc_open_positions_today()
+        # 獲取數據：月報使用傳入的數據，日報查詢API
+        if is_monthly and monthly_data:
+            data = monthly_data['stats_data']
+            account = data['account']
+            closed_trades_data = monthly_data['closed_trades_data']
+            open_positions_data = monthly_data['open_positions_data']
+        else:
+            # 獲取統計數據
+            stats_data = get_btc_trading_statistics_data(date_str)
+            if not stats_data['success']:
+                return stats_data
+            
+            data = stats_data['data']
+            account = data['account']
+            
+            # 獲取詳細交易記錄
+            closed_trades_data = get_btc_closed_trades_today(date_str)
+            open_positions_data = get_btc_open_positions_today()
         
         # 創建Excel文件
         wb = openpyxl.Workbook()
         ws = wb.active
-        ws.title = f"BTC交易報表_{date_str.replace('-', '')}"
+        if custom_filename and '月報' in custom_filename:
+            ws.title = f"BTC交易報表_月報"
+        else:
+            ws.title = f"BTC交易報表_{date_str.replace('-', '')}"
         
         # 設置樣式
         from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
@@ -3739,7 +4088,10 @@ def generate_btc_daily_report(date_str=None):
         # 保存文件
         report_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'BTC交易報表')
         os.makedirs(report_dir, exist_ok=True)
-        filename = f"BTC_{date_str}.xlsx"
+        if custom_filename:
+            filename = custom_filename
+        else:
+            filename = f"BTC_{date_str}.xlsx"
         file_path = os.path.join(report_dir, filename)
         
         wb.save(file_path)
@@ -3751,11 +4103,7 @@ def generate_btc_daily_report(date_str=None):
         caption = f"{filename} 交易報表已生成！！！"
         send_btc_telegram_file(file_path, caption)
         
-        return {
-            'success': True,
-            'file_path': file_path,
-            'filename': filename
-        }
+        return file_path
         
     except Exception as e:
         logger.error(f"生成BTC日報失敗: {e}")
@@ -3871,6 +4219,9 @@ def get_btc_position_from_json(is_long, position_size, entry_price):
         price_tolerance = entry_price * 0.005  # 0.5%的價格容差
         quantity_tolerance = position_size * 0.1  # 10%的數量容差
         
+        logger.info(f"🔍 查找BTC持倉開倉記錄: {target_action} {position_size}BTC @ ${entry_price}")
+        logger.info(f"🔍 容差範圍: 價格±{price_tolerance:.2f}, 數量±{quantity_tolerance:.8f}")
+        
         # 查找最近30天的開倉記錄
         for i in range(30):
             check_date = today - timedelta(days=i)
@@ -3884,10 +4235,19 @@ def get_btc_position_from_json(is_long, position_size, entry_price):
                     
                     # 查找匹配的開倉記錄
                     for open_record in opens:
-                        if (open_record.get('action') == target_action and
-                            open_record.get('status') == 'open' and  # 只查找未完全平倉的記錄
-                            abs(float(open_record.get('price', 0)) - entry_price) <= price_tolerance and
-                            abs(float(open_record.get('remaining_quantity', 0)) - position_size) <= quantity_tolerance):
+                        record_action = open_record.get('action')
+                        record_status = open_record.get('status')
+                        record_price = float(open_record.get('price', 0))
+                        record_quantity = float(open_record.get('remaining_quantity', 0))
+                        
+                        logger.debug(f"  檢查記錄: {record_action} {record_quantity}BTC @ ${record_price} 狀態:{record_status}")
+                        
+                        action_match = record_action == target_action
+                        status_match = record_status == 'open'
+                        price_match = abs(record_price - entry_price) <= price_tolerance
+                        quantity_match = abs(record_quantity - position_size) <= quantity_tolerance
+                        
+                        if action_match and status_match and price_match and quantity_match:
                             
                             # 找到匹配的開倉記錄
                             timestamp = open_record.get('timestamp', '')
@@ -4108,7 +4468,7 @@ def get_btc_open_positions_today():
                     trade.get('trade_id', ''),  # 交易單號
                     trade.get('symbol', 'BTCUSDT'),
                     trade.get('action', '平倉'),  # 交易動作
-                    trade.get('order_type', '市價'),  # 交易類別
+                    convert_order_type_to_display(trade.get('order_type')),  # 交易類別
                     trade.get('direction', ''),  # 交易方向
                     f"{trade.get('trade_quantity', 0):.8f}",  # 交易數量
                     f"{trade.get('position_size', 0):.8f}",
@@ -4156,7 +4516,7 @@ def get_btc_open_positions_today():
                     pos.get('trade_id', ''),    # 交易單號
                     pos.get('symbol', 'BTCUSDT'),
                     pos.get('action', '開倉'),  # 交易動作
-                    pos.get('order_type', '市價'),  # 交易類別
+                    convert_order_type_to_display(pos.get('order_type')),  # 交易類別
                     pos.get('direction', ''),   # 交易方向
                     f"{pos.get('trade_quantity', 0):.8f}",  # 交易數量
                     f"{pos.get('position_size', 0):.8f}",
@@ -4262,7 +4622,7 @@ def get_detailed_trade_records(date_str):
         }
 
 def generate_btc_monthly_report(year, month):
-    """生成BTC月報Excel文件"""
+    """生成BTC月報Excel文件 - 使用與日報相同的格式和標題"""
     try:
         if not binance_client:
             return {
@@ -4311,272 +4671,95 @@ def generate_btc_monthly_report(year, month):
                 total_stats['total_realized_pnl'] += data['total_realized_pnl']
                 total_stats['commission'] += data['account']['today_commission']
                 
-                # 獲取該日詳細交易記錄
-                detailed_trades = get_detailed_trade_records(date_str)
-                total_stats['all_closed_trades'].extend(detailed_trades['closed_trades'])
+                # 收集整月所有平倉交易
+                closed_trades_data = get_btc_closed_trades_today(date_str)
+                if closed_trades_data['success']:
+                    total_stats['all_closed_trades'].extend(closed_trades_data['data'])
                 
-                daily_data.append({
-                    'date': date_str,
-                    'stats': data,
-                    'trades': detailed_trades
-                })
         
-        # 獲取最後一天的帳戶狀態（作為月末帳戶狀態）
-        last_day_str = f"{year:04d}-{month:02d}-{month_days:02d}"
-        last_day_account = get_btc_startup_notification_data()
-        if not last_day_account['success']:
-            last_day_account = {'data': {}}
+        # 若無任何交易記錄，不生成月報
+        if total_stats['fill_count'] == 0 and len(total_stats['all_closed_trades']) == 0:
+            logger.info(f"{month_str} 無交易記錄，不生成月報")
+            return {
+                'success': False,
+                'error': '無交易記錄'
+            }
         
-        account_data = last_day_account.get('data', {})
-        
-        # 計算月度平均價格（需要根據每日交易重新計算）
-        total_buy_quantity = 0.0
-        total_sell_quantity = 0.0
-        
-        # 重新統計數量來計算正確平均價格
-        for day_data in daily_data:
-            if day_data['stats']['buy_volume'] > 0:
-                # 從統計數據重構：買入總量(USDT) / 平均買價 = 買入數量(BTC)
-                day_buy_qty = day_data['stats']['buy_volume'] / day_data['stats']['avg_buy_price'] if day_data['stats']['avg_buy_price'] > 0 else 0
-                total_buy_quantity += day_buy_qty
+        # 獲取當日帳戶狀態（第二區塊使用當日數據）
+        try:
+            account_info = binance_client.futures_account()
+            balance = float(account_info['totalWalletBalance'])
+            pnl = float(account_info['totalUnrealizedPnL'])
+            margin_ratio = float(account_info['totalMaintMargin']) / balance * 100 if balance > 0 else 0
             
-            if day_data['stats']['sell_volume'] > 0:
-                # 從統計數據重構：賣出總量(USDT) / 平均賣價 = 賣出數量(BTC)  
-                day_sell_qty = day_data['stats']['sell_volume'] / day_data['stats']['avg_sell_price'] if day_data['stats']['avg_sell_price'] > 0 else 0
-                total_sell_quantity += day_sell_qty
+            current_account = {
+                'balance': balance,
+                'unrealized_pnl': pnl,
+                'margin_ratio': margin_ratio,
+                'today_commission': 0  # 月報中不顯示當日手續費
+            }
+        except Exception as e:
+            logger.error(f"獲取帳戶狀態失敗: {e}")
+            current_account = {
+                'balance': 0,
+                'unrealized_pnl': 0,
+                'margin_ratio': 0,
+                'today_commission': 0
+            }
         
-        avg_buy_price = total_stats['buy_volume'] / total_buy_quantity if total_buy_quantity > 0 else 0.0
-        avg_sell_price = total_stats['sell_volume'] / total_sell_quantity if total_sell_quantity > 0 else 0.0
+        # 獲取當日持倉狀態（第四區塊使用當日數據）
+        current_positions_data = get_btc_open_positions_today()
+        current_positions = current_positions_data.get('data', []) if current_positions_data.get('success') else []
         
-        # 獲取當前持倉（月末狀態）
-        current_positions = binance_client.get_position_info() if binance_client else []
-        open_positions = []
-        if current_positions:
-            for pos in current_positions:
-                position_amt = float(pos.get('positionAmt', 0))
-                if position_amt != 0:
-                    open_positions.append({
-                        'symbol': pos.get('symbol', 'BTCUSDT'),
-                        'direction': '多單' if position_amt > 0 else '空單',  # 月報使用direction字段
-                        'side': '多單' if position_amt > 0 else '空單',     # 保持兼容性
-                        'quantity': abs(position_amt),
-                        'entry_price': float(pos.get('entryPrice', 0)),
-                        'unrealized_pnl': float(pos.get('unRealizedProfit', 0))
-                    })
+        # 檔名
+        filename = f'BTC_{month_str}_月報.xlsx'
         
-        # 創建Excel文件
-        wb = openpyxl.Workbook()
-        ws = wb.active
-        ws.title = f"BTC交易報表_{year}{month:02d}"
+        # 計算平均價格
+        avg_buy_price = total_stats['buy_volume'] / total_stats['fill_count'] if total_stats['fill_count'] > 0 else 0.0
+        avg_sell_price = total_stats['sell_volume'] / total_stats['fill_count'] if total_stats['fill_count'] > 0 else 0.0
         
-        # 設置樣式
-        from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
+        # 組裝月報數據結構，與日報格式完全一致
+        monthly_stats_data = {
+            'cancel_count': total_stats['cancel_count'],
+            'fill_count': total_stats['fill_count'],
+            'buy_volume': total_stats['buy_volume'],
+            'sell_volume': total_stats['sell_volume'],
+            'avg_buy_price': avg_buy_price,
+            'avg_sell_price': avg_sell_price,
+            'realized_profit': total_stats['realized_profit'],
+            'realized_pnl': total_stats['realized_pnl'],
+            'total_realized_pnl': total_stats['total_realized_pnl'],
+            'account': current_account  # 當日帳戶狀態
+        }
         
-        # 背景色
-        blue_fill = PatternFill(start_color="0066CC", end_color="0066CC", fill_type="solid")
-        gray_fill = PatternFill(start_color="D3D3D3", end_color="D3D3D3", fill_type="solid")
-        white_font = Font(color="FFFFFF", bold=True)
-        black_font = Font(color="000000", bold=True)
-        center_alignment = Alignment(horizontal="center", vertical="center")
+        # 組裝傳遞給日報函數的數據
+        monthly_report_data = {
+            'stats_data': monthly_stats_data,
+            'closed_trades_data': {'success': True, 'data': total_stats['all_closed_trades']},
+            'open_positions_data': {'success': True, 'data': current_positions}
+        }
         
-        # 邊框
-        thin_border = Border(
-            left=Side(style='thin'),
-            right=Side(style='thin'),
-            top=Side(style='thin'),
-            bottom=Side(style='thin')
+        # 使用日報函數生成月報，格式和標題完全一致
+        today_str = datetime.now().strftime('%Y-%m-%d')
+        report_path = generate_btc_daily_report(
+            date_str=today_str,
+            custom_filename=filename,
+            is_monthly=True,
+            monthly_data=monthly_report_data
         )
         
-        current_row = 1
-        
-        # 第一區塊：交易總覽（月度累計）
-        ws.merge_cells(f'A{current_row}:K{current_row}')
-        ws[f'A{current_row}'] = "交易總覽"
-        ws[f'A{current_row}'].fill = blue_fill
-        ws[f'A{current_row}'].font = white_font
-        ws[f'A{current_row}'].alignment = center_alignment
-        current_row += 1
-        
-        # 第一區塊標題
-        headers1 = ["取消次數", "成交次數", "買入總量", "賣出總量", "平均買價", "平均賣價", "已實現獲利", "已實現盈虧", "總計已實現盈虧"]
-        for i, header in enumerate(headers1, 1):
-            cell = ws.cell(row=current_row, column=i, value=header)
-            cell.fill = gray_fill
-            cell.font = black_font
-            cell.alignment = center_alignment
-            cell.border = thin_border
-        current_row += 1
-        
-        # 第一區塊數據（月度累計）
-        values1 = [
-            f"{total_stats['cancel_count']} 筆",
-            f"{total_stats['fill_count']} 筆",
-            f"{total_stats['buy_volume']:.2f} USDT",
-            f"{total_stats['sell_volume']:.2f} USDT",
-            f"{avg_buy_price:.2f} USDT",
-            f"{avg_sell_price:.2f} USDT",
-            f"{total_stats['realized_profit']:.2f} USDT",
-            f"{total_stats['realized_pnl']:.2f} USDT",
-            f"{total_stats['total_realized_pnl']:.2f} USDT"
-        ]
-        for i, value in enumerate(values1, 1):
-            cell = ws.cell(row=current_row, column=i, value=value)
-            cell.alignment = center_alignment
-            cell.border = thin_border
-        current_row += 2
-        
-        # 第二區塊：帳戶狀態（月末當日數據）
-        ws.merge_cells(f'A{current_row}:K{current_row}')
-        ws[f'A{current_row}'] = "帳戶狀態"
-        ws[f'A{current_row}'].fill = blue_fill
-        ws[f'A{current_row}'].font = white_font
-        ws[f'A{current_row}'].alignment = center_alignment
-        current_row += 1
-        
-        # 第二區塊標題
-        headers2 = ["錢包餘額", "可供轉帳", "保證金餘額", "未實現盈虧", "交易手續費", "保證金比率", "槓桿使用率", "本日盈虧", "7天盈虧", "30天盈虧"]
-        for i, header in enumerate(headers2, 1):
-            cell = ws.cell(row=current_row, column=i, value=header)
-            cell.fill = gray_fill
-            cell.font = black_font
-            cell.alignment = center_alignment
-            cell.border = thin_border
-        current_row += 1
-        
-        # 第二區塊數據（月末當日數據）
-        values2 = [
-            f"{account_data.get('wallet_balance', 0):.8f} USDT",
-            f"{account_data.get('available_balance', 0):.8f} USDT",
-            f"{account_data.get('margin_balance', 0):.8f} USDT",
-            f"{account_data.get('unrealized_pnl', 0):.8f} USDT",
-            f"{total_stats['commission']:.8f} USDT",  # 月度累計手續費
-            f"{account_data.get('margin_ratio', 0):.2f}%",
-            f"{account_data.get('leverage_usage', 0):.2f}%",
-            f"{account_data.get('today_pnl', 0):.2f} USDT",
-            f"{account_data.get('week_pnl', 0):.2f} USDT",
-            f"{account_data.get('month_pnl', 0):.2f} USDT"
-        ]
-        for i, value in enumerate(values2, 1):
-            cell = ws.cell(row=current_row, column=i, value=value)
-            cell.alignment = center_alignment
-            cell.border = thin_border
-        current_row += 2
-        
-        # 第三區塊：交易明細（月度累計）
-        ws.merge_cells(f'A{current_row}:K{current_row}')
-        ws[f'A{current_row}'] = "交易明細"
-        ws[f'A{current_row}'].fill = blue_fill
-        ws[f'A{current_row}'].font = white_font
-        ws[f'A{current_row}'].alignment = center_alignment
-        current_row += 1
-        
-        # 第三區塊標題
-        headers3 = ["平倉時間", "交易單號", "選用合約", "交易動作", "交易類別", "交易方向", "交易數量", "持倉數量", "開倉價格", "平倉價格", "已實現盈虧"]
-        for i, header in enumerate(headers3, 1):
-            cell = ws.cell(row=current_row, column=i, value=header)
-            cell.fill = gray_fill
-            cell.font = black_font
-            cell.alignment = center_alignment
-            cell.border = thin_border
-        current_row += 1
-        
-        # 第三區塊數據（月度所有平倉交易）
-        if total_stats['all_closed_trades']:
-            for trade in total_stats['all_closed_trades']:
-                values3 = [
-                    trade.get('close_time', ''),
-                    trade.get('trade_id', ''),  # 交易單號
-                    trade.get('symbol', 'BTCUSDT'),
-                    trade.get('action', '平倉'),  # 交易動作
-                    trade.get('order_type', '市價'),  # 交易類別
-                    trade.get('direction', ''),  # 交易方向
-                    f"{trade.get('trade_quantity', 0):.8f}",  # 交易數量
-                    f"{trade.get('position_size', 0):.8f}",
-                    f"{trade.get('entry_price', 0):.2f}",
-                    f"{trade.get('exit_price', 0):.2f}",
-                    f"{trade.get('realized_pnl', 0):.8f}"
-                ]
-                for i, value in enumerate(values3, 1):
-                    cell = ws.cell(row=current_row, column=i, value=value)
-                    cell.alignment = center_alignment
-                    cell.border = thin_border
-                current_row += 1
+        if report_path:
+            logger.info(f"BTC月報生成成功: {report_path}")
+            return {
+                'success': True,
+                'file_path': report_path,
+                'filename': filename
+            }
         else:
-            # 無交易記錄
-            ws.merge_cells(f'A{current_row}:K{current_row}')
-            ws[f'A{current_row}'] = "❌ 無平倉交易"
-            ws[f'A{current_row}'].alignment = center_alignment
-            current_row += 1
-        
-        current_row += 1
-        
-        # 第四區塊：持倉狀態（月末當日數據）
-        ws.merge_cells(f'A{current_row}:K{current_row}')
-        ws[f'A{current_row}'] = "持倉狀態"
-        ws[f'A{current_row}'].fill = blue_fill
-        ws[f'A{current_row}'].font = white_font
-        ws[f'A{current_row}'].alignment = center_alignment
-        current_row += 1
-        
-        # 第四區塊標題
-        headers4 = ["開倉時間", "交易單號", "選用合約", "交易動作", "交易類別", "交易方向", "交易數量", "持倉數量", "開倉價格", "平倉價格", "未實現盈虧"]
-        for i, header in enumerate(headers4, 1):
-            cell = ws.cell(row=current_row, column=i, value=header)
-            cell.fill = gray_fill
-            cell.font = black_font
-            cell.alignment = center_alignment
-            cell.border = thin_border
-        current_row += 1
-        
-        # 第四區塊數據（月末持倉）
-        if open_positions:
-            for pos in open_positions:
-                values4 = [
-                    '',  # 開倉時間
-                    '',  # 交易單號
-                    pos.get('symbol', 'BTCUSDT'),
-                    '開倉',  # 交易動作
-                    '市價',  # 交易類別
-                    pos.get('direction', ''),  # 交易方向
-                    f"{pos.get('quantity', 0):.8f}",  # 交易數量
-                    f"{pos.get('quantity', 0):.8f}",
-                    f"{pos.get('entry_price', 0):.2f}",
-                    '',  # 平倉價格空白
-                    f"{pos.get('unrealized_pnl', 0):.8f}"
-                ]
-                for i, value in enumerate(values4, 1):
-                    cell = ws.cell(row=current_row, column=i, value=value)
-                    cell.alignment = center_alignment
-                    cell.border = thin_border
-                current_row += 1
-        else:
-            # 無持倉
-            ws.merge_cells(f'A{current_row}:K{current_row}')
-            ws[f'A{current_row}'] = "❌ 無持倉部位"
-            ws[f'A{current_row}'].alignment = center_alignment
-            current_row += 1
-        
-        # 調整列寬
-        for col in range(1, 12):
-            ws.column_dimensions[get_column_letter(col)].width = 25
-        
-        # 保存文件
-        report_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'BTC交易報表')
-        os.makedirs(report_dir, exist_ok=True)
-        # 月報表使用年月格式
-        filename = f"BTC_{year:04d}-{month:02d}月.xlsx"
-        filepath = os.path.join(report_dir, filename)
-        
-        wb.save(filepath)
-        
-        return {
-            'success': True,
-            'filepath': filepath,
-            'filename': filename,
-            'year': year,
-            'month': month,
-            'month_str': month_str
-        }
+            return {
+                'success': False,
+                'error': 'BTC月報生成失敗'
+            }
         
     except Exception as e:
         logger.error(f"生成BTC月報失敗: {e}")
@@ -4719,10 +4902,10 @@ def process_order_fill(order_id, fill_price, fill_quantity):
                 logger.error(f"延遲處理成交事件失敗: {e}")
         
         # 使用線程延遲5秒處理成交日誌和通知
-        timer = threading.Timer(5.0, delayed_fill_processing)
+        timer = threading.Timer(1.0, delayed_fill_processing)
         timer.start()
         
-        logger.info(f"系統訂單成交處理已安排5秒延遲執行，訂單ID: {order_id}")
+        logger.info(f"系統訂單成交處理已安排1秒延遲執行，訂單ID: {order_id}")
         
         # 移除已處理訂單
         remove_pending_order(order_id)
@@ -4977,15 +5160,20 @@ def get_btc_position_notification_data(symbol='BTCUSDT'):
 
 def btc_place_order(quantity, action, side, order_type='MARKET', is_auto=False):
     """BTC下單函數 - 支援開倉/平倉判斷"""
+    logger.info(f"🎯 btc_place_order開始執行: quantity={quantity}, action={action}, side={side}, order_type={order_type}, is_auto={is_auto}")
+    
     try:
         if not binance_client:
+            logger.error(f"❌ BTC客戶端未初始化")
             return {
                 'success': False,
                 'error': 'BTC客戶端未初始化'
             }
         
         # 解析動作和方向
+        logger.info(f"📝 解析動作和方向: action={action}, side={side}")
         parsed_action, direction = parse_btc_action_and_direction(action, side)
+        logger.info(f"📝 解析結果: parsed_action={parsed_action}, direction={direction}")
         
         # 判斷訂單來源
         order_source = '自動' if is_auto else '手動'
@@ -5084,9 +5272,9 @@ def btc_place_order(quantity, action, side, order_type='MARKET', is_auto=False):
                 }
                 
                 
-                # 發送延遲提交成功通知（1秒延遲）
+                # 發送延遲提交成功通知（5秒延遲）
                 logger.info(f"準備發送BTC延遲提交成功通知: {trade_record}")
-                submit_success = send_btc_order_submit_notification_delayed(trade_record, True, 1)
+                submit_success = send_btc_order_submit_notification_delayed(trade_record, True, 3)
                 logger.info(f"BTC延遲提交成功通知已啟動: {submit_success}")
                 
                 # submit_success 已經包含發送結果，通知函數內部已記錄日誌
@@ -5143,7 +5331,7 @@ def btc_place_order(quantity, action, side, order_type='MARKET', is_auto=False):
                 'is_manual': not is_auto,
                 'error': error_message
             }
-            fail_success = send_btc_order_submit_notification_delayed(error_record, False, 1)
+            fail_success = send_btc_order_submit_notification_delayed(error_record, False, 3)
             
             # fail_success 已經包含發送結果，通知函數內部已記錄日誌
             
@@ -5962,6 +6150,8 @@ def get_btc_positions():
         })
 
 # ========================== BTC風險管理功能 ==========================
+# 風險警報發送頻率控制
+last_risk_alert_time = {}
 
 def calculate_btc_risk_metrics():
     """計算BTC風險指標"""
@@ -6119,7 +6309,7 @@ def check_btc_risk_alerts():
             alerts.append({
                 'type': 'LARGE_LOSS',
                 'level': 'WARNING',
-                'message': f'⚠️ 大額未實現虧損\n虧損金額: {total_unrealized_pnl:.2f} USDT\n請考慮風險控制措施'
+                'message': f'虧損金額: {total_unrealized_pnl:.2f} USDT\n請考慮風險控制措施'
             })
         
         # 發送警報通知
@@ -6133,9 +6323,25 @@ def check_btc_risk_alerts():
         logger.error(f"BTC風險檢查失敗: {e}")
 
 def send_btc_risk_alert(alert):
-    """發送BTC風險警報通知"""
+    """發送BTC風險警報通知（1小時發送一次）"""
     try:
-        current_time = datetime.now().strftime('%Y/%m/%d %H:%M:%S')
+        global last_risk_alert_time
+        
+        current_time = datetime.now()
+        alert_type = alert['type']
+        
+        # 檢查是否在1小時內已發送過相同類型的警報
+        if alert_type in last_risk_alert_time:
+            time_diff = current_time - last_risk_alert_time[alert_type]
+            if time_diff.total_seconds() < 3600:  # 3600秒 = 1小時
+                minutes_remaining = int((3600 - time_diff.total_seconds()) / 60)
+                logger.info(f"BTC風險警報 {alert_type} 跳過發送，還需等待 {minutes_remaining} 分鐘")
+                return False
+        
+        # 更新發送時間
+        last_risk_alert_time[alert_type] = current_time
+        
+        current_time_str = current_time.strftime('%Y/%m/%d')
         
         # 構建警報訊息
         level_emoji = {
@@ -6146,7 +6352,7 @@ def send_btc_risk_alert(alert):
         
         emoji = level_emoji.get(alert['level'], '⚠️')
         
-        message = f"{emoji} BTC風險管理警報 ({current_time})\n\n{alert['message']}\n\n請及時處理以避免損失！"
+        message = f"{emoji} BTC風險管理警報 ({current_time_str})\n{alert['message']}\n請及時處理以避免損失！"
         
         # 發送Telegram通知
         send_btc_telegram_message(message)
@@ -6464,7 +6670,7 @@ def start_btc_connection_monitor():
                     for _ in range(btc_connection_check_interval):
                         if btc_shutdown_flag.is_set():
                             return
-                        time.sleep(1)
+                        time.sleep(5)
                     continue
                 
                 # 檢查連接狀態
@@ -6489,7 +6695,7 @@ def start_btc_connection_monitor():
                 for _ in range(btc_connection_check_interval):
                     if btc_shutdown_flag.is_set():
                         return
-                    time.sleep(1)
+                    time.sleep(5)
                 
             except Exception as e:
                 logger.error(f"BTC連接監控異常: {e}")
@@ -6497,7 +6703,7 @@ def start_btc_connection_monitor():
                 for _ in range(btc_connection_check_interval):
                     if btc_shutdown_flag.is_set():
                         return
-                    time.sleep(1)
+                    time.sleep(5)
     
     # 創建並啟動監控線程
     monitor_thread = threading.Thread(target=connection_monitor, name="BTC連接監控線程", daemon=True)
@@ -6638,7 +6844,7 @@ BTC訂單監控WebSocket工作線程"""
                 for _ in range(30):
                     if btc_shutdown_flag.is_set():
                         return
-                    time.sleep(1)
+                    time.sleep(5)
                 continue
             
             ws_url = f"wss://fstream.binance.com/ws/{user_data_stream_key}"
@@ -6659,6 +6865,8 @@ BTC訂單監控WebSocket工作線程"""
                         side = order_data['S']  # BUY/SELL
                         order_type = order_data['o']  # MARKET/LIMIT
                         quantity = order_data['q']  # 訂單數量
+                        price = float(order_data.get('p', 0))  # 訂單價格
+                        stop_price = float(order_data.get('sp', 0))  # 止盈止損觸發價格
                         
                         logger.info(f"收到訂單更新: {order_id}, 狀態: {status}, 交易對: {symbol}")
                         
@@ -6673,7 +6881,7 @@ BTC訂單監控WebSocket工作線程"""
                         
                         # 檢查是否為系統已知訂單
                         is_system_order = (str(order_id) in pending_orders or 
-                                         int(order_id) in btc_active_trades)
+                                         str(order_id) in btc_active_trades)
                         
                         # 智能判斷：根據訂單特徵推斷是否為WEBHOOK
                         if is_system_order:
@@ -6687,9 +6895,49 @@ BTC訂單監控WebSocket工作線程"""
                                 order_source = '手動'  # 限價單通常是手動操作
                                 logger.info(f"根據WebSocket訂單特徵推斷為手動交易: 限價單")
                         
-                        logger.info(f"訂單{order_id}判斷: pending_orders中有={str(order_id) in pending_orders}, active_trades中有={int(order_id) in btc_active_trades}, 判定為={order_source}")
+                        logger.info(f"訂單{order_id}判斷: pending_orders中有={str(order_id) in pending_orders}, active_trades中有={str(order_id) in btc_active_trades}, 判定為={order_source}")
                         logger.info(f"當前pending_orders內容: {list(pending_orders.keys())}")
                         logger.info(f"當前btc_active_trades內容: {list(btc_active_trades.keys())}")
+                        
+                        # 🔥 新增：檢測訂單修改
+                        if order_id in btc_order_history:
+                            old_order = btc_order_history[order_id]
+                            current_price = float(price)
+                            current_quantity = float(quantity)
+                            
+                            # 檢查是否有價格或數量變更
+                            price_changed = abs(old_order.get('price', 0) - current_price) > 0.01
+                            quantity_changed = abs(old_order.get('quantity', 0) - current_quantity) > 0.001
+                            
+                            if (price_changed or quantity_changed) and status not in ['FILLED', 'CANCELED', 'REJECTED', 'EXPIRED']:
+                                logger.info(f"🔄 檢測到訂單修改: {order_id}, 價格變更: {price_changed}, 數量變更: {quantity_changed}")
+                                
+                                # 準備修改通知數據
+                                old_data = {
+                                    'price': old_order.get('price', 0),
+                                    'quantity': old_order.get('quantity', 0)
+                                }
+                                new_data = {
+                                    'price': current_price,
+                                    'quantity': current_quantity
+                                }
+                                
+                                # 發送修改通知
+                                try:
+                                    send_btc_order_modify_notification(order_data, old_data, new_data)
+                                    logger.info(f"✅ 訂單修改通知已發送: {order_id}")
+                                except Exception as e:
+                                    logger.error(f"❌ 發送訂單修改通知失敗: {e}")
+                        
+                        # 更新訂單歷史記錄
+                        btc_order_history[order_id] = {
+                            'price': float(price),
+                            'quantity': float(quantity),
+                            'status': status,
+                            'side': side,
+                            'order_type': order_type,
+                            'symbol': symbol
+                        }
                         
                         if status == 'NEW':
                             # 新訂單提交 - 處理非系統已知訂單（包含手動和智能判斷的WEBHOOK）
@@ -6711,10 +6959,16 @@ BTC訂單監控WebSocket工作線程"""
                                 # 非系統已知訂單成交 - 發送成交通知（包含手動和智能判斷的WEBHOOK）
                                 if symbol == 'BTCUSDT':
                                     handle_manual_binance_fill(order_data)
+                            
+                            # 清理成交訂單的歷史記錄
+                            if order_id in btc_order_history:
+                                del btc_order_history[order_id]
+                                logger.info(f"🧹 已清理成交訂單歷史記錄: {order_id}")
                                     
                         elif status in ['CANCELED', 'REJECTED', 'EXPIRED']:
                             # 🔥 新增：處理訂單失效狀態 - 掛單沒成功，發送提交失敗通知
-                            logger.info(f"WebSocket收到訂單失效: {order_id}, 狀態: {status}")
+                            logger.info(f"🔴 WebSocket收到訂單失效: {order_id}, 狀態: {status}")
+                            logger.info(f"🔍 WebSocket訂單數據: {order_data}")
                             
                             try:
                                 # 構建失敗通知記錄
@@ -6729,11 +6983,12 @@ BTC訂單監控WebSocket工作線程"""
                                 reduce_only = order_data.get('R', False)
                                 action_type = '平倉' if reduce_only else '開倉'
                                 
-                                # 構建失敗記錄
+                                # 構建失敗記錄，包含價格和止盈止損信息
                                 error_record = {
                                     'symbol': symbol,
                                     'side': side,
                                     'quantity': quantity,
+                                    'price': price,  # 添加價格信息
                                     'order_id': order_id,
                                     'order_type': '市價單' if order_type == 'MARKET' else '限價單',
                                     'source': order_source,
@@ -6743,13 +6998,24 @@ BTC訂單監控WebSocket工作線程"""
                                     'error': failure_reason
                                 }
                                 
-                                # 發送延遲提交失敗通知（1秒延遲）
-                                fail_success = send_btc_order_submit_notification_delayed(error_record, False, 1)
-                                logger.info(f"📱 WebSocket訂單失效提交失敗通知已發送: {order_id} - {failure_reason}")
+                                # 🔥 新增：如果有止盈止損價格，加入記錄中
+                                if stop_price > 0:
+                                    error_record['stopPrice'] = stop_price
+                                    logger.info(f"🎯 WebSocket失效訂單包含止盈止損價格: {stop_price}")
+                                
+                                # 發送延遲提交失敗通知（5秒延遲）
+                                logger.info(f"🚀 WebSocket準備發送BTC失效通知: {error_record}")
+                                fail_success = send_btc_order_submit_notification_delayed(error_record, False, 3)
+                                logger.info(f"📱 WebSocket訂單失效提交失敗通知已發送: {order_id} - {failure_reason}, 結果: {fail_success}")
                                 
                                 # 如果是系統訂單，從pending_orders中移除
                                 if is_system_order and str(order_id) in pending_orders:
                                     remove_pending_order(order_id)
+                                
+                                # 清理訂單歷史記錄
+                                if order_id in btc_order_history:
+                                    del btc_order_history[order_id]
+                                    logger.info(f"🧹 已清理訂單歷史記錄: {order_id}")
                                     
                             except Exception as e:
                                 logger.error(f"WebSocket處理訂單失效通知失敗: {e}")
@@ -6787,7 +7053,7 @@ BTC訂單監控WebSocket工作線程"""
             for _ in range(30):
                 if btc_shutdown_flag.is_set():
                     return
-                time.sleep(1)
+                time.sleep(5)
 
 def check_pending_orders_fallback():
     """輪詢檢查待成交訂單（備用方案）"""
@@ -6904,7 +7170,7 @@ def handle_manual_binance_order(order_data, is_success=True):
         
         # 記錄後端日誌，包含智能判斷結果
         price_display = "市價" if order_type == 'MARKET' else f"{float(order_data.get('p', 0)):,.2f}"
-        commit_log = f"{order_source}{parsed_action}：{direction}｜{formatted_quantity} BTC｜{price_display}｜{order_type_text}"
+        commit_log = f"{order_source}{parsed_action}：{direction}｜{formatted_quantity} BTC｜{price_display} USDT｜{order_type_text}"
         logger.info(f"({order_source}委託) {commit_log}")
         
         # 構建trade_record用於通知
@@ -6924,7 +7190,7 @@ def handle_manual_binance_order(order_data, is_success=True):
         # 發送延遲提交成功通知（1秒延遲）
         order_source_display = "手動" if is_manual else "WEBHOOK"
         logger.info(f"準備發送{order_source_display}幣安訂單延遲提交通知: {trade_record}")
-        submit_success = send_btc_order_submit_notification_delayed(trade_record, is_success, 1)
+        submit_success = send_btc_order_submit_notification_delayed(trade_record, is_success, 3)
         logger.info(f"{order_source_display}幣安訂單延遲提交通知已啟動: {submit_success}")
         
     except Exception as e:
@@ -7028,10 +7294,10 @@ def handle_manual_binance_fill(order_data):
                 logger.error(f"延遲處理{order_source}訂單成交事件失敗: {e}")
         
         # 使用線程延遲5秒處理成交日誌和通知
-        timer = threading.Timer(5.0, delayed_fill_processing)
+        timer = threading.Timer(1.0, delayed_fill_processing)
         timer.start()
         
-        logger.info(f"{order_source}幣安訂單成交處理已安排5秒延遲執行，訂單ID: {order_id}")
+        logger.info(f"{order_source}幣安訂單成交處理已安排1秒延遲執行，訂單ID: {order_id}")
         
     except Exception as e:
         logger.error(f"處理幣安訂單成交失敗: {e}")
@@ -7063,7 +7329,7 @@ def start_order_fallback_monitor():
             for _ in range(10):
                 if btc_shutdown_flag.is_set():
                     return
-                time.sleep(1)
+                time.sleep(5)
     
     fallback_thread = threading.Thread(
         target=monitor_worker,

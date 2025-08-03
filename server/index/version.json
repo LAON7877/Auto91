@@ -1,21 +1,21 @@
 {
-  "version": "1.4.17",
-  "build": "202507311800",
-  "release_date": "2025-07-31",
-  "description": "v1.4.17 - BTC交易系統WEBHOOK智能識別與XLSX報表完整性修復",
+  "version": "1.4.18",
+  "build": "202508030900",
+  "release_date": "2025-08-03",
+  "description": "v1.4.18 - TX/BTC報表時間統一與持倉狀態數據源優化",
   "github_repo": "LAON7877/Auto91",
   "update_url": "https://api.github.com/repos/LAON7877/Auto91/releases/latest",
   "changelog": [
-    "BTC系統實現智能市價單特徵判斷，徹底解決WEBHOOK自動交易被誤判為手動交易的問題",
-    "修復WebSocket回調中訂單映射丟失時的預設判斷邏輯，統一TX和BTC系統的智能檢測機制",
-    "交易統計計算邏輯重構，改用JSON配對系統數據源，正確區分開倉/平倉交易統計",
-    "修復買入總量/賣出總量/平均買價/賣出價計算錯誤，確保與XLSX報表數據完全一致",
-    "XLSX報表數據完整性修復，解決第三區塊(交易明細)和第四區塊(持倉狀態)顯示N/A的問題",
-    "實現雙重數據源機制：JSON配對系統優先，API歷史查找回退，確保數據完整性",
-    "新增get_btc_position_from_json函數，從JSON配對系統獲取持倉開倉信息",
-    "為所有BTC交易記錄添加source字段，準確記錄交易來源(manual/webhook)",
-    "實現容差匹配機制(價格0.5%，數量10%)，提高價格波動環境下的匹配成功率",
-    "新增時間戳解析異常處理，支持多種ISO時間格式，避免數據解析失敗"
+    "統一TX/BTC報表生成時間：23:58統計、23:58:30日報、23:59月報，避免跨日期問題",
+    "修復BTC風險管理警報時間格式，僅顯示年月日，移除時分秒顯示",
+    "重構TX持倉狀態數據源，優先使用JSON配對系統，確保與交易明細數據一致性",
+    "創建缺失的交易記錄目錄結構：traderecordsTX、tradedataTX、traderecordsBTC、tradedataBTC",
+    "增強TX合約交割日期顯示，避免'日期錯誤'顯示，改用智能備用日期機制",
+    "實現TX持倉狀態多層備用數據源：JSON配對→今日記錄→API解析→選用合約→智能推斷",
+    "新增get_position_opening_info函數，從30天內JSON配對系統中精確匹配持倉開倉記錄",
+    "優化開倉記錄匹配邏輯，支持合約類型、持倉狀態、數量的智能匹配算法",
+    "改進error handling，將'日期錯誤'替換為當月第三個星期三作為合理備用",
+    "確保XLSX報表持倉狀態與交易明細使用相同數據源，解決數據不一致問題"
   ],
   "required_files": [
     "index/main.py",
@@ -39,14 +39,16 @@
     "config/tx.env",
     "config/btc.env"
   ],
-  "updated_at": "2025-07-31T18:00:00.000000",
+  "updated_at": "2025-08-03T09:00:00.000000",
   "updated_files": [
+    "index/main.py",
     "index/btcmain.py",
-    "index/trade_pairing_BTC.py",
     "index/version.json",
     "backup/INDEX.md",
     "backup/CHANGELOG.md",
     "backup/README.md",
-    "backup/API_REFERENCE.md"
+    "backup/API_REFERENCE.md",
+    "backup/DEPLOYMENT.md",
+    "backup/TROUBLESHOOTING.md"
   ]
 }
