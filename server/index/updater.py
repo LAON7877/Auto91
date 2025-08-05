@@ -291,10 +291,7 @@ class EnhancedAutoUpdater:
                 
                 if success:
                     logger.info("✅ 依賴同步完成")
-                    self._send_telegram_notification(
-                        "📦 系統依賴已同步更新", 
-                        "info"
-                    )
+                    logger.info("📦 系統依賴已同步更新")
                 else:
                     logger.warning("⚠️ 部分依賴同步失敗")
                     self._send_telegram_notification(
@@ -343,11 +340,8 @@ class EnhancedAutoUpdater:
         try:
             logger.info("正在優雅重啟應用程序...")
             
-            # 發送重啟通知
-            self._send_telegram_notification(
-                "🔄 系統更新完成，正在重新啟動...", 
-                "update"
-            )
+            # 系統更新完成（不發送TG通知）
+            logger.info("🔄 系統更新完成，正在重新啟動...")
             
             # 獲取當前Python執行環境
             python_exec = sys.executable
@@ -414,10 +408,7 @@ class EnhancedAutoUpdater:
                 return False
             
             # 6. 下載更新
-            self._send_telegram_notification(
-                "📥 正在下載更新文件...", 
-                "update"
-            )
+            logger.info("📥 正在下載更新文件...")
             
             if not self.download_update(release_info):
                 self._send_telegram_notification(
@@ -427,16 +418,10 @@ class EnhancedAutoUpdater:
                 return False
             
             # 7. 驗證文件完整性
-            self._send_telegram_notification(
-                "🔒 正在驗證文件完整性...", 
-                "update"
-            )
+            logger.info("🔒 正在驗證文件完整性...")
             
             # 8. 應用更新
-            self._send_telegram_notification(
-                "⚙️ 正在應用更新...", 
-                "update"
-            )
+            logger.info("⚙️ 正在應用更新...")
             
             if not self.apply_update(release_info):
                 self._send_telegram_notification(
@@ -456,11 +441,8 @@ class EnhancedAutoUpdater:
             # 11. 清理臨時文件
             self._cleanup_temp()
             
-            # 12. 發送更新成功通知
-            self._send_telegram_notification(
-                f"✅ 更新完成！\n版本: {release_info.get('version', '未知')}\n正在重新啟動系統...", 
-                "success"
-            )
+            # 12. 更新成功完成
+            logger.info(f"✅ 更新完成！版本: {release_info.get('version', '未知')}，正在重新啟動系統...")
             
             # 13. 優雅重啟（延遲3秒）
             threading.Timer(3.0, self._restart_application).start()

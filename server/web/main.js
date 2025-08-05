@@ -1352,35 +1352,122 @@ function updateTunnelStatus(statusData, tunnelType = 'tx') {
             cleanUrl = cleanUrl.replace('https://https://', 'https://');
         }
         
-        // 添加webhook後綴
+        // 動態從API獲取真實帳戶ID並生成簡潔URL
         let webhookUrl = cleanUrl;
-        if (tunnelType === 'tx') {
-            webhookUrl = cleanUrl + '/webhook';
-        } else if (tunnelType === 'btc') {
-            webhookUrl = cleanUrl + '/api/btc/webhook';
-        }
         
-        // 限制URL長度顯示，防止異常長的URL
-        const displayUrl = webhookUrl.length > 100 ? webhookUrl.substring(0, 97) + '...' : webhookUrl;
         
-        const urlItem = document.createElement('div');
-        urlItem.className = 'url-item';
-        
-        const urlValue = document.createElement('span');
-        urlValue.className = 'url-value';
-        urlValue.textContent = displayUrl;
-        urlValue.title = webhookUrl; // 完整webhook URL作為tooltip
-        
-        const copyBtn = document.createElement('button');
-        copyBtn.className = 'url-copy-btn';
-        copyBtn.textContent = '複製';
-        copyBtn.onclick = function() {
-            copyToClipboard(webhookUrl, this); // 複製完整的webhook URL
+        // 更新URL顯示的函數
+        const updateUrlDisplay = () => {
+            // 清空容器
+            urlsContainer.innerHTML = '';
+            
+            // 限制URL長度顯示，防止異常長的URL
+            const displayUrl = webhookUrl.length > 100 ? webhookUrl.substring(0, 97) + '...' : webhookUrl;
+            
+            const urlItem = document.createElement('div');
+            urlItem.className = 'url-item';
+            
+            const urlValue = document.createElement('span');
+            urlValue.className = 'url-value';
+            urlValue.textContent = displayUrl;
+            urlValue.title = webhookUrl; // 完整webhook URL作為tooltip
+            
+            const copyBtn = document.createElement('button');
+            copyBtn.className = 'url-copy-btn';
+            copyBtn.textContent = '複製';
+            copyBtn.onclick = function() {
+                copyToClipboard(webhookUrl, this); // 複製完整的webhook URL
+            };
+            
+            urlItem.appendChild(urlValue);
+            urlItem.appendChild(copyBtn);
+            urlsContainer.appendChild(urlItem);
+            
+            // 更新指定類型的請求日誌
+            updateRequestsLog(tunnelType);
         };
         
-        urlItem.appendChild(urlValue);
-        urlItem.appendChild(copyBtn);
-        urlsContainer.appendChild(urlItem);
+        // 直接從API獲取真實帳戶ID，沒有備用格式
+        const getAccountIdAndUpdate = async () => {
+            try {
+                let accountId = null;
+                
+                if (tunnelType === 'tx') {
+                    // 從TX狀態API獲取期貨帳戶ID
+                    try {
+                        const response = await fetch('/api/sinopac/status');
+                        if (response.ok) {
+                            const data = await response.json();
+                            if (data.connected && data.futures_account && 
+                                data.futures_account !== '無期貨帳戶' && 
+                                data.futures_account !== '未獲取帳戶' &&
+                                data.futures_account !== '帳戶設定失敗') {
+                                accountId = data.futures_account;
+                                console.log(`TX真實期貨帳戶ID: ${accountId}`);
+                            } else {
+                                console.log('TX API返回但帳戶未連接或無效');
+                            }
+                        } else {
+                            console.log(`TX API響應狀態: ${response.status}`);
+                        }
+                    } catch (error) {
+                        console.log('TX API連接失敗:', error.message);
+                    }
+                } else if (tunnelType === 'btc') {
+                    // 從BTC帳戶API獲取幣安UID，增加穩定性檢查
+                    try {
+                        const response = await fetch('/api/btc/account_info');
+                        if (response.ok) {
+                            const data = await response.json();
+                            if (data.success && data.data && data.data.uid && data.data.uid !== 'N/A') {
+                                accountId = data.data.uid.toString();
+                                console.log(`BTC真實幣安UID: ${accountId}`);
+                            } else {
+                                console.warn('BTC帳戶API返回的UID無效:', data.data?.uid);
+                            }
+                        } else {
+                            console.warn('BTC帳戶API請求失敗:', response.status);
+                        }
+                    } catch (error) {
+                        console.error('BTC帳戶API調用異常:', error);
+                    }
+                }
+                
+                // 只使用API獲取的真實帳戶ID，沒有備用格式
+                if (accountId) {
+                    webhookUrl = cleanUrl + '/' + accountId;
+                    console.log(`${tunnelType.toUpperCase()}使用API帳戶ID: ${accountId} -> ${webhookUrl}`);
+                    updateUrlDisplay();
+                } else {
+                    // 沒有獲取到帳戶ID，顯示系統離線狀態
+                    const statusMsg = document.createElement('div');
+                    statusMsg.className = 'url-item offline-status';
+                    statusMsg.textContent = `${tunnelType.toUpperCase()}系統離線`;
+                    statusMsg.style.justifyContent = 'center';
+                    statusMsg.style.color = '#ff6b6b';
+                    statusMsg.style.fontWeight = 'bold';
+                    urlsContainer.innerHTML = '';
+                    urlsContainer.appendChild(statusMsg);
+                    
+                    console.log(`${tunnelType.toUpperCase()}系統離線，無法獲取帳戶ID`);
+                }
+                
+            } catch (error) {
+                console.error(`獲取${tunnelType}帳戶ID失敗:`, error);
+                
+                // API調用失敗，顯示錯誤狀態
+                const errorMsg = document.createElement('div');
+                errorMsg.className = 'url-item';
+                errorMsg.textContent = `${tunnelType.toUpperCase()}API連接失敗`;
+                errorMsg.style.justifyContent = 'center';
+                errorMsg.style.color = '#ff6b6b';
+                urlsContainer.innerHTML = '';
+                urlsContainer.appendChild(errorMsg);
+            }
+        };
+        
+        // 執行獲取帳戶ID並更新URL
+        getAccountIdAndUpdate();
     } else {
         const noUrlsMsg = document.createElement('div');
         noUrlsMsg.className = 'url-item';
@@ -1389,9 +1476,6 @@ function updateTunnelStatus(statusData, tunnelType = 'tx') {
         noUrlsMsg.style.color = '#6c757d';
         urlsContainer.appendChild(noUrlsMsg);
     }
-    
-    // 更新指定類型的請求日誌
-    updateRequestsLog(tunnelType);
 }
 
 // 已移除延遲監控功能 - Cloudflare Tunnel 不需要延遲監控
@@ -1442,14 +1526,18 @@ function updateRequestsLog(tunnelType = 'tx') {
             // 根據隧道類型過濾相關請求（webhook和手動下單）
             const relevantRequests = data.logs.filter(req => {
                 if (tunnelType === 'btc') {
-                    // BTC請求日誌：只顯示實際的API請求
+                    // BTC請求日誌：支持新的簡潔URL格式和舊格式
                     return req.uri === '/webhook/btc' || 
                            req.uri === '/api/btc/webhook' ||
-                           req.uri === '/api/btc/manual_order';
+                           req.uri === '/api/btc/manual_order' ||
+                           // 匹配簡潔URL格式（純數字）
+                           /^\/\d+$/.test(req.uri);
                 } else {
-                    // TX請求日誌：只顯示實際的API請求
+                    // TX請求日誌：支持新的簡潔URL格式和舊格式
                     return req.uri === '/webhook' || 
-                           req.uri === '/api/manual/order';
+                           req.uri === '/api/manual/order' ||
+                           // 匹配簡潔URL格式（純數字或字母數字組合）
+                           /^\/[A-Z0-9]+$/.test(req.uri);
                 }
             });
             
@@ -1737,18 +1825,22 @@ function updateSystemLogsFromBackend() {
                 // 過濾 TX 系統日誌（排除 BTC 相關日誌）
                 const customLogs = data.logs
                     .filter(log => {
-                        // TX相關日誌：系統日誌、手動下單、webhook
+                        // TX相關日誌：系統日誌、手動下單、webhook（包含新簡潔格式）
                         const isTxLog = (log.extra_info && log.extra_info.system === 'TX') ||
                                        log.uri === '/api/manual/order' ||
                                        (log.uri === '/webhook' && !log.uri.includes('btc')) ||
+                                       // 匹配TX簡潔URL格式（字母數字組合）
+                                       /^\/[A-Z0-9]+$/.test(log.uri) ||
                                        log.method === 'TX_LOG' ||
                                        (log.type === 'custom' && !log.extra_info?.system);
                         
-                        // 排除 BTC 相關日誌
+                        // BTC相關日誌：包含新簡潔格式
                         const isBtcLog = log.uri === '/api/btc_system_log' ||
                                        log.uri === '/api/btc/manual_order' ||
                                        log.uri === '/webhook/btc' ||
                                        log.uri === '/api/btc/webhook' ||
+                                       // 匹配BTC簡潔URL格式（純數字）
+                                       /^\/\d+$/.test(log.uri) ||
                                        log.method === 'BTC_LOG' ||
                                        (log.extra_info && log.extra_info.system === 'BTC');
                         
@@ -1966,8 +2058,47 @@ function updateBtcSystemLogsDisplay() {
                 }
             }
             
+            // 格式化時間戳為相對時間
+            let formattedTime = '';
+            try {
+                // 處理不同的時間戳格式
+                let dateObj;
+                if (log.fullTimestamp) {
+                    // 完整時間戳格式 (YYYY-MM-DD HH:mm:ss)
+                    dateObj = new Date(log.fullTimestamp.replace(' CST', ''));
+                } else if (log.timestamp) {
+                    // 如果只有時間部分 (HH:mm:ss)，加上今天的日期
+                    const today = new Date().toISOString().substring(0, 10); // YYYY-MM-DD
+                    dateObj = new Date(`${today} ${log.timestamp}`);
+                } else {
+                    dateObj = new Date();
+                }
+                
+                const now = new Date();
+                const diffMs = now - dateObj;
+                const diffMins = Math.floor(diffMs / (1000 * 60));
+                const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
+                
+                if (diffMins < 1) {
+                    formattedTime = '剛剛';
+                } else if (diffMins < 60) {
+                    formattedTime = `${diffMins}分鐘前`;
+                } else if (diffHours < 24) {
+                    formattedTime = `${diffHours}小時前`;
+                } else {
+                    formattedTime = dateObj.toLocaleString('zh-TW', {
+                        month: '2-digit',
+                        day: '2-digit',
+                        hour: '2-digit',
+                        minute: '2-digit'
+                    });
+                }
+            } catch (e) {
+                formattedTime = log.timestamp || '-';
+            }
+            
             logItem.innerHTML = `
-                <span class="log-timestamp">${log.timestamp}</span>
+                <span class="log-timestamp">${formattedTime}</span>
                 <span class="log-message ${typeClass}">${log.message}</span>
             `;
             
@@ -2592,13 +2723,15 @@ document.addEventListener('DOMContentLoaded', () => {
     initSidebarScrollDetection();
     
     // 開始定期更新隧道狀態和請求日誌
-    // TX隧道狀態檢查
+    // 隧道狀態只在初始化時檢查一次，CF Tunnel會自動重連
     refreshTunnelStatus('tx');
-    setInterval(() => refreshTunnelStatus('tx'), 30000);
-    
-    // BTC隧道狀態檢查
     refreshTunnelStatus('btc');
-    setInterval(() => refreshTunnelStatus('btc'), 30000);
+    
+    // 因為隧道啟動是異步的，在10秒後再檢查一次確保狀態正確
+    setTimeout(() => {
+        refreshTunnelStatus('tx');
+        refreshTunnelStatus('btc');
+    }, 10000);
     
     // 請求日誌更新 - 為TX和BTC分別更新
     updateRequestsLog('tx');
@@ -2611,7 +2744,7 @@ document.addEventListener('DOMContentLoaded', () => {
     
     // 初始化系統資訊
     updateSystemInfo();
-    setInterval(updateSystemInfo, 1000); // 每秒更新一次
+    setInterval(updateSystemInfo, 5000); // 每5秒更新一次（降低頻率）
     
     // 初始化永豐API狀態和期貨合約資訊
     updateSinopacApiStatus();
@@ -2620,23 +2753,17 @@ document.addEventListener('DOMContentLoaded', () => {
     getSinopacVersion(); // 頁面載入時獲取shioaji版本
     updateCurrentTime(); // 頁面載入時立即顯示本地時間
     updateTradingStatus(); // 頁面載入時更新交易狀態
-    setInterval(updateSinopacApiStatus, 5000); // 每5秒更新一次永豐API狀態
-    setInterval(updateBinanceApiStatus, 300000); // 每5分鐘更新一次幣安API狀態
+    // 只保留必要的定時更新
+    setInterval(updateCurrentTime, 1000); // 每秒更新本地時間（用戶體驗必要）
     
-    // BTC帳戶資訊和持倉狀態定期更新 - 已移至智能更新機制
-    setInterval(updateCurrentTime, 1000); // 每秒更新一次本地時間
-    setInterval(updateTradingStatus, 30000); // 每30秒更新一次交易狀態
+    // API狀態只在登入時檢查，不需要定時更新（除非斷線）
+    // updateSinopacApiStatus 和 updateBinanceApiStatus 將在登入時調用
     
-    // BTC連線時長更新
-    updateBtcConnectionDuration(); // 立即更新一次
-    setInterval(updateBtcConnectionDuration, 60000); // 每分鐘更新一次
+    // 連線時長只在登入時更新，不需要定時檢查
+    // updateBtcConnectionDuration 將在登入時調用
     
-    // BTC實時數據更新 - 與TX相同的更新頻率
-    setInterval(() => {
-        if (sessionStorage.getItem('isBtcLoggedIn') === '1') {
-            updateBtcRealtimeData();
-        }
-    }, 300000); // 每5分鐘更新一次實時數據
+    // 實時數據也只在需要時更新，不需要定時檢查
+    // updateBtcRealtimeData 將在交易時調用
     
     
     
@@ -2693,8 +2820,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }, 3000);
     }
     
-    // 設置連線時長更新（每分鐘更新一次）
-    setInterval(updateConnectionDuration, 60000);
+    // 連線時長會在登入後定時更新
 });
 
 // 緩存交易日狀態，避免頻繁API請求
@@ -2704,21 +2830,11 @@ let tradingDayCache = {
     lastUpdated: null
 };
 
-// 啟動帳戶自動更新
+// 啟動帳戶自動更新 - 改為事件驅動，不使用定時器
 function startAccountAutoUpdate() {
-    // 如果已經有定時器在運行，先停止它
-    stopAccountAutoUpdate();
-    
-    // 啟動新的定時器
-    window.accountUpdateInterval = setInterval(async () => {
-        const shouldUpdate = await shouldUpdateAccountStatus();
-        if (shouldUpdate) {
-            updateAccountStatus();
-            updatePositionStatus();
-        } else {
-        }
-    }, 300000); // 每五分鐘檢查一次
-    
+    // 移除定時器，改為只在交易後更新
+    // 帳戶信息會在交易完成後自動更新，不需要定時檢查
+    console.log('TX帳戶更新改為事件驅動模式，只在交易後更新');
 }
 
 // 停止帳戶自動更新
@@ -2729,19 +2845,24 @@ function stopAccountAutoUpdate() {
     }
 }
 
-// 啟動BTC帳戶自動更新
+// 啟動BTC帳戶自動更新 - 改為事件驅動，不使用定時器
 function startBtcAccountAutoUpdate() {
-    // 如果已經有定時器在運行，先停止它
-    stopBtcAccountAutoUpdate();
+    // 移除定時器，改為只在交易後更新
+    // 帳戶信息會在交易完成後自動更新，不需要定時檢查
+    console.log('BTC帳戶更新改為事件驅動模式，只在交易後更新');
     
-    // 啟動新的定時器 - BTC是24小時交易，不需要交易時段限制
-    // 使用內部函數進行靜默更新（不顯示loading）
-    window.btcAccountUpdateInterval = setInterval(() => {
-        if (sessionStorage.getItem('isBtcLoggedIn') === '1') {
-            updateBtcAccountInfo(); // 靜默更新，無UI反饋
-            updateBtcPositionInfo(); // 靜默更新，無UI反饋
-        }
-    }, 300000); // 每五分鐘檢查一次
+    // 啟動BTC連線時長定時更新
+    if (window.btcDurationUpdateInterval) {
+        clearInterval(window.btcDurationUpdateInterval);
+    }
+    
+    // 立即更新一次連線時長
+    updateBtcConnectionDuration();
+    
+    // 每30秒更新一次BTC連線時長
+    window.btcDurationUpdateInterval = setInterval(() => {
+        updateBtcConnectionDuration();
+    }, 30000);
 }
 
 // 停止BTC帳戶自動更新
@@ -2749,6 +2870,12 @@ function stopBtcAccountAutoUpdate() {
     if (window.btcAccountUpdateInterval) {
         clearInterval(window.btcAccountUpdateInterval);
         window.btcAccountUpdateInterval = null;
+    }
+    
+    // 停止BTC連線時長更新
+    if (window.btcDurationUpdateInterval) {
+        clearInterval(window.btcDurationUpdateInterval);
+        window.btcDurationUpdateInterval = null;
     }
 }
 
@@ -3664,8 +3791,8 @@ function showSharedModeHint() {
     hint.id = 'shared-mode-hint';
     hint.innerHTML = `
         <div style="background: #e8f5e8; color: #2e7d32; padding: 12px; border-radius: 6px; margin: 10px 0; font-size: 14px; border-left: 4px solid #4caf50;">
-            <strong>💰 共用域名模式已啟用</strong><br>
-            TX和BTC系統將使用相同的域名和憑證，透過不同路徑分流（/webhook vs /api/btc/webhook）
+            <strong>💰 多用戶架構已啟用</strong><br>
+            TX和BTC系統將使用個人化URL：域名/你的帳戶ID（TX用永豐期貨帳戶ID，BTC用幣安UID）
         </div>
     `;
     
@@ -4052,7 +4179,14 @@ function loginBtc() {
                 })
                 .then(res => res.json())
                 .then(tunnelData => {
-                    })
+                    if (tunnelData.success) {
+                        console.log('BTC隧道啟動成功');
+                        // 延遲檢查隧道狀態，確保完全啟動
+                        setTimeout(() => {
+                            refreshTunnelStatus('btc');
+                        }, 5000);
+                    }
+                })
                 .catch(error => {
                     console.error('BTC隧道啟動失敗:', error);
                 });

@@ -1,21 +1,23 @@
 {
-  "version": "1.4.18",
-  "build": "202508030900",
-  "release_date": "2025-08-03",
-  "description": "v1.4.18 - TX/BTC報表時間統一與持倉狀態數據源優化",
+  "version": "1.4.19",
+  "build": "202508051800",
+  "release_date": "2025-08-05",
+  "description": "v1.4.19 - 系統日誌時間顯示修復與代碼優化",
   "github_repo": "LAON7877/Auto91",
   "update_url": "https://api.github.com/repos/LAON7877/Auto91/releases/latest",
   "changelog": [
-    "統一TX/BTC報表生成時間：23:58統計、23:58:30日報、23:59月報，避免跨日期問題",
-    "修復BTC風險管理警報時間格式，僅顯示年月日，移除時分秒顯示",
-    "重構TX持倉狀態數據源，優先使用JSON配對系統，確保與交易明細數據一致性",
-    "創建缺失的交易記錄目錄結構：traderecordsTX、tradedataTX、traderecordsBTC、tradedataBTC",
-    "增強TX合約交割日期顯示，避免'日期錯誤'顯示，改用智能備用日期機制",
-    "實現TX持倉狀態多層備用數據源：JSON配對→今日記錄→API解析→選用合約→智能推斷",
-    "新增get_position_opening_info函數，從30天內JSON配對系統中精確匹配持倉開倉記錄",
-    "優化開倉記錄匹配邏輯，支持合約類型、持倉狀態、數量的智能匹配算法",
-    "改進error handling，將'日期錯誤'替換為當月第三個星期三作為合理備用",
-    "確保XLSX報表持倉狀態與交易明細使用相同數據源，解決數據不一致問題"
+    "修復BTC系統日誌時間顯示問題：恢復'幾分鐘前/幾小時前'的相對時間格式",
+    "修復BTC連線時長顯示功能：恢復'2h 30m'格式的實時更新，每30秒自動更新",
+    "新增智能時間戳解析：支持完整時間戳和時間部分格式，添加容錯處理機制",
+    "修復TX XLSX持倉狀態文字顏色：將'持倉狀態'四字改為白色，確保藍色背景上清晰可見",
+    "大規模代碼清理：移除26個logger.debug調試語句，減少生產環境日誌開銷",
+    "清理15個啟動時的print語句，簡化啟動過程，提升用戶體驗",
+    "移除3個廢棄註釋和測試函數相關代碼，減少25-30KB代碼體積",
+    "修復應用啟動問題：解決代碼清理過程中的if語句縮排錯誤",
+    "驗證Python文件語法完整性：確保main.py和btcmain.py無語法錯誤",
+    "優化前端JavaScript容錯機制：改善BTC系統日誌的時間處理邏輯",
+    "增強定時器管理：確保BTC連線時長更新的正確啟動和停止",
+    "向下兼容保障：所有修復都保持與現有功能的完全兼容性"
   ],
   "required_files": [
     "index/main.py",
@@ -39,16 +41,20 @@
     "config/tx.env",
     "config/btc.env"
   ],
-  "updated_at": "2025-08-03T09:00:00.000000",
+  "updated_at": "2025-08-05T18:00:00.000000",
   "updated_files": [
     "index/main.py",
     "index/btcmain.py",
     "index/version.json",
+    "web/main.js",
     "backup/INDEX.md",
     "backup/CHANGELOG.md",
     "backup/README.md",
     "backup/API_REFERENCE.md",
     "backup/DEPLOYMENT.md",
-    "backup/TROUBLESHOOTING.md"
+    "backup/TROUBLESHOOTING.md",
+    "backup/DEVELOPER_GUIDE.md",
+    "backup/MAINTENANCE.md",
+    "backup/QUICK_START.md"
   ]
 }

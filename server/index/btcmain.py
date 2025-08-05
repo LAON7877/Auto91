@@ -347,6 +347,7 @@ class BinanceClient:
         result = self._make_request('GET', '/fapi/v1/income', params)
         return result
     
+    
     def get_server_time(self):
         """獲取服務器時間"""
         return self._make_request('GET', '/fapi/v1/time', signed=False)
@@ -967,10 +968,6 @@ def calculate_btc_quantity(signal_data, account_balance):
         min_qty = 0.001
         quantity = max(min_qty, round(quantity, 3))
         
-        logger.debug(f"BTC數量計算詳細: 理論數量={order_value/current_price:.6f}, 最小單位={min_qty}, 最終數量={quantity}")
-        
-        logger.debug(f"BTC倉位計算: 可用餘額={available_balance}, 槓桿={leverage}, 風險={position_size_pct*100}%, 價格={current_price}, 數量={quantity}")
-        
         return quantity
         
     except Exception as e:
@@ -1368,7 +1365,6 @@ def process_btc_entry_signal(signal_data, parsed_action=None):
         
         # 標準化方向（BTC期貨邏輯）
         side = 'BUY' if action == 'LONG' else 'SELL'
-        logger.debug(f"[BTC] 信號解析: {action} -> side={side}")
         
         # 獲取帳戶餘額計算數量
         if not binance_client:
@@ -2773,10 +2769,16 @@ def btc_webhook():
                     key, value = line.split('=', 1)
                     btc_env[key] = value
         
-        logger.debug(f"BTC Webhook收到數據: {data}")
         
         # 處理策略信號並執行交易
         action = data.get('action', '').upper()
+        
+        # 增強TradingView JSON格式支援
+        if not action:
+            # 嘗試從direction字段獲取（TradingView常用格式）
+            direction = data.get('direction', '')
+            if direction:
+                action = direction.upper()
         
         # 支援中文訊號解析（TradingView策略常用）
         action_mapping = {
@@ -2786,7 +2788,7 @@ def btc_webhook():
             # 數字訊號支援
             'signal: +1': 'LONG', 'signal: -1': 'SHORT', 'signal: 0': 'CLOSE',
             '+1': 'LONG', '-1': 'SHORT', '0': 'CLOSE',
-            # 中文訊號支援
+            # 中文訊號支援（包含你的Pine策略格式）
             '開多': 'LONG', '開多單': 'LONG', '多單': 'LONG', 'BTC 開多單': 'LONG',
             '開空': 'SHORT', '開空單': 'SHORT', '空單': 'SHORT', 'BTC 開空單': 'SHORT',
             '平多': 'CLOSE_LONG', '平多單': 'CLOSE_LONG', '多單平倉': 'CLOSE_LONG', '平多倉': 'CLOSE_LONG', 'BTC 平多單': 'CLOSE_LONG',
@@ -2794,16 +2796,34 @@ def btc_webhook():
             '平倉': 'CLOSE', '全平': 'CLOSE'
         }
         
-        # 嘗試解析action，支援完整訊息解析
+        # 嘗試解析action，支援完整訊息解析和TradingView格式
         original_action = action
-        raw_message = str(data.get('message', '')) + str(data.get('action', ''))
         
-        logger.debug(f"[BTC] 原始 action: '{original_action}', 訊息內容: '{raw_message}'")
+        # 支援多種訊息來源
+        message_sources = [
+            data.get('message', ''),
+            data.get('action', ''),
+            data.get('direction', ''),
+            str(data.get('signal', '')),  # 數字訊號支援
+            str(data.get('type', ''))     # type字段支援
+        ]
+        
+        raw_message = ' '.join(filter(None, map(str, message_sources)))
+        
+        
+        # 特殊處理signal數字格式（你的Pine策略使用的格式）
+        signal_value = data.get('signal', '')
+        if signal_value and not action:
+            if signal_value in ['+1', '1', 1]:
+                action = 'LONG'
+            elif signal_value in ['-1', -1]:
+                action = 'SHORT' 
+            elif signal_value in ['0', 0]:
+                action = '平倉'
         
         # 檢查原始訊號
         if action in action_mapping:
             action = action_mapping[action]
-            logger.debug(f"[BTC] 直接匹配到動作: '{original_action}' -> '{action}'")
         else:
             # 從完整訊息中解析中文訊號
             action_found = False
@@ -2811,7 +2831,6 @@ def btc_webhook():
                 if key in raw_message:
                     action = value
                     action_found = True
-                    logger.debug(f"[BTC] 從訊息解析到動作: '{key}' -> '{action}'")
                     break
             
             if not action_found:
@@ -2825,11 +2844,9 @@ def btc_webhook():
         
         if action in ['LONG', 'SHORT']:
             # 進場信號
-            logger.debug(f"[BTC] 識別為進場信號: {original_action} -> {action}")
             order_result = process_btc_entry_signal(data, action)
         elif action in ['CLOSE', 'CLOSE_LONG', 'CLOSE_SHORT']:
             # 出場信號
-            logger.debug(f"[BTC] 識別為出場信號: {original_action} -> {action}")
             order_result = process_btc_exit_signal(data, action)
         else:
             # 動作類型未知，不執行交易
@@ -4240,7 +4257,6 @@ def get_btc_position_from_json(is_long, position_size, entry_price):
                         record_price = float(open_record.get('price', 0))
                         record_quantity = float(open_record.get('remaining_quantity', 0))
                         
-                        logger.debug(f"  檢查記錄: {record_action} {record_quantity}BTC @ ${record_price} 狀態:{record_status}")
                         
                         action_match = record_action == target_action
                         status_match = record_status == 'open'
@@ -5593,21 +5609,17 @@ def get_period_start_balance(timestamp):
                 total_income_change += income_value
                 income_count += 1
         
-        logger.debug(f"期初餘額計算 - 當前餘額: {current_balance:.8f}, 期間收入變化: {total_income_change:.8f} ({income_count}筆記錄)")
         
         # 期初餘額 = 當前餘額 - 期間收入變化
         period_start_balance = current_balance - total_income_change
         
-        logger.debug(f"計算出的期初餘額: {period_start_balance:.8f}")
         
         # 確保期初餘額為正數且合理
         if period_start_balance <= 0 or abs(period_start_balance) < 0.01:
-            logger.debug(f"期初餘額異常 ({period_start_balance:.8f})，使用當前餘額作為備用方案")
             return current_balance
         
         # 如果期初餘額和當前餘額差距過大（超過90%），可能計算有誤
         if abs(period_start_balance - current_balance) / current_balance > 0.9:
-            logger.debug(f"期初餘額與當前餘額差距過大 ({period_start_balance:.8f} vs {current_balance:.8f})，使用當前餘額")
             return current_balance
         
         return period_start_balance
@@ -5698,13 +5710,10 @@ def get_period_total_pnl_binance_formula(days=1):
         percentage = 0.0
         try:
             period_start_balance = get_period_start_balance(start_time)
-            logger.debug(f"{days}天期初餘額計算結果: {period_start_balance:.8f}")
             
             if period_start_balance > 0:
                 percentage = (total_pnl / period_start_balance) * 100
-                logger.debug(f"{days}天盈虧百分比: {total_pnl:.8f} / {period_start_balance:.8f} * 100 = {percentage:.2f}%")
             else:
-                logger.debug(f"{days}天期初餘額為零或負數，無法計算百分比")
                 # 使用當前餘額作為備用方案
                 try:
                     account_info = binance_client.get_account_info()
@@ -5712,13 +5721,11 @@ def get_period_total_pnl_binance_formula(days=1):
                         current_balance = float(account_info.get('totalWalletBalance', 0))
                         if current_balance > 0:
                             percentage = (total_pnl / current_balance) * 100
-                            logger.debug(f"{days}天使用當前餘額計算百分比: {total_pnl:.8f} / {current_balance:.8f} * 100 = {percentage:.2f}%")
                 except:
                     pass
         except Exception as e:
             logger.error(f"百分比計算失敗: {e}")
         
-        logger.debug(f"{days}天盈虧計算 - 已實現: {realized_pnl:.8f}, 未實現: {unrealized_pnl:.8f}, 資金費用: {funding_fee:.8f}, 總計: {total_pnl:.8f}, 百分比: {percentage:.2f}%")
         
         return total_pnl, percentage
         
@@ -5882,7 +5889,6 @@ def get_period_pnl(days=1):
         traceback.print_exc()
         return 0.0, 0.0
 
-# 已移除無用的測試函數 test_income_api()
 
 def get_binance_stats_pnl():
     """從幣安統計接口獲取準確的盈虧數據"""
@@ -6005,6 +6011,11 @@ def get_btc_account_info():
                 'error': '無法獲取帳戶資訊'
             })
         
+        # 嘗試從多個API端點獲取用戶ID
+        user_uid = None
+        
+        # 直接從配置文件獲取用戶ID，因為Binance API無法提供用戶ID
+        logger.info("直接從配置文件獲取Binance用戶ID")
         
         # 基礎數據 - 從assets數組中提取USDT數據
         usdt_asset = None
@@ -6052,7 +6063,24 @@ def get_btc_account_info():
         
         # totalMaintMargin: 維持保證金
         
+        # 獲取用戶UID（從配置文件獲取，因為Binance API不返回UID）
+        try:
+            import os
+            from dotenv import dotenv_values
+            btc_config_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'config', 'btc.env')
+            if os.path.exists(btc_config_path):
+                btc_config = dotenv_values(btc_config_path)
+                user_uid = btc_config.get('BINANCE_USER_ID', 'N/A')
+                logger.info(f"從配置文件獲取BTC用戶UID: {user_uid}")
+            else:
+                user_uid = 'N/A'
+                logger.warning("BTC配置文件不存在")
+        except Exception as e:
+            logger.error(f"獲取BTC用戶UID失敗: {e}")
+            user_uid = 'N/A'
+
         organized_account = OrderedDict([
+            ('uid', user_uid),                                                       # 幣安用戶UID
             ('walletBalance', f"{wallet_balance:.8f}"),                              # 錢包餘額
             ('availableBalance', f"{available_balance:.8f}"),                        # 可用餘額  
             ('marginBalance', f"{margin_balance:.8f}"),                              # 保證金餘額
@@ -6073,7 +6101,8 @@ def get_btc_account_info():
         
         return jsonify({
             'success': True,
-            'account': organized_account
+            'data': organized_account,  # 前端需要從data字段獲取
+            'account': organized_account  # 保持向後兼容
         })
         
     except Exception as e:
@@ -6317,7 +6346,6 @@ def check_btc_risk_alerts():
             send_btc_risk_alert(alert)
             
         # 記錄風險檢查日誌
-        logger.debug(f"BTC風險檢查完成 - 風險等級: {risk_level}, 保證金比率: {margin_ratio:.1f}%, 槓桿使用率: {leverage_usage:.1f}%")
         
     except Exception as e:
         logger.error(f"BTC風險檢查失敗: {e}")
@@ -6445,7 +6473,6 @@ def start_btc_websocket():
         # 構建WebSocket URL - 幣安期貨WebSocket
         ws_url = f"wss://fstream.binance.com/ws/{trading_pair}@ticker"
         
-        logger.debug(f"啟動BTC WebSocket連接: {ws_url}")
         
         # 創建WebSocket連接
         btc_ws = websocket.WebSocketApp(
@@ -6513,7 +6540,6 @@ def on_btc_ws_close(ws, close_status_code, close_msg):
     """WebSocket連接關閉"""
     global btc_ws_connected
     btc_ws_connected = False
-    logger.debug(f"BTC WebSocket連接關閉: {close_status_code} - {close_msg}")
     
     # 只有在未設置停止標誌時才嘗試重新連接
     if not btc_shutdown_flag.is_set():
@@ -7064,7 +7090,6 @@ def check_pending_orders_fallback():
             return
             
         if not pending_orders:
-            logger.debug("沒有待成交訂單需要檢查")
             return
             
         logger.info(f"檢查 {len(pending_orders)} 個待成交訂單...")

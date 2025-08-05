@@ -15,29 +15,23 @@ def check_and_install_dependencies():
     import subprocess
     import sys
     
-    print("=" * 60)
-    print("Auto91 啟動前依賴檢查")
-    print("=" * 60)
     
     try:
         # 首先嘗試導入依賴管理器
         from dependencymanager import auto_install_dependencies_on_startup
-        print("✅ 依賴管理器已就緒")
         
         # 執行自動依賴安裝檢查
         dependency_success = auto_install_dependencies_on_startup()
         
         if dependency_success:
-            print("✅ 依賴檢查完成，所有套件已就緒")
+            pass
         else:
-            print("❌ 依賴安裝失敗，部分功能可能無法使用")
-            print("請檢查網絡連接或稍後手動安裝")
+            pass
         
         return dependency_success
         
     except ImportError as e:
         if "dependencymanager" in str(e):
-            print("⚠️ 依賴管理器模組不存在，正在執行基本依賴檢查...")
             
             # 從 requirements.txt 讀取依賴列表
             requirements_file = os.path.join(os.path.dirname(__file__), 'requirements.txt')
@@ -119,28 +113,22 @@ def check_and_install_dependencies():
                     missing_optional.append(package)
             
             if missing_optional:
-                print(f"⚠️ 可選依賴未安裝: {', '.join(missing_optional)}")
-                print("  這些套件不是必需的，但可提供額外功能")
-                print("  如需安裝，請執行: pip install " + " ".join(missing_optional))
+                pass
             
             return True
         else:
             raise e
             
     except Exception as e:
-        print(f"⚠️ 依賴檢查過程中發生錯誤: {e}")
-        print("系統將嘗試繼續啟動...")
         return False
     
     finally:
-        print("=" * 60)
+        pass
 
 # 執行依賴檢查
 try:
     dependency_check_success = check_and_install_dependencies()
 except Exception as e:
-    print(f"⚠️ 依賴檢查完全失敗: {e}")
-    print("系統將嘗試繼續啟動...")
     dependency_check_success = False
 
 # ========== 正常的程式導入開始 ==========
@@ -835,6 +823,39 @@ def get_cloudflare_tunnel_status_as_ngrok():
 
 
 
+
+def _verify_user_id(user_id, system_type):
+    """驗證用戶ID是否與API獲取的真實帳戶ID匹配
+    
+    Args:
+        user_id: 請求URL中的用戶ID
+        system_type: 系統類型 ('tx' 或 'btc')
+    
+    Returns:
+        bool: 驗證是否成功
+    """
+    try:
+        # 獲取真實的用戶帳戶ID
+        real_user_ids = _get_user_ids()
+        real_user_id = real_user_ids.get(system_type)
+        
+        if not real_user_id:
+            logger.warning(f"{system_type.upper()}用戶ID不存在或API未連接")
+            return False
+        
+        # 比較請求的用戶ID是否與真實帳戶ID匹配
+        is_valid = str(user_id) == str(real_user_id)
+        
+        if is_valid:
+            logger.info(f"{system_type.upper()}用戶ID驗證成功: {user_id}")
+        else:
+            logger.warning(f"{system_type.upper()}用戶ID驗證失敗: 請求ID={user_id}, 真實ID={real_user_id}")
+        
+        return is_valid
+        
+    except Exception as e:
+        logger.error(f"用戶ID驗證失敗: {e}")
+        return False
 
 def add_custom_request_log(method, uri, status, extra_info=None):
     """添加自定義請求記錄"""
@@ -1650,9 +1671,45 @@ def api_get_persistent_url(tunnel_type):
         'tunnel_type': tunnel_type
     })
 
+def _get_user_ids():
+    """從API獲取真實的用戶帳戶ID"""
+    try:
+        user_ids = {}
+        
+        # 獲取TX用戶真實期貨帳戶ID
+        try:
+            global sinopac_connected, sinopac_account
+            if sinopac_connected and sinopac_account and sinopac_account not in ["無期貨帳戶", "帳戶設定失敗"]:
+                user_ids['tx'] = str(sinopac_account)
+                logger.info(f"TX用戶ID (永豐期貨帳戶): {sinopac_account}")
+        except Exception as e:
+            logger.warning(f"獲取TX帳戶ID失敗: {e}")
+        
+        # 獲取BTC用戶ID（從API和配置文件雙重獲取）
+        try:
+            if BTC_MODULE_AVAILABLE:
+                # 方法1：從配置文件獲取BINANCE_USER_ID（用戶填入的UID）
+                btc_config_path = os.path.join(CONFIG_DIR, 'btc.env')
+                if os.path.exists(btc_config_path):
+                    import dotenv
+                    btc_config = dotenv.dotenv_values(btc_config_path)
+                    if btc_config.get('BINANCE_USER_ID'):
+                        user_ids['btc'] = str(btc_config.get('BINANCE_USER_ID'))
+                        logger.info(f"BTC用戶ID (配置文件): {btc_config.get('BINANCE_USER_ID')}")
+                        
+                        # 可選：驗證這個UID是否與當前登入的帳戶匹配
+                        # 這裡可以添加API驗證邏輯
+        except Exception as e:
+            logger.warning(f"獲取BTC帳戶ID失敗: {e}")
+        
+        return user_ids
+    except Exception as e:
+        logger.error(f"獲取用戶ID失敗: {e}")
+        return {}
+
 @app.route('/api/tunnels/webhook_urls', methods=['GET'])
 def api_get_webhook_urls():
-    """獲取所有隧道的Webhook URL（TradingView等外部服務專用）"""
+    """獲取所有隧道的Webhook URL（TradingView等外部服務專用）- 支持多用戶架構"""
     global tunnel_manager
     
     if not tunnel_manager:
@@ -1662,17 +1719,29 @@ def api_get_webhook_urls():
         })
     
     webhook_urls = {}
+    user_ids = _get_user_ids()  # 獲取用戶ID
     
     try:
         for tunnel_type in ['tx', 'btc']:
+            user_id = user_ids.get(tunnel_type)
+            
             # 優先獲取固定URL
             if hasattr(tunnel_manager, 'get_persistent_url'):
                 persistent_url = tunnel_manager.get_persistent_url(tunnel_type)
                 if persistent_url:
+                    # 只提供真實用戶ID的URL格式，不提供備用格式
+                    if user_id:
+                        webhook_url = f"{persistent_url}/{user_id}"
+                        api_webhook_url = f"{persistent_url}/{user_id}"  # 統一為簡潔格式
+                    else:
+                        # 沒有用戶ID時不提供URL
+                        continue
+                    
                     webhook_urls[tunnel_type] = {
                         'base_url': persistent_url,
-                        'webhook_url': f"{persistent_url}/webhook/{tunnel_type}",
-                        'api_webhook_url': f"{persistent_url}/api/{tunnel_type}/webhook",
+                        'webhook_url': webhook_url,
+                        'api_webhook_url': api_webhook_url,
+                        'user_id': user_id,
                         'url_fixed': True,
                         'status': 'persistent'
                     }
@@ -1684,10 +1753,19 @@ def api_get_webhook_urls():
                 status = tunnel.get_status()
                 base_url = status.get('url')
                 if base_url:
+                    # 只提供真實用戶ID的URL格式，不提供備用格式
+                    if user_id:
+                        webhook_url = f"{base_url}/{user_id}"
+                        api_webhook_url = f"{base_url}/{user_id}"  # 統一為簡潔格式
+                    else:
+                        # 沒有用戶ID時跳過此tunnel
+                        continue
+                    
                     webhook_urls[tunnel_type] = {
                         'base_url': base_url,
-                        'webhook_url': f"{base_url}/webhook/{tunnel_type}",
-                        'api_webhook_url': f"{base_url}/api/{tunnel_type}/webhook",
+                        'webhook_url': webhook_url,
+                        'api_webhook_url': api_webhook_url,
+                        'user_id': user_id,
                         'url_fixed': False,
                         'status': tunnel.status,
                         'warning': '臨時URL，重連後會改變'
@@ -1738,7 +1816,7 @@ def api_get_tunnel_url_history():
 
 @app.route('/api/tunnels/current_urls', methods=['GET'])
 def api_get_current_tunnel_urls():
-    """獲取當前所有隧道URL（TX和BTC分別顯示）"""
+    """獲取當前所有隧道URL（TX和BTC分別顯示）- 支持多用戶架構"""
     global tunnel_manager
     
     if not tunnel_manager:
@@ -1749,17 +1827,28 @@ def api_get_current_tunnel_urls():
     
     try:
         current_urls = {}
+        user_ids = _get_user_ids()  # 獲取用戶ID
         
         for tunnel_type in ['tx', 'btc']:
+            user_id = user_ids.get(tunnel_type)
             tunnel = tunnel_manager.get_tunnel(tunnel_type)
             if tunnel:
                 status = tunnel.get_status()
                 if status.get('url'):
+                    # 只提供真實用戶ID的URL格式，不提供備用格式
+                    if user_id:
+                        webhook_url = f"{status['url']}/{user_id}"
+                        api_webhook_url = f"{status['url']}/{user_id}"  # 統一為簡潔格式
+                    else:
+                        # 沒有用戶ID時跳過
+                        continue
+                    
                     current_urls[tunnel_type] = {
                         'url': status['url'],
                         'status': status['status'],
-                        'webhook_url': f"{status['url']}/webhook/{tunnel_type}",
-                        'api_webhook_url': f"{status['url']}/api/{tunnel_type}/webhook",
+                        'webhook_url': webhook_url,
+                        'api_webhook_url': api_webhook_url,
+                        'user_id': user_id,
                         'port': status.get('port', 5000),
                         'last_updated': time.time()
                     }
@@ -2177,8 +2266,17 @@ def api_load_btc_env():
     else:
         return jsonify({'success': False, 'message': 'BTC模組不可用'})
 
-@app.route('/api/btc/webhook', methods=['POST'])
-def api_btc_webhook():
+@app.route('/api/btc/webhook', methods=['POST'], defaults={'user_id': None})
+@app.route('/api/btc/webhook/<user_id>', methods=['POST'])
+def api_btc_webhook(user_id=None):
+    # 用戶驗證
+    if user_id and not _verify_user_id(user_id, 'btc'):
+        logger.warning(f"BTC Webhook 用戶驗證失敗: user_id={user_id}")
+        return jsonify({'success': False, 'message': '用戶驗證失敗'}), 403
+    
+    if user_id:
+        logger.info(f"BTC Webhook 收到來自用戶 {user_id} 的請求")
+    
     # 解析請求數據
     try:
         raw = request.data.decode('utf-8')
@@ -2222,11 +2320,35 @@ def api_btc_webhook():
         logger.warning("BTC模組不可用")
         return jsonify({'success': False, 'message': 'BTC模組不可用'})
 
-# 為BTC添加 /webhook 路由支持（通過URL參數區分）
-@app.route('/webhook', methods=['POST'], defaults={'system': 'auto'})
-@app.route('/webhook/<system>', methods=['POST'])
-def unified_webhook(system):
-    """統一webhook處理器，支持TX和BTC系統"""
+# 統一webhook處理器 - 支持多用戶架構（簡潔路由）
+@app.route('/webhook', methods=['POST'], defaults={'system': 'auto', 'user_id': None})
+@app.route('/webhook/<system>', methods=['POST'], defaults={'user_id': None})
+@app.route('/webhook/<user_id>', methods=['POST'], defaults={'system': 'auto'})
+@app.route('/<user_id>', methods=['POST'])
+def unified_webhook(system=None, user_id=None):
+    """統一webhook處理器，支持TX和BTC系統，支持多用戶架構（簡潔路由）"""
+    
+    # 當直接使用 /<user_id> 路由時，需要判斷是TX還是BTC用戶
+    if user_id and not system:
+        # 自動判斷用戶類型
+        user_ids = _get_user_ids()
+        if user_id == user_ids.get('tx'):
+            system = 'tx'
+        elif user_id == user_ids.get('btc'):
+            system = 'btc'
+        else:
+            logger.warning(f"未知用戶ID: {user_id}")
+            return jsonify({'success': False, 'message': '未知用戶ID'}), 404
+    
+    # 用戶驗證（如果提供了user_id）
+    if user_id:
+        # 根據系統類型進行驗證
+        system_type = 'btc' if system == 'btc' else 'tx'
+        if not _verify_user_id(user_id, system_type):
+            logger.warning(f"{system_type.upper()} Webhook 用戶驗證失敗: user_id={user_id}")
+            return jsonify({'success': False, 'message': '用戶驗證失敗'}), 403
+        
+        logger.info(f"{system_type.upper()} Webhook 收到來自用戶 {user_id} 的請求")
     
     # 如果明確指定BTC系統
     if system == 'btc':
@@ -2244,6 +2366,9 @@ def unified_webhook(system):
         
         if BTC_MODULE_AVAILABLE:
             try:
+                # 設置 Flask request 的數據，讓 btcmain.py 能正確處理
+                from flask import g
+                g.webhook_data = data
                 result = btcmain.btc_webhook()
                 # 檢查返回結果判斷是否成功
                 if hasattr(result, 'get_json'):
@@ -2295,6 +2420,9 @@ def unified_webhook(system):
                 
                 if BTC_MODULE_AVAILABLE:
                     try:
+                        # 設置 Flask request 的數據，讓 btcmain.py 能正確處理
+                        from flask import g
+                        g.webhook_data = data
                         result = btcmain.btc_webhook()
                         # 檢查返回結果判斷是否成功
                         if hasattr(result, 'get_json'):
@@ -6871,10 +6999,11 @@ def generate_trading_report(trades, account_data, position_data, cover_trades, t
         current_row = current_row + (len(cover_trades) if cover_trades else 0) + 3
         ws.merge_cells(f'A{current_row}:K{current_row}')
         ws[f'A{current_row}'] = '持倉狀態'
-        # 應用藍色背景到A:K
+        # 應用藍色背景和白色字體到A:K
         for col in range(1, 12):  # A到K
             cell = ws[f'{get_column_letter(col)}{current_row}']
             cell.fill = blue_fill
+            cell.font = white_font
             cell.alignment = center_alignment
         
         # 持倉狀態標題
@@ -9760,7 +9889,6 @@ def load_historical_open_trades(close_trades):
     
     return historical_opens
 
-# 已移除：舊的API開倉價格查詢函數，改用JSON配對系統
 
 def get_delivery_date_for_contract(contract_code):
     """獲取合約交割日期"""
@@ -9792,7 +9920,6 @@ def get_delivery_date_for_contract(contract_code):
     except:
         return ''
 
-# 已移除：舊的API開倉價格查詢函數，改用JSON配對系統
 
 def analyze_simple_trading_stats(trades=None, filter_date=None):
     """使用JSON配對系統分析交易統計
