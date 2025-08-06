@@ -2266,64 +2266,8 @@ def api_load_btc_env():
     else:
         return jsonify({'success': False, 'message': 'BTC模組不可用'})
 
-@app.route('/api/btc/webhook', methods=['POST'], defaults={'user_id': None})
-@app.route('/api/btc/webhook/<user_id>', methods=['POST'])
-def api_btc_webhook(user_id=None):
-    # 用戶驗證
-    if user_id and not _verify_user_id(user_id, 'btc'):
-        logger.warning(f"BTC Webhook 用戶驗證失敗: user_id={user_id}")
-        return jsonify({'success': False, 'message': '用戶驗證失敗'}), 403
-    
-    if user_id:
-        logger.info(f"BTC Webhook 收到來自用戶 {user_id} 的請求")
-    
-    # 解析請求數據
-    try:
-        raw = request.data.decode('utf-8')
-        
-        # 嘗試解析 JSON 格式
-        try:
-            data = json.loads(raw) if raw.strip() else {}
-            action = data.get('action', '未知')
-            logger.info(f"BTC Webhook JSON 解析成功: {data}")
-        except json.JSONDecodeError:
-            # 如果不是 JSON，處理為純文字訊息
-            data = {'message': raw.strip()}
-            action = '純文字訊號'
-        
-    except Exception as e:
-        logger.error(f"BTC Webhook 處理失敗: {e}, 原始數據: {raw}")
-        return jsonify({'success': False, 'message': '請求數據處理失敗'}), 400
-    
-    if BTC_MODULE_AVAILABLE:
-        try:
-            # 設置 Flask request 的數據，讓 btcmain.py 能正確處理
-            from flask import g
-            g.webhook_data = data
-            result = btcmain.btc_webhook()
-            # 檢查返回結果判斷是否成功
-            if hasattr(result, 'get_json'):
-                response_data = result.get_json()
-                success = response_data.get('success', True) if response_data else True
-            else:
-                success = True  # 預設成功
-            
-            # BTC webhook處理完成，交易日誌已在btcmain.py中記錄
-            # 請求日誌會通過正常機制記錄，不需要額外記錄
-            return result
-        except Exception as e:
-            # 記錄異常到後端日誌，請求日誌通過正常機制記錄
-            logger.error(f"BTC API webhook處理異常: {str(e)}")
-            return jsonify({'success': False, 'message': f'處理失敗: {str(e)}'})
-    else:
-        # BTC模組不可用，後端日誌記錄
-        logger.warning("BTC模組不可用")
-        return jsonify({'success': False, 'message': 'BTC模組不可用'})
 
-# 統一webhook處理器 - 支持多用戶架構（簡潔路由）
-@app.route('/webhook', methods=['POST'], defaults={'system': 'auto', 'user_id': None})
-@app.route('/webhook/<system>', methods=['POST'], defaults={'user_id': None})
-@app.route('/webhook/<user_id>', methods=['POST'], defaults={'system': 'auto'})
+# 統一webhook處理器 - 動態帳戶ID路由
 @app.route('/<user_id>', methods=['POST'])
 def unified_webhook(system=None, user_id=None):
     """統一webhook處理器，支持TX和BTC系統，支持多用戶架構（簡潔路由）"""
@@ -3301,40 +3245,51 @@ def api_tunnel_settings():
                 origin_cert = data.get('origin_cert', '').strip()
                 private_key = data.get('private_key', '').strip()
                 
+                # 檢查現有檔案
+                token_file = os.path.join(config_dir, 'token.txt')
+                cert_file = os.path.join(config_dir, 'cert.pem')
+                key_file = os.path.join(config_dir, 'key.pem')
+                
                 # 保存到統一的共用檔案（只在有內容時保存，避免覆蓋現有檔案）
                 logger.info(f"檢查保存資料 - Token長度: {len(token) if token else 0}, Cert長度: {len(origin_cert) if origin_cert else 0}, Key長度: {len(private_key) if private_key else 0}")
                 
                 if token and len(token) > 50:  # 確保token有實際內容且不是placeholder
-                    token_file = os.path.join(config_dir, 'token.txt')
                     with open(token_file, 'w', encoding='utf-8') as f:
                         f.write(token)
                     logger.info(f"Token已保存到統一檔案，長度: {len(token)}")
-                else:
-                    logger.warning(f"Token未保存 - 長度不足或為空: {len(token) if token else 0}")
+                elif not token:
+                    logger.info("Token為空，不覆蓋現有檔案")
                 
                 if origin_cert and len(origin_cert) > 50:  # 確保憑證有實際內容
-                    cert_file = os.path.join(config_dir, 'cert.pem')
                     with open(cert_file, 'w', encoding='utf-8') as f:
                         f.write(origin_cert)
                     logger.info(f"Origin Certificate已保存到統一檔案，長度: {len(origin_cert)}")
-                else:
-                    logger.warning(f"Origin Certificate未保存 - 長度不足或為空: {len(origin_cert) if origin_cert else 0}")
+                elif not origin_cert:
+                    logger.info("Certificate為空，不覆蓋現有檔案")
                 
                 if private_key and len(private_key) > 50:  # 確保私鑰有實際內容
-                    key_file = os.path.join(config_dir, 'key.pem')
                     with open(key_file, 'w', encoding='utf-8') as f:
                         f.write(private_key)
                     os.chmod(key_file, 0o600)  # 設置私鑰權限
                     logger.info("Private Key已保存到統一檔案")
+                elif not private_key:
+                    logger.info("Private Key為空，不覆蓋現有檔案")
                 
                 # 標記為共用域名模式
                 settings['shared_domain'] = True
                 
+                # 檢查檔案實際存在狀態，而不是基於傳入資料
+                has_token_file = os.path.exists(token_file) and os.path.getsize(token_file) > 0
+                has_cert_file = os.path.exists(cert_file) and os.path.getsize(cert_file) > 0
+                has_key_file = os.path.exists(key_file) and os.path.getsize(key_file) > 0
+                
                 settings.update({
-                    'has_cert': bool(origin_cert),
-                    'has_key': bool(private_key),
-                    'has_token': bool(token)
+                    'has_cert': has_cert_file,
+                    'has_key': has_key_file,
+                    'has_token': has_token_file
                 })
+                
+                logger.info(f"檔案檢查結果 - Token: {has_token_file}, Cert: {has_cert_file}, Key: {has_key_file}")
             else:
                 # 臨時域名模式 - 明確標記為沒有這些資源
                 settings.update({
