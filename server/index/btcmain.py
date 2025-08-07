@@ -45,6 +45,7 @@ btc_shutdown_flag = threading.Event()  # BTC模組停止標誌
 btc_active_threads = []  # BTC模組活動線程列表
 btc_active_trades = {}  # 活躍交易記錄
 processed_orders = set()  # 記錄已處理的訂單，避免重複處理
+btc_processed_signals = set()  # 記錄已處理的BTC webhook訊號，避免重複處理
 
 # 訂單監控相關
 pending_orders = {}  # 存儲待成交訂單 {order_id: order_info}
@@ -2538,10 +2539,23 @@ def send_btc_trading_statistics():
             except Exception as e:
                 logger.error(f"獲取Binance交易數據失敗: {e}")
         
-        # 3. 獲取帳戶狀態數據
-        startup_data = get_btc_startup_notification_data()
-        if startup_data and startup_data.get('success') and startup_data.get('data'):
-            account_data = startup_data['data']
+        # 3. 獲取帳戶狀態數據 - 直接使用前端API數據源
+        frontend_data = get_btc_account_info()
+        if frontend_data and frontend_data.json.get('success') and frontend_data.json.get('account'):
+            account_data = frontend_data.json['account']
+            # 轉換數據格式以保持向後兼容
+            account_data = {
+                'totalWalletBalance': float(account_data.get('walletBalance', '0').replace(',', '')),
+                'availableBalance': float(account_data.get('availableBalance', '0').replace(',', '')),
+                'totalMarginBalance': float(account_data.get('marginBalance', '0').replace(',', '')),
+                'totalUnrealizedProfit': float(account_data.get('unrealizedProfit', '0').replace(',', '')),
+                'feePaid': float(account_data.get('todayCommission', '0').replace(',', '')),
+                'marginRatio': float(account_data.get('marginRatio', '0%').replace('%', '')),
+                'leverageUsage': float(account_data.get('leverageUsage', '0%').replace('%', '')),
+                'todayPnl': float(account_data.get('todayPnl', '0').replace(',', '')),
+                'week7Pnl': float(account_data.get('weekPnl', '0').replace(',', '')),
+                'month30Pnl': float(account_data.get('monthPnl', '0').replace(',', ''))
+            }
         else:
             account_data = {
                 'totalWalletBalance': 0.0,
@@ -2742,6 +2756,8 @@ def is_last_day_of_month():
 
 def btc_webhook():
     """BTC交易策略接收端點"""
+    global btc_processed_signals
+    
     try:
         # 優先使用預處理的數據，避免 Content-Type 問題
         from flask import g
@@ -2753,6 +2769,29 @@ def btc_webhook():
         # 驗證請求格式
         if not data:
             return jsonify({'success': False, 'message': '無效的請求格式'})
+        
+        # 檢查訊號去重
+        signal_id = data.get('tradeId') or data.get('id') or f"{data.get('action', '')}-{data.get('symbol', 'BTCUSDT')}-{int(datetime.now().timestamp())}"
+        
+        # 生成更可靠的訊號ID（使用內容哈希）
+        import hashlib
+        signal_content = f"{data.get('action', '')}-{data.get('message', '')}-{data.get('signal', '')}"
+        signal_hash = hashlib.md5(signal_content.encode()).hexdigest()[:8]
+        
+        # 檢查最近5分鐘內是否有相同訊號
+        current_time = datetime.now()
+        signal_key = f"{signal_hash}-{current_time.strftime('%Y%m%d%H%M')[:12]}"  # 精確到分鐘
+        
+        if signal_key in btc_processed_signals:
+            logger.info(f"BTC重複訊號已跳過: {signal_key}")
+            return jsonify({'success': True, 'message': '重複訊號已跳過'})
+        
+        # 記錄訊號
+        btc_processed_signals.add(signal_key)
+        
+        # 清理超過1小時的舊訊號記錄
+        current_hour = current_time.strftime('%Y%m%d%H')
+        btc_processed_signals = {s for s in btc_processed_signals if s.split('-')[-1][:10] >= current_hour}
         
         # 記錄接收到的策略信號
         timestamp = datetime.now().isoformat()
@@ -3206,8 +3245,12 @@ def send_btc_daily_startup_notification():
                     if maintenance_margin > 0:
                         account_data['marginRatio'] = (account_data['totalMarginBalance'] / maintenance_margin) * 100
                     
-                    if account_data['totalWalletBalance'] > 0:
-                        account_data['leverageUsage'] = (initial_margin / account_data['totalWalletBalance']) * 100
+                    # 修正：使用與前端一致的槓桿使用率計算邏輯
+                    available_balance = float(account_info.get('availableBalance', 0))
+                    unrealized_pnl = float(account_info.get('totalUnrealizedProfit', 0))
+                    calculated_wallet_balance = available_balance + initial_margin + unrealized_pnl
+                    if calculated_wallet_balance > 0:
+                        account_data['leverageUsage'] = (initial_margin / calculated_wallet_balance) * 100
                 
                 # 獲取盈虧數據
                 today = datetime.now()
@@ -3464,7 +3507,9 @@ def get_btc_startup_notification_data():
         # 3. 計算統計數據
         today_commission = get_today_commission()
         margin_ratio = (margin_balance / maint_margin) * 100 if maint_margin > 0 else 0.0
-        leverage_usage = (initial_margin / wallet_balance) * 100 if wallet_balance > 0 else 0.0
+        # 修正：手動計算錢包餘額
+        calculated_wallet_balance = available_balance + initial_margin + unrealized_pnl
+        leverage_usage = (initial_margin / calculated_wallet_balance) * 100 if calculated_wallet_balance > 0 else 0.0
         
         today_pnl, today_pnl_percent = get_period_total_pnl_binance_formula(1)
         week_pnl, week_pnl_percent = get_period_total_pnl_binance_formula(7)
@@ -3718,12 +3763,28 @@ def get_btc_trading_statistics_data(date_str=None):
         # 4. 獲取當日手續費
         today_commission = get_today_commission()
         
-        # 5. 獲取帳戶數據（重用啟動通知的邏輯）
-        startup_data = get_btc_startup_notification_data()
-        if not startup_data['success']:
-            return startup_data
+        # 5. 獲取帳戶數據 - 直接使用前端API數據源
+        frontend_data = get_btc_account_info()
+        if not frontend_data.json.get('success'):
+            return {'success': False, 'error': '無法獲取帳戶數據'}
         
-        account_data = startup_data['data']
+        account_raw = frontend_data.json['account']
+        # 轉換數據格式
+        account_data = {
+            'totalWalletBalance': float(account_raw.get('walletBalance', '0').replace(',', '')),
+            'availableBalance': float(account_raw.get('availableBalance', '0').replace(',', '')),
+            'totalMarginBalance': float(account_raw.get('marginBalance', '0').replace(',', '')),
+            'totalUnrealizedProfit': float(account_raw.get('unrealizedProfit', '0').replace(',', '')),
+            'feePaid': float(account_raw.get('todayCommission', '0').replace(',', '')),
+            'marginRatio': float(account_raw.get('marginRatio', '0%').replace('%', '')),
+            'leverageUsage': float(account_raw.get('leverageUsage', '0%').replace('%', '')),
+            'todayPnl': float(account_raw.get('todayPnl', '0').replace(',', '')),
+            'todayPnlPercent': float(account_raw.get('todayPnlPercent', '0%').replace('%', '')),
+            'weekPnl': float(account_raw.get('weekPnl', '0').replace(',', '')),
+            'weekPnlPercent': float(account_raw.get('weekPnlPercent', '0%').replace('%', '')),
+            'monthPnl': float(account_raw.get('monthPnl', '0').replace(',', '')),
+            'monthPnlPercent': float(account_raw.get('monthPnlPercent', '0%').replace('%', ''))
+        }
         
         # 6. 獲取當日平倉交易記錄
         closed_trades = []
@@ -3834,13 +3895,28 @@ def generate_btc_daily_report(date_str=None, custom_filename=None, is_monthly=Fa
             closed_trades_data = monthly_data['closed_trades_data']
             open_positions_data = monthly_data['open_positions_data']
         else:
-            # 獲取統計數據
-            stats_data = get_btc_trading_statistics_data(date_str)
-            if not stats_data['success']:
-                return stats_data
+            # 獲取統計數據 - 直接使用前端API數據源
+            frontend_data = get_btc_account_info()
+            if not frontend_data.json.get('success'):
+                return {'success': False, 'error': '無法獲取帳戶數據'}
             
-            data = stats_data['data']
-            account = data['account']
+            account_raw = frontend_data.json['account']
+            # 轉換格式以保持兼容性
+            account = {
+                'totalWalletBalance': float(account_raw.get('walletBalance', '0').replace(',', '')),
+                'availableBalance': float(account_raw.get('availableBalance', '0').replace(',', '')),
+                'totalMarginBalance': float(account_raw.get('marginBalance', '0').replace(',', '')),
+                'totalUnrealizedProfit': float(account_raw.get('unrealizedProfit', '0').replace(',', '')),
+                'feePaid': float(account_raw.get('todayCommission', '0').replace(',', '')),
+                'marginRatio': float(account_raw.get('marginRatio', '0%').replace('%', '')),
+                'leverageUsage': float(account_raw.get('leverageUsage', '0%').replace('%', '')),
+                'todayPnl': float(account_raw.get('todayPnl', '0').replace(',', '')),
+                'todayPnlPercent': float(account_raw.get('todayPnlPercent', '0%').replace('%', '')),
+                'weekPnl': float(account_raw.get('weekPnl', '0').replace(',', '')),
+                'weekPnlPercent': float(account_raw.get('weekPnlPercent', '0%').replace('%', '')),
+                'monthPnl': float(account_raw.get('monthPnl', '0').replace(',', '')),
+                'monthPnlPercent': float(account_raw.get('monthPnlPercent', '0%').replace('%', ''))
+            }
             
             # 獲取詳細交易記錄
             closed_trades_data = get_btc_closed_trades_today(date_str)
@@ -6057,9 +6133,14 @@ def get_btc_account_info():
             margin_ratio = (margin_balance / maint_margin) * 100
         
         # 計算槓桿使用率（預設0.00%）
+        # 修正：手動計算錢包餘額以避免API同步問題
+        # 錢包餘額 = 可用餘額 + 已使用保證金 + 未實現盈虧
+        calculated_wallet_balance = available_balance + initial_margin + unrealized_pnl
+        
         leverage_usage = 0.0
-        if wallet_balance > 0:
-            leverage_usage = (initial_margin / wallet_balance) * 100
+        if calculated_wallet_balance > 0:
+            leverage_usage = (initial_margin / calculated_wallet_balance) * 100
+            logger.info(f"槓桿使用率計算: {initial_margin:.2f} / {calculated_wallet_balance:.2f} = {leverage_usage:.2f}% (API錢包餘額: {wallet_balance:.2f})")
         
         # totalMaintMargin: 維持保證金
         
@@ -6234,9 +6315,11 @@ def calculate_btc_risk_metrics():
         if total_maint_margin > 0:
             risk_metrics['margin_ratio'] = (total_margin_balance / total_maint_margin) * 100
         
-        # 槓桿使用率計算
-        if total_wallet_balance > 0:
-            risk_metrics['leverage_usage'] = (total_initial_margin / total_wallet_balance) * 100
+        # 槓桿使用率計算 - 修正：手動計算錢包餘額
+        calculated_total_wallet_balance = available_balance + total_initial_margin + total_unrealized_pnl
+        if calculated_total_wallet_balance > 0:
+            risk_metrics['leverage_usage'] = (total_initial_margin / calculated_total_wallet_balance) * 100
+            logger.info(f"風險管理槓桿使用率: {total_initial_margin:.2f} / {calculated_total_wallet_balance:.2f} = {risk_metrics['leverage_usage']:.2f}% (API: {total_wallet_balance:.2f})")
         
         # 處理持倉信息
         total_position_value = 0
@@ -6380,7 +6463,11 @@ def send_btc_risk_alert(alert):
         
         emoji = level_emoji.get(alert['level'], '⚠️')
         
-        message = f"{emoji} BTC風險管理警報 ({current_time_str})\n{alert['message']}\n請及時處理以避免損失！"
+        if alert['type'] == 'LEVERAGE_RISK':
+            leverage_rate = alert['message'].split('使用率: ')[1].split('%')[0]
+            message = f"⚠️ BTC風險管理警報 ({current_time_str})\n槓桿使用率過高，目前使用：{leverage_rate}%\n建議降低槓桿或增加保證金\n請及時處理以避免損失！"
+        else:
+            message = f"{emoji} BTC風險管理警報 ({current_time_str})\n{alert['message']}\n請及時處理以避免損失！"
         
         # 發送Telegram通知
         send_btc_telegram_message(message)

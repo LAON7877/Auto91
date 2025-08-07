@@ -95,6 +95,7 @@ const SystemLogManager = {
                         return (log.extra_info && log.extra_info.system === 'TX') ||
                                log.uri === '/api/manual/order' ||
                                log.method === 'TX_LOG' ||
+                               log.uri === 'system_log' ||  // 直接匹配系統日誌
                                (!log.uri.includes('btc') && !log.extra_info?.system && 
                                 !log.uri.includes('webhook'));
                     });
@@ -126,9 +127,14 @@ const SystemLogManager = {
         }
         
         const logItems = logsArray.slice(-10).reverse().map(log => {
-            const typeClass = this.getLogTypeClass(log.type);
-            const typeText = this.getLogTypeText(log.type);
-            const timestamp = this.formatLogTimestamp(log.timestamp);
+            // 取得日誌類型，優先從extra_info.type獲取
+            const logType = log.extra_info?.type || log.type || 'info';
+            // 取得訊息內容，優先從extra_info.message獲取
+            const message = log.extra_info?.message || log.message || '無訊息';
+            
+            const typeClass = this.getLogTypeClass(logType);
+            const typeText = this.getLogTypeText(logType);
+            const timestamp = this.formatLogTimestamp(log.display_timestamp || log.timestamp);
             
             return `
                 <div class="log-item ${typeClass}">
@@ -136,7 +142,7 @@ const SystemLogManager = {
                         <span class="log-type">${typeText}</span>
                         <span class="log-time">${timestamp}</span>
                     </div>
-                    <div class="log-message">${log.message}</div>
+                    <div class="log-message">${message}</div>
                 </div>
             `;
         }).join('');
@@ -590,7 +596,7 @@ function validateInputs() {
 
 async function checkLoginButton() {
     const loginBtn = document.getElementById('login-btn');
-    loginBtn.disabled = true; // 預設禁用
+    if (!loginBtn) return;
 
     // 取得env
     const res = await fetch('/api/load_env');
@@ -608,9 +614,13 @@ async function checkLoginButton() {
         }
     }
 
-    if (allFilled) {
-        loginBtn.disabled = false;
-    } else {
+    // 只在狀態需要改變時才更新按鈕
+    const shouldBeEnabled = allFilled;
+    if (loginBtn.disabled === shouldBeEnabled) {
+        loginBtn.disabled = !shouldBeEnabled;
+    }
+    
+    if (!allFilled) {
         // 如果有空值，確保用戶已登出
         if (sessionStorage.getItem('isLoggedIn') === '1') {
             sessionStorage.removeItem('isLoggedIn');
@@ -623,8 +633,6 @@ async function checkLoginButton() {
 async function checkBtcLoginButton() {
     const loginBtn = document.getElementById('login-btn-btc');
     if (!loginBtn) return; // 如果元素不存在就返回
-    
-    loginBtn.disabled = true; // 預設禁用
 
     try {
         // 取得BTC env
@@ -644,9 +652,13 @@ async function checkBtcLoginButton() {
             }
         }
 
-        if (allFilled) {
-            loginBtn.disabled = false;
-        } else {
+        // 只在狀態需要改變時才更新按鈕
+        const shouldBeEnabled = allFilled;
+        if (loginBtn.disabled === shouldBeEnabled) {
+            loginBtn.disabled = !shouldBeEnabled;
+        }
+        
+        if (!allFilled) {
             // 如果有空值，確保用戶已登出
             if (sessionStorage.getItem('isBtcLoggedIn') === '1') {
                 sessionStorage.removeItem('isBtcLoggedIn');
@@ -1822,12 +1834,14 @@ function updateSystemLogsFromBackend() {
         .then(res => res.json())
         .then(data => {
             if (data.status === 'success' && data.logs && data.logs.length > 0) {
+                
                 // 過濾 TX 系統日誌（排除 BTC 相關日誌）
                 const customLogs = data.logs
                     .filter(log => {
                         // TX相關日誌：系統日誌、手動下單、webhook（包含新簡潔格式）
                         const isTxLog = (log.extra_info && log.extra_info.system === 'TX') ||
                                        log.uri === '/api/manual/order' ||
+                                       log.uri === 'system_log' ||  // 添加系統日誌匹配
                                        (log.uri === '/webhook' && !log.uri.includes('btc')) ||
                                        // 匹配TX簡潔URL格式（字母數字組合）
                                        /^\/[A-Z0-9]+$/.test(log.uri) ||
@@ -2058,7 +2072,7 @@ function updateBtcSystemLogsDisplay() {
                 }
             }
             
-            // 格式化時間戳為相對時間
+            // 格式化時間戳為實際時間（與TX系統一致）
             let formattedTime = '';
             try {
                 // 處理不同的時間戳格式
@@ -2074,25 +2088,13 @@ function updateBtcSystemLogsDisplay() {
                     dateObj = new Date();
                 }
                 
-                const now = new Date();
-                const diffMs = now - dateObj;
-                const diffMins = Math.floor(diffMs / (1000 * 60));
-                const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
-                
-                if (diffMins < 1) {
-                    formattedTime = '剛剛';
-                } else if (diffMins < 60) {
-                    formattedTime = `${diffMins}分鐘前`;
-                } else if (diffHours < 24) {
-                    formattedTime = `${diffHours}小時前`;
-                } else {
-                    formattedTime = dateObj.toLocaleString('zh-TW', {
-                        month: '2-digit',
-                        day: '2-digit',
-                        hour: '2-digit',
-                        minute: '2-digit'
-                    });
-                }
+                // 直接顯示實際時間，格式：HH:mm:ss
+                formattedTime = dateObj.toLocaleTimeString('zh-TW', {
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    second: '2-digit',
+                    hour12: false
+                });
             } catch (e) {
                 formattedTime = log.timestamp || '-';
             }
@@ -2733,13 +2735,9 @@ document.addEventListener('DOMContentLoaded', () => {
         refreshTunnelStatus('btc');
     }, 10000);
     
-    // 請求日誌更新 - 為TX和BTC分別更新
+    // 請求日誌更新 - 初始化時調用一次，後續由隧道狀態檢查負責定時更新
     updateRequestsLog('tx');
     updateRequestsLog('btc');
-    setInterval(() => {
-        updateRequestsLog('tx');
-        updateRequestsLog('btc');
-    }, 10000);
     // 已移除延遲和TTL監控的初始化 - Cloudflare Tunnel 不需要這些功能
     
     // 初始化系統資訊
@@ -2830,11 +2828,53 @@ let tradingDayCache = {
     lastUpdated: null
 };
 
-// 啟動帳戶自動更新 - 改為事件驅動，不使用定時器
+// 啟動帳戶自動更新 - 在交易日的開市時間內每5分鐘定時更新
 function startAccountAutoUpdate() {
-    // 移除定時器，改為只在交易後更新
-    // 帳戶信息會在交易完成後自動更新，不需要定時檢查
-    console.log('TX帳戶更新改為事件驅動模式，只在交易後更新');
+    // 智能更新：只在交易日的開市時間內定時更新，非交易時段停止
+    if (window.accountUpdateInterval) {
+        clearInterval(window.accountUpdateInterval);
+    }
+    
+    const updateAccountData = () => {
+        const now = new Date();
+        const currentHour = now.getHours();
+        const currentMinute = now.getMinutes();
+        const currentTime = currentHour * 100 + currentMinute;
+        const currentDay = now.getDay(); // 0=週日, 1=週一, ..., 6=週六
+        
+        // 檢查是否為交易時間
+        // 日盤：週一~週五 8:45-13:45
+        // 夜盤：週一15:00~週二05:00, 週二15:00~週三05:00, ..., 週五15:00~週六05:00
+        const isDaySession = (
+            (currentDay >= 1 && currentDay <= 5) && // 週一到週五
+            (currentTime >= 845 && currentTime < 1345) // 日盤：8:45-13:45
+        );
+        
+        const isNightSession = (
+            // 夜盤開始：週一~週五 15:00-23:59
+            ((currentDay >= 1 && currentDay <= 5) && (currentTime >= 1500)) ||
+            // 夜盤延續：週二~週六 00:00-05:00 (前一天夜盤的延續)
+            ((currentDay >= 2 && currentDay <= 6) && (currentTime >= 0 && currentTime < 500))
+        );
+        
+        const isMarketOpen = isDaySession || isNightSession;
+        
+        if (isMarketOpen) {
+            console.log('交易時段，定時更新TX帳戶資訊和持倉狀態');
+            updateAccountStatus();
+            updatePositionStatus();
+        } else {
+            console.log('非交易時段，跳過TX帳戶更新');
+        }
+    };
+    
+    // 立即執行一次檢查
+    updateAccountData();
+    
+    // 每5分鐘檢查一次
+    window.accountUpdateInterval = setInterval(updateAccountData, 300000);
+    
+    console.log('TX帳戶智能更新已啟動（僅在交易時段更新）');
 }
 
 // 停止帳戶自動更新
@@ -2845,11 +2885,20 @@ function stopAccountAutoUpdate() {
     }
 }
 
-// 啟動BTC帳戶自動更新 - 改為事件驅動，不使用定時器
+// 啟動BTC帳戶自動更新 - BTC 24/7市場，每5分鐘定時更新
 function startBtcAccountAutoUpdate() {
-    // 移除定時器，改為只在交易後更新
-    // 帳戶信息會在交易完成後自動更新，不需要定時檢查
-    console.log('BTC帳戶更新改為事件驅動模式，只在交易後更新');
+    // BTC是24/7市場，需要定期更新以反映市價變動的未實現盈虧
+    if (window.btcAccountUpdateInterval) {
+        clearInterval(window.btcAccountUpdateInterval);
+    }
+    
+    window.btcAccountUpdateInterval = setInterval(() => {
+        console.log('定時更新BTC帳戶資訊和持倉狀態');
+        updateBtcAccountInfo();
+        updateBtcPositionInfo(); 
+    }, 300000); // 每5分鐘更新一次
+    
+    console.log('BTC帳戶每5分鐘自動更新已啟動');
     
     // 啟動BTC連線時長定時更新
     if (window.btcDurationUpdateInterval) {

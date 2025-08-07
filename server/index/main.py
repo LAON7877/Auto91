@@ -461,12 +461,26 @@ def log_response(response):
                 response_time=response_time
             )
         
-        # 對於重要的API請求，也記錄到前端顯示的custom_request_logs中
+        # 對於重要的API請求和動態端點，也記錄到前端顯示的custom_request_logs中
         important_paths = ['/api/manual/order', '/api/btc/manual_order', '/webhook']
-        if request.path in important_paths:
-            # 只有在沒有被add_custom_request_log記錄的情況下才記錄
-            # 避免重複記錄（手動下單已經在API內部記錄了）
-            pass
+        is_dynamic_endpoint = (request.method == 'POST' and 
+                              request.path.startswith('/') and 
+                              request.path.count('/') == 1 and 
+                              len(request.path.split('/')[1]) > 5)
+        
+        if request.path in important_paths or is_dynamic_endpoint:
+            # 為動態端點添加請求記錄，確保顯示在請求日誌中
+            if is_dynamic_endpoint:
+                add_custom_request_log(
+                    method=request.method,
+                    uri=request.path,
+                    status=response.status_code,
+                    extra_info={
+                        'response_time': response_time,
+                        'tunnel_type': tunnel_type,
+                        'is_webhook': True
+                    }
+                )
         
     except Exception as e:
         print_console("SYSTEM", "ERROR", "記錄請求響應失敗", str(e))
@@ -861,11 +875,16 @@ def add_custom_request_log(method, uri, status, extra_info=None):
     """添加自定義請求記錄"""
     global custom_request_logs
     
-    # 只過濾重複的系統日誌API調用，保留重要的webhook和交易日誌
-    # 避免系統日誌API本身產生重複記錄，但保留其內容
+    # 過濾不需要在前端顯示的請求記錄
     if uri in ['/api/btc_system_log', '/api/system_log'] and method in ['POST', 'GET']:
         # 系統日誌API調用本身不記錄，但其內容已經通過特殊處理添加
         logger.info(f"[SYSTEM_LOG_API] {method} {uri} - {status}")
+        return
+    
+    # 只過濾包含"webhook"字樣的快訊訊號記錄，避免在系統日誌中顯示
+    if 'webhook' in uri.lower():
+        # webhook快訊訊號不顯示在系統日誌中，但記錄到後端日誌
+        logger.info(f"[WEBHOOK_SIGNAL] {method} {uri} - {status}")
         return
     
     # 建立時間戳（加上日期但前端會只顯示時分秒）
@@ -888,9 +907,19 @@ def add_custom_request_log(method, uri, status, extra_info=None):
     # 添加到日誌列表
     with global_lock:
         custom_request_logs.append(log_entry)
-        # 保持日誌數量在限制內
+        # 保持日誌數量在限制內，優先保留系統日誌
         if len(custom_request_logs) > MAX_CUSTOM_LOGS:
-            custom_request_logs = custom_request_logs[-MAX_CUSTOM_LOGS:]
+            # 分離系統日誌和其他日誌
+            system_logs = [log for log in custom_request_logs if log.get('method') == 'TX_LOG' or log.get('method') == 'BTC_LOG']
+            other_logs = [log for log in custom_request_logs if not (log.get('method') == 'TX_LOG' or log.get('method') == 'BTC_LOG')]
+            
+            # 優先保留系統日誌
+            max_other_logs = MAX_CUSTOM_LOGS - len(system_logs)
+            if max_other_logs > 0:
+                other_logs = other_logs[-max_other_logs:]
+            
+            # 重新合併，系統日誌在前
+            custom_request_logs = system_logs + other_logs
 
 
 def format_timestamp(timestamp_str):
@@ -1051,8 +1080,8 @@ def get_tunnel_requests():
     max_logs = 100
     if len(all_logs) > max_logs:
         # 分別提取系統日誌和其他日誌
-        system_logs = [log for log in all_logs if log.get('uri') == '/api/system_log']
-        other_logs = [log for log in all_logs if log.get('uri') != '/api/system_log']
+        system_logs = [log for log in all_logs if log.get('method') == 'TX_LOG' or log.get('method') == 'BTC_LOG' or log.get('uri') == '/api/system_log' or log.get('uri') == 'system_log']
+        other_logs = [log for log in all_logs if not (log.get('method') == 'TX_LOG' or log.get('method') == 'BTC_LOG' or log.get('uri') == '/api/system_log' or log.get('uri') == 'system_log')]
         
         # 限制其他日誌數量，優先保留系統日誌
         max_other_logs = max_logs - len(system_logs)
@@ -4213,7 +4242,6 @@ def api_system_log():
                 'is_system_message': True  # 標記為系統訊息，前端特殊處理
             }
         )
-        
         # 這裡可以添加後端日誌記錄邏輯
         logger.info(f"前端系統日誌 [{log_type.upper()}]: {message}")
         
@@ -4270,16 +4298,19 @@ def api_btc_system_log():
 def api_get_logs():
     """獲取系統日誌"""
     try:
-        global custom_request_logs
+        # 使用 get_tunnel_requests() 來獲取合併的請求記錄
+        all_logs = get_tunnel_requests()
         return jsonify({
             'status': 'success',
-            'logs': custom_request_logs
+            'logs': all_logs
         })
     except Exception as e:
+        # 如果出錯，降級使用只有 custom_request_logs
+        global custom_request_logs
         return jsonify({
             'status': 'error', 
             'message': str(e),
-            'logs': []
+            'logs': custom_request_logs
         })
 
 @app.route('/api/rollover/status', methods=['GET'])
@@ -8985,8 +9016,8 @@ def send_telegram_message(message, log_type="info"):
                 log_message = "Telegram［交易統計］訊息發送成功！！！"
             elif "交易報表" in message or "交易報表" in message:
                 log_message = "Telegram［生成報表］訊息發送成功！！！"
-            elif "保證金不足" in message:
-                log_message = "Telegram［保證金不足］訊息發送成功！！！"
+            elif "保證金管理警報" in message or "保證金不足" in message:
+                log_message = "Telegram［保證金管理］訊息發送成功！！！"
             elif "保證金" in message or "轉倉" in message:
                 log_message = "Telegram［系統通知］訊息發送成功！！！"
             else:
@@ -9342,6 +9373,120 @@ def check_rollover_mode():
     except Exception as e:
         print_console("SYSTEM", "ERROR", "檢查轉倉模式失敗", str(e))
         return False
+
+# ========================== TX風險管理功能 ==========================
+# 風險警報發送頻率控制
+tx_last_risk_alert_time = {}
+
+def calculate_tx_risk_metrics():
+    """計算TX風險指標"""
+    try:
+        # 獲取帳戶資訊
+        account_data = get_account_status()
+        if not account_data.get('success', False):
+            return None
+        
+        # 提取關鍵風險指標
+        risk_metrics = {
+            'available_margin': account_data.get('可用保證金', 0),
+            'maintenance_margin': account_data.get('維持保證金', 0),
+            'initial_margin': account_data.get('原始保證金', 0),
+            'equity_amount': account_data.get('權益總額', 0),
+            'today_balance': account_data.get('今日餘額', 0),
+            'risk_indicator': account_data.get('風險指標', 0),
+            'unrealized_pnl': account_data.get('未實現損益', 0)
+        }
+        
+        # 判斷風險等級
+        available_margin = risk_metrics['available_margin']
+        maintenance_margin = risk_metrics['maintenance_margin']
+        
+        if available_margin < maintenance_margin:
+            risk_metrics['risk_level'] = 'HIGH'
+        elif available_margin < maintenance_margin * 1.5:
+            risk_metrics['risk_level'] = 'MEDIUM'
+        else:
+            risk_metrics['risk_level'] = 'SAFE'
+        
+        return risk_metrics
+    except Exception as e:
+        logger.error(f"計算TX風險指標失敗: {e}")
+        return None
+
+def check_tx_risk_alerts():
+    """檢查TX風險並發送警報"""
+    global tx_last_risk_alert_time
+    
+    try:
+        risk_metrics = calculate_tx_risk_metrics()
+        if not risk_metrics:
+            return
+        
+        alerts = []
+        current_time = datetime.now()
+        
+        # 保證金不足警報
+        available_margin = risk_metrics['available_margin']
+        maintenance_margin = risk_metrics['maintenance_margin']
+        
+        if available_margin < maintenance_margin:  # 低於維持保證金發警報
+            alert_key = 'MARGIN_INSUFFICIENT'
+            
+            # 檢查是否需要發送警報（每小時最多一次）
+            last_alert = tx_last_risk_alert_time.get(alert_key)
+            if not last_alert or (current_time - last_alert).total_seconds() > 3600:
+                alerts.append({
+                    'type': 'MARGIN_INSUFFICIENT',
+                    'level': 'WARNING',
+                    'message': f'帳戶餘額低於維持保證金\n目前帳戶餘額剩餘：{available_margin:,.0f} TWD\n維持保證金需求：{maintenance_margin:,.0f} TWD'
+                })
+                tx_last_risk_alert_time[alert_key] = current_time
+        
+        # 發送警報
+        for alert in alerts:
+            send_tx_risk_alert(alert)
+            
+    except Exception as e:
+        logger.error(f"檢查TX風險警報失敗: {e}")
+
+def send_tx_risk_alert(alert):
+    """發送TX風險警報"""
+    try:
+        current_time = datetime.now()
+        current_time_str = current_time.strftime('%Y/%m/%d')
+        
+        if alert['type'] == 'MARGIN_INSUFFICIENT':
+            message = f"⚠️ TX保證金管理警報 ({current_time_str})\n{alert['message']}\n建議減倉或增加保證金\n請及時處理以避免損失！"
+        else:
+            message = f"⚠️ TX風險管理警報 ({current_time_str})\n{alert['message']}\n請及時處理以避免損失！"
+        
+        # 發送Telegram通知
+        result = send_telegram_message(message)
+        
+        # 記錄到風險日誌
+        if result:
+            logger.info(f"TX風險警報已發送: {message[:50]}...")
+        else:
+            logger.error(f"TX風險警報發送失敗: {message[:50]}...")
+            
+    except Exception as e:
+        logger.error(f"發送TX風險警報失敗: {e}")
+
+def start_tx_risk_monitor():
+    """啟動TX風險監控"""
+    def tx_risk_check_loop():
+        while True:
+            try:
+                # 每小時檢查一次
+                check_tx_risk_alerts()
+                time.sleep(3600)  # 休眠1小時
+            except Exception as e:
+                logger.error(f"TX風險監控循環錯誤: {e}")
+                time.sleep(300)  # 出錯時休眠5分鐘後重試
+    
+    risk_thread = threading.Thread(target=tx_risk_check_loop, daemon=True)
+    risk_thread.start()
+    logger.info("TX風險監控已啟動")
 
 def get_contract_for_rollover(contract_type):
     """根據轉倉模式獲取合約"""
@@ -10050,6 +10195,9 @@ def start_tx_service():
     
     # 啟動連線監控器
     start_connection_monitor()
+    
+    # 啟動TX風險監控
+    start_tx_risk_monitor()
     
     # 信號處理器只能在主線程中設置，在 start_tx_service 中不設置
     
