@@ -5040,9 +5040,9 @@ def order_callback(state, deal, order=None):
                     delivery_date=delivery_date
                 )
                 
-                # 延遲5秒發送提交成功通知，避免與其他通知重疊
+                # 延遲1秒發送提交成功通知，避免與其他通知重疊
                 def delayed_submit_notification():
-                    time.sleep(5)
+                    time.sleep(1)
                     send_telegram_message(msg)
                 
                 create_managed_thread(target=delayed_submit_notification, name="延遲提交通知線程").start()
@@ -5281,7 +5281,7 @@ def handle_futures_deal_callback(deal, octype_info):
         except Exception as e:
             logger.error(f"TX部位追蹤失敗: {str(e)}")
         
-        # 延遲3秒發送成交通知，確保在提交通知之後
+        # 延遲5秒發送成交通知，確保在提交通知之後
         def delayed_send():
             time.sleep(5)
             send_telegram_message(msg)
@@ -8767,7 +8767,7 @@ def place_futures_order(contract_code, quantity, direction, price=0, is_manual=F
             
             # 延遲3秒發送失敗通知
             def delayed_send_fail():
-                time.sleep(5)
+                time.sleep(3)
                 send_telegram_message(fail_message)
             
             create_managed_thread(target=delayed_send_fail, name="延遲發送失敗通知線程").start()
@@ -9382,9 +9382,35 @@ def calculate_tx_risk_metrics():
     """計算TX風險指標"""
     try:
         # 獲取帳戶資訊
-        account_data = get_account_status()
-        if not account_data.get('success', False):
+        if not sinopac_connected or not sinopac_api:
             return None
+            
+        # 獲取保證金資訊
+        margin_data = sinopac_api.margin()
+        
+        # 獲取持倉資訊計算未實現損益
+        total_pnl = 0.0
+        try:
+            positions = sinopac_api.list_positions(sinopac_api.futopt_account)
+            for pos in positions:
+                total_pnl += pos.pnl
+        except:
+            total_pnl = 0.0
+            
+        account_data = {
+            '權益總值': getattr(margin_data, 'equity', 0) or 0,
+            '權益總額': getattr(margin_data, 'equity_amount', 0) or 0,
+            '今日餘額': getattr(margin_data, 'today_balance', 0) or 0,
+            '昨日餘額': getattr(margin_data, 'yesterday_balance', 0) or 0,
+            '可用保證金': getattr(margin_data, 'available_margin', 0) or 0,
+            '原始保證金': getattr(margin_data, 'initial_margin', 0) or 0,
+            '維持保證金': getattr(margin_data, 'maintenance_margin', 0) or 0,
+            '風險指標': getattr(margin_data, 'risk_indicator', 0) or 0,
+            '手續費': getattr(margin_data, 'fee', 0) or 0,
+            '期交稅': getattr(margin_data, 'tax', 0) or 0,
+            '本日平倉損益': getattr(margin_data, 'future_settle_profitloss', 0) or 0,
+            '未實現損益': total_pnl
+        }
         
         # 提取關鍵風險指標
         risk_metrics = {
