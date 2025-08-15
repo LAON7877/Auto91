@@ -1,0 +1,3106 @@
+:root {
+    --main-blue: #3498db;
+    --main-green: #27ae60;
+    --tab-bg: #e0e0e0;
+    --tab-active: #fff;
+    --tab-border: #b2bec3;
+    --panel-radius: 0 12px 12px 12px;
+    --shadow: 0 2px 12px #0002;
+}
+
+/* 盈虧顏色樣式 - BTC使用 */
+.positive {
+    color: #27ae60 !important; /* 綠色 - 正數 */
+}
+
+.negative {
+    color: #e74c3c !important; /* 紅色 - 負數 */
+}
+
+.neutral {
+    color: #6c757d !important; /* 灰色 - 零值 */
+}
+
+/* 保證金比例風險顏色樣式 */
+.safe {
+    color: #27ae60 !important; /* 綠色 - 0.01~50.00% */
+}
+
+.warning {
+    color: #ff9800 !important; /* 橙色 - 50.01~75.00% */
+}
+
+.danger {
+    color: #e74c3c !important; /* 紅色 - 75.01~100.00% */
+}
+
+/* TX專用盈虧顏色樣式 - 與BTC相反 */
+.tx-positive {
+    color: #e74c3c !important; /* 紅色 - 正數 */
+}
+
+.tx-negative {
+    color: #27ae60 !important; /* 綠色 - 負數 */
+}
+
+.tx-neutral {
+    color: #6c757d !important; /* 灰色 - 零值 */
+}
+body {
+    font-family: 'Segoe UI', Arial, sans-serif;
+    background: linear-gradient(120deg, #e0eafc 0%, #cfdef3 100%);
+    margin: 0;
+    padding: 40px;
+    min-height: 100vh;
+}
+
+/* 側邊欄樣式 */
+.sidebar-tabs {
+    position: fixed;
+    left: 10px;
+    top: 50%;
+    transform: translateY(-50%);
+    z-index: 1000;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    opacity: 0;
+    visibility: hidden;
+    transition: all 0.3s ease;
+}
+
+.sidebar-tabs.show {
+    opacity: 0.8;
+    visibility: visible;
+}
+
+.sidebar-btn {
+    background: rgba(255, 255, 255, 0.9);
+    border: 2px solid #e0e0e0;
+    border-radius: 8px;
+    padding: 15px 8px;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    font-size: 13px;
+    font-weight: 500;
+    color: #6c757d;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+    backdrop-filter: blur(10px);
+    min-height: 100px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 40px;
+}
+
+.sidebar-btn:hover {
+    background: rgba(255, 255, 255, 0.95);
+    border-color: #007bff;
+    color: #007bff;
+    transform: translateX(5px);
+    box-shadow: 0 4px 15px rgba(0, 123, 255, 0.2);
+}
+
+.sidebar-btn.active {
+    background: rgba(0, 123, 255, 0.9);
+    border-color: #007bff;
+    color: white;
+    transform: translateX(5px);
+    box-shadow: 0 4px 15px rgba(0, 123, 255, 0.3);
+}
+
+.sidebar-btn span {
+    display: block;
+    text-align: center;
+    line-height: 1.4;
+    white-space: nowrap;
+}
+h1 {
+    color: #2c3e50;
+}
+input, button {
+    font-size: 1rem;
+    padding: 8px;
+    margin: 8px 0;
+}
+#result {
+    margin-top: 16px;
+    color: #27ae60;
+    font-weight: bold;
+}
+.tabs {
+    margin-bottom: 24px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+.tab-buttons {
+    display: flex;
+    align-items: center;
+}
+.tab-btn {
+    padding: 10px 20px;
+    font-size: 0.8rem;
+    border: 1px solid #adb5bd;
+    background: transparent;
+    cursor: pointer;
+    margin-right: 6px;
+    border-radius: 6px;
+    color: #adb5bd;
+    font-weight: 500;
+    transition: all 0.2s ease;
+    align-self: flex-end;
+}
+.tab-btn:hover {
+    border-color: #6c757d;
+    color: #6c757d;
+}
+.tab-btn.active {
+    padding: 10px 20px;
+    font-size: 1rem;
+    border: 2px solid #007bff;
+    color: #007bff;
+    background: rgba(0, 123, 255, 0.1);
+    align-self: flex-start;
+}
+.version-info {
+    font-size: 0.9rem;
+    color: #6c757d;
+    font-weight: 500;
+    padding: 2px 4px;
+    background: #f8f9fa;
+    border-radius: 6px;
+    border: 1px solid #dee2e6;
+}
+.version-info span {
+    font-family: 'Courier New', monospace;
+}
+.panel {
+    background: #fff;
+    border-radius: var(--panel-radius);
+    box-shadow: var(--shadow);
+    padding: 40px 32px 32px 32px;
+    max-width: 520px;
+    min-height: 420px;
+    margin-bottom: 32px;
+    transition: border 0.2s;
+}
+
+#trade-panel.panel, #btc-trade-panel.panel {
+    max-width: 1100px;
+    min-width: 1000px;
+}
+#settings-panel.panel {
+    max-width: none;
+    min-width: 1000px;
+    border-radius: 12px;
+}
+
+/* 帳戶容器並排布局 */
+.accounts-container {
+    display: flex;
+    gap: 24px;
+    width: 100%;
+}
+
+.account-panel {
+    flex: 1;
+    background: #f8f9fa;
+    border-radius: 12px;
+    padding: 24px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+}
+
+.account-panel .panel-header {
+    margin-bottom: 20px;
+}
+
+.account-panel h2 {
+    color: #2c3e50;
+    margin: 0 0 16px 0;
+}
+
+.btc-panel h2 {
+    color: #2c3e50;
+}
+#trade-panel.panel, #btc-trade-panel.panel {
+    border-left: 6px solid var(--main-blue);
+}
+.form-group {
+    margin-bottom: 22px;
+    display: flex;
+    flex-direction: column;
+}
+.form-group label {
+    margin-bottom: 6px;
+    font-weight: 600;
+    color: #34495e;
+}
+input[type="text"], input[type="password"], input[type="datetime-local"], select {
+    padding: 10px;
+    font-size: 1.05rem;
+    border: 1.5px solid #b2bec3;
+    border-radius: 5px;
+    transition: border 0.2s;
+}
+
+select {
+    padding: 10px;
+    font-size: 1.05rem;
+    min-height: 44px;
+    background-color: #fff;
+    cursor: pointer;
+}
+input[type="text"]:focus, input[type="password"]:focus, input[type="datetime-local"]:focus, select:focus {
+    border: 1.5px solid var(--main-blue);
+    outline: none;
+}
+input[type="text"].error, input[type="password"].error {
+    border: 1.5px solid #e74c3c;
+    background-color: #fdf2f2;
+}
+input[readonly] {
+    background: #f0f0f0;
+    color: #888;
+}
+
+.input-hint {
+    margin-top: 8px;
+    padding: 10px 12px;
+    background: #fff3cd;
+    border: 1px solid #ffeaa7;
+    border-radius: 5px;
+    font-size: 0.9rem;
+    color: #856404;
+    line-height: 1.5;
+}
+button[type="submit"] {
+    background: var(--main-blue);
+    color: #fff;
+    border: none;
+    padding: 12px 32px;
+    border-radius: 5px;
+    font-size: 1.1rem;
+    cursor: pointer;
+    font-weight: 600;
+    margin-top: 8px;
+    box-shadow: 0 2px 8px #3498db22;
+    transition: background 0.2s;
+}
+button[type="submit"]:hover {
+    background: #217dbb;
+}
+#settings-panel button[type="button"] {
+    background: #eaf6ff;
+    color: var(--main-blue);
+    border: 1px solid var(--main-blue);
+    padding: 6px 18px;
+    border-radius: 4px;
+    font-size: 1rem;
+    margin-left: 12px;
+    cursor: pointer;
+    transition: background 0.2s, color 0.2s;
+}
+#settings-panel button[type="button"]:hover {
+    background: var(--main-blue);
+    color: #fff;
+}
+#save-status {
+    margin-left: 18px;
+    color: var(--main-green);
+    font-weight: bold;
+    font-size: 1.05em;
+}
+#holiday-upload-status, #ca-upload-status {
+    margin-left: 10px;
+    color: var(--main-green);
+    font-size: 1em;
+    font-weight: 500;
+}
+.input-copy-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+.input-copy-row input {
+    flex: 1;
+    min-width: 0;
+}
+.input-copy-row input[readonly] {
+    flex: 1;
+    min-width: 0;
+}
+.copy-btn {
+    background: #eaf6ff;
+    color: var(--main-blue);
+    border: 1px solid var(--main-blue);
+    padding: 0 8px;
+    border-radius: 4px;
+    font-size: 0.92rem;
+    margin-left: 0;
+    cursor: pointer;
+    vertical-align: middle;
+    transition: background 0.2s, color 0.2s;
+    height: 32px;
+    line-height: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+.copy-btn:hover {
+    background: var(--main-blue);
+    color: #fff;
+}
+.refresh-btn {
+    background: #fff3cd;
+    color: #856404;
+    border: 1px solid #ffeaa7;
+    padding: 0 8px;
+    border-radius: 4px;
+    font-size: 0.92rem;
+    margin-left: 0;
+    cursor: pointer;
+    vertical-align: middle;
+    transition: background 0.2s, color 0.2s;
+    height: 32px;
+    line-height: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+.refresh-btn:hover {
+    background: #ffeaa7;
+    color: #856404;
+}
+@media (max-width: 600px) {
+    .panel {
+        max-width: 98vw;
+        padding: 18px 4vw;
+    }
+    .tabs {
+        flex-direction: column;
+    }
+    .tab-btn {
+        width: 100%;
+        margin-bottom: 6px;
+    }
+}
+.panel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 18px;
+}
+.input-edit-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+.input-edit-row input {
+    flex: 1;
+    min-width: 0;
+}
+.edit-btn {
+    background: #f3f3f3;
+    color: #888;
+    border: 1px solid #bbb;
+    padding: 0 10px;
+    border-radius: 4px;
+    font-size: 0.92rem;
+    height: 32px;
+    margin-left: 0;
+    cursor: pointer;
+    transition: background 0.2s, color 0.2s;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+.edit-btn:hover {
+    background: #e0e0e0;
+    color: var(--main-blue);
+    border-color: var(--main-blue);
+}
+.button-group {
+    display: flex;
+    gap: 10px;
+}
+.button-group button {
+    padding: 8px 16px;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 600;
+    transition: background-color 0.3s;
+}
+#save-btn {
+    background-color: #4CAF50;
+    color: white;
+}
+#save-btn:hover {
+    background-color: #217dbb;
+}
+#login-btn {
+    background: var(--main-green);
+    color: white;
+}
+#login-btn:hover {
+    background-color: #1976D2;
+}
+#login-btn:disabled {
+    background-color: #9E9E9E !important;
+    color: #E0E0E0 !important;
+    cursor: not-allowed !important;
+    border: none !important;
+    box-shadow: none !important;
+}
+#login-btn:disabled:hover {
+    background-color: #9E9E9E;
+}
+#login-btn-btc:disabled {
+    background-color: #9E9E9E !important;
+    color: #E0E0E0 !important;
+    cursor: not-allowed !important;
+    border: none !important;
+    box-shadow: none !important;
+}
+#login-btn-btc:disabled:hover {
+    background-color: #9E9E9E;
+}
+.file-input-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+.file-input-row input[type="file"] {
+    flex: 1;
+}
+.download-btn {
+    padding: 6px 12px;
+    background-color: #FF9800;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 12px;
+    white-space: nowrap;
+}
+.download-btn:hover {
+    background-color: #F57C00;
+}
+
+/* Telegram ID 提示窗樣式 */
+.tg-help-tooltip {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.5);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+    opacity: 0;
+    transition: opacity 0.3s ease;
+}
+
+.tg-help-tooltip.show {
+    opacity: 1;
+}
+
+.tooltip-content {
+    background: white;
+    border-radius: 12px;
+    padding: 24px;
+    max-width: 450px;
+    width: 90%;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+    transform: scale(0.8);
+    transition: transform 0.3s ease;
+    border: 2px solid var(--main-blue);
+}
+
+.tg-help-tooltip.show .tooltip-content {
+    transform: scale(1);
+}
+
+.tooltip-content h4 {
+    color: var(--main-blue);
+    margin: 0 0 16px 0;
+    font-size: 1.2rem;
+    text-align: center;
+}
+
+.tooltip-content p {
+    margin: 8px 0 16px 0;
+    line-height: 1.5;
+    color: #333;
+}
+
+.tooltip-content p strong {
+    color: #e74c3c;
+}
+
+.tooltip-content ol {
+    margin: 16px 0;
+    padding-left: 20px;
+    color: #333;
+}
+
+.tooltip-content li {
+    margin: 8px 0;
+    line-height: 1.5;
+}
+
+.tooltip-buttons {
+    display: flex;
+    gap: 12px;
+    margin-top: 20px;
+    justify-content: center;
+}
+
+.tooltip-btn {
+    padding: 10px 20px;
+    border: none;
+    border-radius: 6px;
+    font-size: 1rem;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    font-weight: 500;
+}
+
+.tooltip-btn.primary {
+    background: var(--main-blue);
+    color: white;
+}
+
+.tooltip-btn.primary:hover {
+    background: #217dbb;
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(52, 152, 219, 0.3);
+}
+
+.tooltip-btn.secondary {
+    background: #ecf0f1;
+    color: #7f8c8d;
+    border: 1px solid #bdc3c7;
+}
+
+.tooltip-btn.secondary:hover {
+    background: #d5dbdb;
+    color: #2c3e50;
+}
+
+/* ngrok狀態區域樣式 */
+.ngrok-status-section {
+    background: #f8f9fa;
+    border-radius: 8px;
+    padding: 20px;
+    margin-bottom: 20px;
+    border: 1px solid #e9ecef;
+}
+
+.ngrok-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 20px;
+    padding-bottom: 15px;
+    border-bottom: 2px solid #e9ecef;
+    min-height: 44px; /* 確保與右側header一致的最小高度 */
+}
+
+.ngrok-header h3 {
+    margin: 0;
+    color: #2c3e50;
+    font-size: 1.4rem;
+    font-weight: 600;
+}
+
+.ngrok-header .status-value {
+    /* margin-left移除，使用gap統一間距 */
+    display: flex;
+    align-items: flex-end;
+    line-height: 1;
+}
+
+.ngrok-header .ngrok-latency {
+    margin-left: auto;
+}
+
+.ngrok-version-info {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-left: auto;
+}
+
+.sinopac-version-info {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-left: auto;
+}
+
+.ngrok-version {
+    color: #495057;
+    font-size: 0.85rem;
+    font-weight: 500;
+    font-family: 'Courier New', monospace;
+    background: #e9ecef;
+    padding: 2px 6px;
+    border-radius: 3px;
+    min-width: 45px; /* 容納sj版本號 */
+    text-align: center;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 1;
+}
+
+/* tunnel狀態區域樣式 - 新增支援 */
+.tunnel-status-section {
+    background: #f8f9fa;
+    border-radius: 8px;
+    padding: 20px;
+    margin-bottom: 20px;
+    border: 1px solid #e9ecef;
+}
+
+.tunnel-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 20px;
+    padding-bottom: 15px;
+    border-bottom: 2px solid #e9ecef;
+    min-height: 44px; /* 確保與右側header一致的最小高度 */
+}
+
+.tunnel-header h3 {
+    margin: 0;
+    color: #2c3e50;
+    font-size: 1.4rem;
+    font-weight: 600;
+    line-height: 1.4;
+}
+
+.tunnel-header .status-value {
+    /* margin-left移除，使用gap統一間距 */
+    display: flex;
+    align-items: flex-end;
+    line-height: 1;
+}
+
+.tunnel-header .tunnel-latency {
+    margin-left: auto;
+}
+
+.tunnel-version-info {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-left: auto;
+}
+
+.tunnel-version {
+    color: #495057;
+    font-size: 0.85rem;
+    font-weight: 500;
+    font-family: 'Courier New', monospace;
+    background: #e9ecef;
+    padding: 2px 6px;
+    border-radius: 3px;
+    min-width: 45px; /* 容納sj版本號 */
+    text-align: center;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 1;
+}
+
+.update-check-btn,
+.update-available-btn {
+    border: none;
+    background: #6c757d;
+    color: white;
+    padding: 4px 6px;
+    border-radius: 3px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.update-check-btn:hover {
+    background: #5a6268;
+    transform: translateY(-1px);
+}
+
+.update-available-btn {
+    background: #ffc107;
+    color: #212529;
+    animation: pulse 2s infinite;
+}
+
+.update-available-btn:hover {
+    background: #e0a800;
+    transform: translateY(-1px);
+}
+
+@keyframes pulse {
+    0% { opacity: 1; }
+    50% { opacity: 0.7; }
+    100% { opacity: 1; }
+}
+
+.ngrok-info {
+    margin-bottom: 16px;
+}
+
+.tunnel-info {
+    margin-bottom: 16px;
+}
+
+.status-item {
+    display: flex;
+    margin-bottom: 8px;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.status-label {
+    font-weight: 600;
+    color: #495057;
+    min-width: 60px;
+    margin-right: 8px;
+}
+
+.status-value {
+    color: #6c757d;
+    font-family: 'Courier New', monospace;
+    word-break: break-all;
+    flex: 1;
+    display: flex;
+    align-items: center;
+    line-height: 1.4;
+}
+
+.ngrok-latency {
+    color: #495057;
+    font-size: 0.9rem;
+    font-weight: 500;
+    margin-left: 12px;
+    font-family: 'Courier New', monospace;
+    background: #e9ecef;
+    padding: 2px 6px;
+    border-radius: 3px;
+    min-width: 40px;
+    text-align: center;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 1;
+}
+
+.tunnel-latency {
+    color: #495057;
+    font-size: 0.9rem;
+    font-weight: 500;
+    margin-left: 12px;
+    font-family: 'Courier New', monospace;
+    background: #e9ecef;
+    padding: 2px 6px;
+    border-radius: 3px;
+    min-width: 40px;
+    text-align: center;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 1;
+}
+
+.status-value.running,
+.status-value.online {
+    color: var(--main-green);
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    line-height: 1.4;
+}
+
+.status-value.stopped,
+.status-value.offline,
+.status-value.error {
+    color: #dc3545;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    line-height: 1.4;
+}
+
+.status-value.checking {
+    color: #6c757d;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    line-height: 1.4;
+}
+
+/* 直接針對具體ID的樣式，確保狀態文字對齊 */
+#ngrok-status,
+#sinopac-api-status,
+#tunnel-status,
+#tunnel-status-btc,
+#binance-api-status {
+    display: flex !important;
+    align-items: center !important;
+    line-height: 1.4 !important;
+    min-height: 24px;
+}
+
+.ngrok-controls {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.ngrok-btn {
+    background: var(--main-green);
+    color: white;
+    border: none;
+    padding: 8px 16px;
+    border-radius: 4px;
+    font-size: 0.9rem;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    font-weight: 500;
+}
+
+.ngrok-btn:hover {
+    background: #1e8449;
+    transform: translateY(-1px);
+    box-shadow: 0 2px 8px rgba(39, 174, 96, 0.3);
+}
+
+.ngrok-btn:active {
+    transform: translateY(0);
+}
+
+.ngrok-btn.secondary {
+    background: #6c757d;
+}
+
+.ngrok-btn.secondary:hover {
+    background: #5a6268;
+    box-shadow: 0 2px 8px rgba(108, 117, 125, 0.3);
+}
+
+.ngrok-btn.danger {
+    background: #dc3545;
+}
+
+.ngrok-btn.danger:hover {
+    background: #c82333;
+    box-shadow: 0 2px 8px rgba(220, 53, 69, 0.3);
+}
+
+.tunnel-controls {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.tunnel-btn {
+    background: var(--main-green);
+    color: white;
+    border: none;
+    padding: 8px 16px;
+    border-radius: 4px;
+    font-size: 0.9rem;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    font-weight: 500;
+}
+
+.tunnel-btn:hover {
+    background: #1e8449;
+    transform: translateY(-1px);
+    box-shadow: 0 2px 8px rgba(39, 174, 96, 0.3);
+}
+
+.tunnel-btn:active {
+    transform: translateY(0);
+}
+
+.tunnel-btn.secondary {
+    background: #6c757d;
+}
+
+.tunnel-btn.secondary:hover {
+    background: #5a6268;
+    box-shadow: 0 2px 8px rgba(108, 117, 125, 0.3);
+}
+
+.tunnel-btn.danger {
+    background: #dc3545;
+}
+
+.tunnel-btn.danger:hover {
+    background: #c82333;
+    box-shadow: 0 2px 8px rgba(220, 53, 69, 0.3);
+}
+
+/* URL列表樣式 */
+.urls-container {
+    margin-top: 8px;
+}
+
+.url-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+    font-family: 'Courier New', monospace;
+    font-size: 0.85rem;
+}
+
+.url-item:last-child {
+    margin-bottom: 0;
+}
+
+.url-value {
+    flex: 1;
+    color: #007bff;
+    word-break: break-all;
+    padding: 4px 8px;
+    background: #fff;
+    border: 1px solid #dee2e6;
+    border-radius: 4px;
+}
+
+.url-copy-btn {
+    background: #eaf6ff;
+    color: var(--main-blue);
+    border: 1px solid var(--main-blue);
+    padding: 6px 12px;
+    border-radius: 4px;
+    font-size: 0.8rem;
+    cursor: pointer;
+    transition: background-color 0.2s, color 0.2s;
+    white-space: nowrap;
+}
+
+.url-copy-btn:hover {
+    background: var(--main-blue);
+    color: #fff;
+}
+
+.url-copy-btn:active {
+    background: var(--main-blue);
+    color: #fff;
+}
+
+.url-copy-btn.copied {
+    background: var(--main-blue);
+    color: #fff;
+}
+
+.url-copy-btn.copied:hover {
+    background: var(--main-blue);
+    color: #fff;
+}
+
+/* 請求日誌區域樣式 */
+.requests-section {
+    margin-top: 20px;
+}
+
+.requests-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 10px;
+}
+
+.requests-header h4 {
+    margin: 0;
+    color: #2c3e50;
+    font-size: 1.1rem;
+    font-weight: 600;
+}
+
+.requests-count {
+    color: #495057;
+    font-size: 0.9rem;
+    font-weight: 500;
+    font-family: 'Courier New', monospace;
+    background: #e9ecef;
+    padding: 2px 6px;
+    border-radius: 3px;
+    min-width: 40px;
+    text-align: center;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 1;
+}
+
+.requests-container {
+    background: #1a1a1a;
+    border-radius: 6px;
+    padding: 12px;
+    height: 320px;
+    overflow-y: auto;
+    font-family: 'Courier New', monospace;
+    font-size: 0.85rem;
+    line-height: 1.4;
+}
+
+.requests-container::-webkit-scrollbar {
+    width: 8px;
+}
+
+.requests-container::-webkit-scrollbar-track {
+    background: #2a2a2a;
+    border-radius: 4px;
+}
+
+.requests-container::-webkit-scrollbar-thumb {
+    background: #555;
+    border-radius: 4px;
+}
+
+.requests-container::-webkit-scrollbar-thumb:hover {
+    background: #777;
+}
+
+.request-item {
+    color: #e0e0e0;
+    margin-bottom: 4px;
+    padding: 2px 0;
+    border-bottom: 1px solid #333;
+    display: flex;
+    align-items: center;
+    font-family: 'Courier New', monospace;
+    font-size: 0.85rem;
+    line-height: 1.4;
+    white-space: nowrap;
+}
+
+.request-item:last-child {
+    border-bottom: none;
+}
+
+.request-timestamp {
+    display: inline-block;
+    width: 140px;
+    color: #999;
+    font-size: 0.85rem;
+    font-family: 'Courier New', monospace;
+    text-align: left;
+    flex-shrink: 0;
+}
+
+.request-method {
+    display: inline-block;
+    width: 60px;
+    font-weight: bold;
+    text-align: center;
+    flex-shrink: 0;
+    margin-left: 20px;
+}
+
+.request-method.get {
+    color: #4CAF50;
+}
+
+.request-method.post {
+    color: #2196F3;
+}
+
+.request-method.put {
+    color: #FF9800;
+}
+
+.request-method.delete {
+    color: #F44336;
+}
+
+.request-uri {
+    display: inline-block;
+    flex: 1;
+    color: #fff;
+    font-family: 'Courier New', monospace;
+    text-align: left;
+    margin: 0 20px;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.request-status {
+    display: inline-block;
+    width: 50px;
+    font-weight: bold;
+    text-align: right;
+    flex-shrink: 0;
+}
+
+.request-status.success {
+    color: #4CAF50;
+}
+
+.request-status.error {
+    color: #F44336;
+}
+
+.request-status.warning {
+    color: #FF9800;
+}
+
+.request-status-text {
+    display: inline-block;
+    width: 100px;
+    color: #ccc;
+    font-size: 0.85rem;
+    text-align: left;
+    flex-shrink: 0;
+}
+
+#register-ngrok-btn {
+    background-color: #FFB74D;
+    color: white;
+}
+
+#register-ngrok-btn:hover {
+    background-color: #FFA726;
+}
+
+#register-tunnel-btn {
+    background-color: #FFB74D;
+    color: white;
+}
+
+#register-tunnel-btn:hover {
+    background-color: #FFA726;
+}
+
+/* 交易面板兩欄佈局 */
+.trade-content {
+    display: flex;
+    gap: 30px;
+    align-items: flex-start;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+}
+
+.left-info-section {
+    flex: 1;
+    min-width: 450px;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+}
+
+.ngrok-status-section {
+    background: #f8f9fa;
+    border-radius: 8px;
+    padding: 20px;
+    border: 1px solid #e9ecef;
+    box-sizing: border-box; /* 確保padding計算一致 */
+}
+
+.tunnel-status-section {
+    background: #f8f9fa;
+    border-radius: 8px;
+    padding: 20px;
+    border: 1px solid #e9ecef;
+    box-sizing: border-box; /* 確保padding計算一致 */
+}
+
+.system-logs-section {
+    background: #f8f9fa;
+    border-radius: 8px;
+    padding: 20px;
+    border: 1px solid #e9ecef;
+}
+
+.system-logs-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+    margin-bottom: 20px;
+    padding-bottom: 15px;
+    border-bottom: 2px solid #e9ecef;
+}
+
+.system-logs-header h3 {
+    margin: 0;
+    color: #2c3e50;
+    font-size: 1.1rem;
+    font-weight: 600;
+}
+
+.system-logs-container {
+    background: #1a1a1a;
+    border-radius: 6px;
+    padding: 12px;
+    height: 320px;
+    overflow-y: auto;
+    font-family: 'Courier New', monospace;
+    font-size: 0.85rem;
+    line-height: 1.4;
+}
+
+.system-logs-container::-webkit-scrollbar {
+    width: 8px;
+}
+
+.system-logs-container::-webkit-scrollbar-track {
+    background: #2a2a2a;
+    border-radius: 4px;
+}
+
+.system-logs-container::-webkit-scrollbar-thumb {
+    background: #555;
+    border-radius: 4px;
+}
+
+.system-logs-container::-webkit-scrollbar-thumb:hover {
+    background: #777;
+}
+
+.logs-content {
+    color: #e0e0e0;
+    font-family: 'Courier New', monospace;
+    font-size: 0.85rem;
+    line-height: 1.4;
+}
+
+.log-item {
+    color: #e0e0e0;
+    margin-bottom: 4px;
+    padding: 2px 0;
+    border-bottom: 1px solid #333;
+    font-family: 'Courier New', monospace;
+    font-size: 0.85rem;
+    line-height: 1.4;
+    display: flex;
+    align-items: center;
+}
+
+.log-item:last-child {
+    border-bottom: none;
+}
+
+.log-timestamp {
+    display: inline-block;
+    width: 80px;
+    color: #999;
+    font-size: 0.85rem;
+    font-family: 'Courier New', monospace;
+    text-align: left;
+    flex-shrink: 0;
+    margin-right: 10px;
+}
+
+.log-message {
+    flex: 1;
+    color: #e0e0e0;
+    font-family: 'Courier New', monospace;
+    font-size: 0.85rem;
+}
+
+.log-message.info {
+    color: #e0e0e0;
+}
+
+.log-message.success {
+    color: #4CAF50;
+}
+
+.log-message.warning {
+    color: #FF9800;
+}
+
+.log-message.error {
+    color: #F44336;
+}
+
+.right-info-section {
+    flex: 1;
+    min-width: 450px;
+    background: #f8f9fa;
+    border-radius: 8px;
+    padding: 20px;
+    border: 1px solid #e9ecef;
+    box-sizing: border-box; /* 確保padding計算一致 */
+}
+
+.right-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 20px;
+    padding-bottom: 15px;
+    border-bottom: 2px solid #e9ecef;
+    min-height: 44px; /* 確保與左側header一致的最小高度 */
+}
+
+.right-header h3 {
+    margin: 0;
+    color: #2c3e50;
+    font-size: 1.4rem;
+    font-weight: 600;
+    line-height: 1.4;
+}
+
+/* BTC和TX面板統一對齊樣式 */
+
+.right-header .status-value {
+    /* margin-left移除，使用gap統一間距 */
+    display: flex;
+    align-items: flex-end;
+    line-height: 1;
+}
+
+.right-header .ngrok-latency {
+    margin-left: auto;
+}
+
+.right-header .tunnel-latency {
+    margin-left: auto;
+}
+
+/* TX 右側資訊區域 */
+.tx-right-info {
+    margin-top: 95px;
+}
+
+/* BTC 右側資訊區域 */
+.btc-right-info {
+    margin-top: 55px;
+}
+
+.system-stats {
+    margin-bottom: 24px;
+}
+
+.stat-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 12px;
+    margin-bottom: 8px;
+    background: #fff;
+    border-radius: 6px;
+    border: 1px solid #e9ecef;
+}
+
+.stat-label {
+    color: #6c757d;
+    font-size: 0.9rem;
+    font-weight: 500;
+}
+
+.stat-value {
+    color: #2c3e50;
+    font-weight: 600;
+    font-size: 0.9rem;
+}
+
+.system-info-section {
+    margin-top: 30px;
+}
+
+/* BTC帳戶資訊專用樣式 */
+.btc-account-info-section {
+    background: #f8f9fa;
+    border-radius: 8px;
+    padding: 20px;
+    border: 1px solid #e9ecef;
+    margin-top: 20px;
+}
+
+
+
+.info-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 10px;
+}
+
+.info-header h4 {
+    color: #2c3e50;
+    margin: 0;
+    font-size: 1rem;
+    font-weight: 600;
+}
+
+/* 重新整理按鈕樣式 */
+.refresh-account-btn,
+.refresh-position-btn {
+    background: none;
+    border: none;
+    color: #6c757d;
+    padding: 4px;
+    border-radius: 3px;
+    cursor: pointer;
+    transition: color 0.2s ease;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    flex-shrink: 0;
+}
+
+.refresh-account-btn:hover:not(:disabled),
+.refresh-position-btn:hover:not(:disabled) {
+    color: #007bff;
+    background: rgba(0, 123, 255, 0.1);
+}
+
+.refresh-account-btn:disabled,
+.refresh-position-btn:disabled {
+    color: #adb5bd;
+    cursor: not-allowed;
+}
+
+.refresh-account-btn:disabled svg,
+.refresh-position-btn:disabled svg {
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    from {
+        transform: rotate(0deg);
+    }
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+.refresh-account-btn svg,
+.refresh-position-btn svg {
+    transition: transform 0.2s ease;
+}
+
+/* 當按鈕被禁用或處於loading狀態時顯示旋轉動畫 */
+.refresh-account-btn:disabled svg,
+.refresh-position-btn:disabled svg,
+.refresh-account-btn.loading svg,
+.refresh-position-btn.loading svg {
+    animation: spin 1s linear infinite;
+}
+
+/* 禁用狀態的按鈕樣式 */
+.refresh-account-btn:disabled,
+.refresh-position-btn:disabled,
+.refresh-account-btn.loading,
+.refresh-position-btn.loading {
+    opacity: 0.7;
+    cursor: not-allowed;
+    background: rgba(0, 123, 255, 0.1);
+}
+
+/* 保持loading狀態時的hover效果 */
+.refresh-account-btn.loading:not(:disabled):hover,
+.refresh-position-btn.loading:not(:disabled):hover {
+    background-color: rgba(0, 123, 255, 0.15);
+}
+
+/* 確保loading狀態的視覺反饋 */
+.refresh-account-btn.loading,
+.refresh-position-btn.loading {
+    color: #007bff !important;
+    background: rgba(0, 123, 255, 0.1) !important;
+    border: 1px solid rgba(0, 123, 255, 0.2);
+}
+
+/* 帳戶狀態專用樣式 */
+.account-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 10px;
+}
+
+.account-title {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.account-header h4 {
+    color: #2c3e50;
+    margin: 0;
+    font-size: 1rem;
+    font-weight: 600;
+}
+
+.account-info-container {
+    background: #fff;
+    border-radius: 6px;
+    border: 1px solid #e9ecef;
+    padding: 12px;
+}
+
+.account-item {
+    display: flex;
+    align-items: center;
+    padding: 6px 0;
+    border-bottom: 1px solid #e9ecef;
+    width: 100%;
+}
+
+.account-item:last-child {
+    border-bottom: none;
+}
+
+.account-label {
+    color: #2c3e50;
+    font-size: 0.85rem;
+    font-weight: bold;
+    flex: 1;
+    margin-right: 10px;
+    text-align: left;
+}
+
+.account-value {
+    color: #6c757d;
+    font-weight: 600;
+    font-size: 0.85rem;
+    font-family: 'Courier New', monospace;
+    flex: 1;
+    text-align: right;
+}
+
+/* 帳戶數值顏色樣式 */
+.account-value.positive {
+    color: #dc3545; /* 紅色 - 正數 */
+}
+
+.account-value.negative {
+    color: #28a745; /* 綠色 - 負數 */
+}
+
+.account-value.neutral {
+    color: #6c757d; /* 灰色 - 零值 */
+}
+
+.account-value.risk-high {
+    color: #dc3545; /* 紅色 - 風險指標>100% */
+}
+
+.account-value.risk-low {
+    color: #28a745; /* 綠色 - 風險指標<100% */
+}
+
+.account-value.risk-normal {
+    color: #6c757d; /* 灰色 - 風險指標=100% */
+}
+
+/* 持倉狀態專用樣式 */
+.position-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 10px;
+}
+
+.position-title {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.position-header h4 {
+    color: #2c3e50;
+    margin: 0;
+    font-size: 1rem;
+    font-weight: 600;
+}
+
+.position-info-container {
+    background: #fff;
+    border-radius: 6px;
+    border: 1px solid #e9ecef;
+    padding: 12px;
+}
+
+.position-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 6px 0;
+    border-bottom: 1px solid #e9ecef;
+}
+
+.position-item:last-child {
+    border-bottom: none;
+}
+
+.position-label {
+    color: #2c3e50;
+    font-size: 0.85rem;
+    font-weight: bold;
+}
+
+.position-value {
+    color: #6c757d;
+    font-weight: 600;
+    font-size: 0.85rem;
+    font-family: 'Courier New', monospace;
+    text-align: right;
+}
+
+/* 持倉數值顏色樣式 */
+.position-value.positive {
+    color: #dc3545; /* 紅色 - 正數 */
+}
+
+.position-value.negative {
+    color: #28a745; /* 綠色 - 負數 */
+}
+
+.position-value.neutral {
+    color: #6c757d; /* 灰色 - 零值 */
+}
+
+.position-value.long {
+    color: #dc3545; /* 紅色 - 多單 */
+}
+
+.position-value.short {
+    color: #28a745; /* 綠色 - 空單 */
+}
+
+/* 持倉分組樣式 */
+.position-contract-section {
+    margin-bottom: 12px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid #f0f0f0;
+}
+
+.position-contract-section:last-child {
+    border-bottom: none;
+    margin-bottom: 0;
+}
+
+.position-contract-title {
+    font-weight: bold;
+    color: #2c3e50;
+    font-size: 0.9rem;
+    margin-bottom: 6px;
+    padding: 3px 6px;
+    background: #f8f9fa;
+    border-radius: 3px;
+    text-align: center;
+}
+
+.info-container {
+    background: #fff;
+    border-radius: 6px;
+    border: 1px solid #e9ecef;
+    padding: 12px;
+}
+
+.info-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 6px 0;
+    border-bottom: 1px solid #e9ecef;
+}
+
+.info-item:last-child {
+    border-bottom: none;
+}
+
+.info-label {
+    color: #2c3e50;
+    font-size: 0.85rem;
+    font-weight: bold;
+}
+
+.info-value {
+    color: #6c757d;
+    font-weight: 600;
+    font-size: 0.85rem;
+    font-family: 'Courier New', monospace;
+    text-align: center;
+    flex: 1;
+    margin-left: 10px;
+}
+
+/* BTC選用交易對特殊樣式 - 內容靠右對齊 */
+#available-contracts-btc .info-value {
+    text-align: right;
+}
+
+/* TX選用合約特殊樣式 - 內容靠右對齊 */
+#system-info-container .info-value {
+    text-align: right;
+}
+
+/* 可展開合約樣式 */
+.toggle-icon {
+    cursor: pointer;
+    transition: transform 0.3s ease;
+    color: #666;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.toggle-icon:hover {
+    color: #333;
+}
+
+.toggle-icon.collapsed {
+    transform: rotate(-90deg);
+}
+
+/* 響應式調整 - 保持橫向布局直到非常小的螢幕 */
+@media (max-width: 900px) {
+    .trade-content {
+        flex-direction: column;
+        gap: 20px;
+    }
+    
+    .left-info-section,
+    .right-info-section {
+        min-width: 100%;
+        width: 100%;
+    }
+    
+    #trade-panel.panel, #btc-trade-panel.panel {
+        max-width: 100%;
+        min-width: 100%;
+    }
+}
+
+/* 中等螢幕調整 - 保持橫向但縮小間距 */
+@media (max-width: 1200px) and (min-width: 901px) {
+    .trade-content {
+        gap: 15px;
+    }
+    
+    .left-info-section,
+    .right-info-section {
+        min-width: 350px;
+    }
+}
+
+/* 確保在所有尺寸下都保持橫向布局 - 已整合到主要定義中 */
+
+/* 登出按鈕樣式 */
+.logout-btn {
+    background: #dc3545;
+    color: #fff;
+    border: 1px solid #dc3545;
+    padding: 8px 20px;
+    border-radius: 4px;
+    font-size: 0.9rem;
+    font-weight: bold;
+    cursor: pointer;
+    transition: background 0.2s, border-color 0.2s;
+    margin-left: auto;
+}
+.logout-btn:hover {
+    background: #c82333;
+    border-color: #bd2130;
+}
+
+/* 可用合約和選用合約樣式 */
+.available-contracts {
+    margin-top: 10px;
+    padding: 10px;
+    background: #f8f9fa;
+    border-radius: 5px;
+    border: 1px solid #dee2e6;
+    transition: all 0.3s ease;
+}
+
+.contract-section {
+    margin-bottom: 15px;
+}
+
+.contract-section h5 {
+    margin: 0 0 8px 0;
+    color: #2c3e50;
+    font-size: 14px;
+    font-weight: bold;
+}
+
+.contract-list {
+    max-height: 150px;
+    overflow-y: auto;
+}
+
+.contract-item {
+    padding: 4px 8px;
+    margin: 2px 0;
+    background: white;
+    border: 1px solid #e9ecef;
+    border-radius: 3px;
+    font-size: 12px;
+    line-height: 1.4;
+}
+
+.contract-item:hover {
+    background: #e3f2fd;
+}
+
+.contract-code {
+    font-weight: bold;
+}
+
+.contract-details {
+    margin-left: 10px;
+}
+
+.contract-code,
+.contract-details {
+    color: #6c757d;
+}
+
+.info-container {
+    transition: all 0.3s ease;
+}
+
+/* 持倉狀態表格樣式 */
+.position-table {
+    width: 100%;
+}
+
+/* BTC持倉表格專用樣式 - 支援水平滾動 */
+#btc-position-table-container {
+    overflow-x: auto;
+    max-width: 100%;
+}
+
+#btc-position-table {
+    min-width: 100%;
+    white-space: nowrap;
+}
+
+/* 當有超過3個交易對時，啟用滾動 */
+#btc-position-table.scrollable {
+    min-width: 400px;
+}
+
+#btc-position-table.scrollable .position-table-header,
+#btc-position-table.scrollable .position-table-value {
+    min-width: 100px;
+    max-width: 120px;
+}
+
+/* 交易對居中顯示邏輯 */
+#btc-position-table.single-pair .position-table-header:not(:first-child),
+#btc-position-table.single-pair .position-table-value:not(:first-child) {
+    width: auto;
+    text-align: center;
+}
+
+#btc-position-table.dual-pair .position-table-header:not(:first-child),
+#btc-position-table.dual-pair .position-table-value:not(:first-child) {
+    width: 50%;
+}
+
+#btc-position-table.triple-pair .position-table-header:not(:first-child),
+#btc-position-table.triple-pair .position-table-value:not(:first-child) {
+    width: 33.33%;
+}
+
+.position-table-content {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.85rem;
+    background: #fff;
+    border-radius: 6px;
+    overflow: hidden;
+    border: 1px solid #e9ecef;
+}
+
+.position-table-content thead {
+    background: #f8f9fa;
+}
+
+.position-table-header {
+    padding: 8px 6px;
+    text-align: center;
+    color: #2c3e50;
+    font-weight: bold;
+    border-bottom: 2px solid #dee2e6;
+    border-right: 1px solid #dee2e6;
+}
+
+.position-table-header:last-child {
+    border-right: none;
+}
+
+.position-table-content tbody tr {
+    border-bottom: 1px solid #e9ecef;
+}
+
+.position-table-content tbody tr:last-child {
+    border-bottom: none;
+}
+
+.position-table-label {
+    padding: 6px 8px;
+    text-align: left;
+    color: #2c3e50;
+    font-weight: bold;
+    background: #f8f9fa;
+    border-right: 2px solid #dee2e6;
+    width: 80px;
+}
+
+.position-table-value {
+    padding: 6px 4px;
+    text-align: center;
+    color: #6c757d;
+    font-weight: 600;
+    font-family: 'Courier New', monospace;
+    border-right: 1px solid #e9ecef;
+    min-width: 80px;
+}
+
+.position-table-value:last-child {
+    border-right: none;
+}
+
+/* 持倉數值顏色樣式 */
+.position-table-value.positive {
+    color: #dc3545; /* 紅色 - 正數 */
+}
+
+.position-table-value.negative {
+    color: #28a745; /* 綠色 - 負數 */
+}
+
+.position-table-value.neutral {
+    color: #6c757d; /* 灰色 - 零值 */
+}
+
+.position-table-value.long {
+    color: #dc3545; /* 紅色 - 多單 */
+}
+
+.position-table-value.short {
+    color: #28a745; /* 綠色 - 空單 */
+}
+
+/* 金額顯示樣式 - 支援小字體單位 */
+.amount-with-unit {
+    display: inline-block;
+}
+
+.amount-with-unit .unit {
+    font-size: 0.8em;
+    opacity: 0.8;
+}
+
+/* 通用單位樣式 - 讓TWD等單位與USDT單位大小相同 */
+.unit {
+    font-size: 0.8em;
+    opacity: 0.8;
+}
+
+/* 盈虧顏色樣式 */
+.pnl-positive {
+    color: #28a745; /* 綠色 - 正數 */
+}
+
+.pnl-negative {
+    color: #dc3545; /* 紅色 - 負數 */
+}
+
+.pnl-neutral {
+    color: #6c757d; /* 灰色 - 零值 */
+}
+
+
+/* 持倉方向標籤樣式 */
+.position-direction-badge {
+    display: inline-block;
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-size: 12px;
+    font-weight: bold;
+    color: white;
+    margin-right: 8px;
+}
+
+.position-direction-none {
+    background-color: #6c757d; /* 灰色背景 - 無持倉 */
+}
+
+.position-direction-long {
+    background-color: #28a745; /* 綠色背景 - 多倉 */
+}
+
+.position-direction-short {
+    background-color: #dc3545; /* 紅色背景 - 空倉 */
+}
+
+/* 交易對標題樣式 */
+.trading-pair-main {
+    display: inline-block;
+}
+
+
+/* 持倉方向顏色 */
+.position-direction-long {
+    color: #28a745 !important; /* 多單綠色 */
+}
+
+.position-direction-short {
+    color: #dc3545 !important; /* 空單紅色 */
+}
+
+/* 持倉數量分隔線樣式 */
+.position-amount-separator {
+    height: 1px;
+    background-color: #e0e0e0;
+    margin: 3px 0;
+    opacity: 0.6;
+}
+
+/* 總損益樣式 */
+.position-total-pnl {
+    margin-top: 12px;
+    padding: 8px 12px;
+    background: #f8f9fa;
+    border-radius: 6px;
+    border: 1px solid #dee2e6;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.position-total-label {
+    color: #2c3e50;
+    font-size: 0.9rem;
+    font-weight: bold;
+}
+
+.position-total-value {
+    color: #6c757d;
+    font-weight: bold;
+    font-size: 0.9rem;
+    font-family: 'Courier New', monospace;
+}
+
+.position-total-value.positive {
+    color: #dc3545; /* 紅色 - 正數 */
+}
+
+.position-total-value.negative {
+    color: #28a745; /* 綠色 - 負數 */
+}
+
+.position-total-value.neutral {
+    color: #6c757d; /* 灰色 - 零值 */
+}
+
+/* 響應式設計 - 小螢幕調整 */
+@media (max-width: 600px) {
+    .position-table-content {
+        font-size: 0.75rem;
+    }
+    
+    .position-table-header,
+    .position-table-label,
+    .position-table-value {
+        padding: 4px 2px;
+    }
+    
+    .position-table-label {
+        width: 60px;
+    }
+    
+    .position-table-value {
+        min-width: 60px;
+    }
+}
+
+/* 隱藏金額按鈕樣式 */
+.hide-amount-btn {
+    background: none;
+    border: none;
+    color: #6c757d;
+    padding: 4px;
+    border-radius: 3px;
+    cursor: pointer;
+    transition: color 0.2s ease;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-left: 4px;
+    width: 24px;
+    height: 24px;
+    flex-shrink: 0;
+}
+
+.hide-amount-btn:hover {
+    color: #007bff;
+    background: rgba(0, 123, 255, 0.1);
+}
+
+.hide-amount-btn svg {
+    transition: opacity 0.2s ease;
+}
+
+.hide-amount-btn .eye-open,
+.hide-amount-btn .eye-closed {
+    width: 16px;
+    height: 16px;
+}
+
+/* 確保標題區域的按鈕對齊 */
+.account-title,
+.position-title {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.refresh-account-btn,
+.refresh-position-btn {
+    background: none;
+    border: none;
+    color: #6c757d;
+    padding: 4px;
+    border-radius: 3px;
+    cursor: pointer;
+    transition: color 0.2s ease;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    flex-shrink: 0;
+}
+
+/* shioaji 更新相關樣式 */
+.modal {
+    display: none;
+    position: fixed;
+    z-index: 1000;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0, 0, 0, 0.5);
+    backdrop-filter: blur(2px);
+}
+
+.modal-content {
+    background-color: #fff;
+    margin: 2% auto;
+    padding: 0;
+    border-radius: 12px;
+    width: 90%;
+    max-width: 500px;
+    max-height: 95vh;
+    overflow-y: auto;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+    animation: modalSlideIn 0.3s ease-out;
+}
+
+@keyframes modalSlideIn {
+    from {
+        opacity: 0;
+        transform: translateY(-50px) scale(0.9);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+    }
+}
+
+.modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 20px 24px;
+    border-bottom: 1px solid #e0e0e0;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+    border-radius: 12px 12px 0 0;
+}
+
+.modal-header h3 {
+    margin: 0;
+    font-size: 1.2rem;
+    font-weight: 600;
+}
+
+.close {
+    color: #fff;
+    font-size: 28px;
+    font-weight: bold;
+    cursor: pointer;
+    line-height: 1;
+    transition: opacity 0.2s;
+}
+
+.close:hover {
+    opacity: 0.7;
+}
+
+.modal-body {
+    padding: 24px;
+}
+
+.modal-footer {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 12px;
+    padding: 20px;
+    flex-shrink: 0; /* 防止footer被壓縮 */
+    background: #fff; /* 確保背景色 */
+    border-top: 1px solid #e0e0e0;
+}
+
+.update-version-info {
+    background: #f8f9fa;
+    padding: 16px;
+    border-radius: 8px;
+    margin-bottom: 20px;
+    border-left: 4px solid #007bff;
+}
+
+.update-version-info p {
+    margin: 8px 0;
+    font-size: 0.95rem;
+}
+
+.update-version-info strong {
+    color: #495057;
+}
+
+.update-warning {
+    background: #fff3cd;
+    border: 1px solid #ffeaa7;
+    padding: 16px;
+    border-radius: 8px;
+    margin-bottom: 20px;
+    border-left: 4px solid #ffc107;
+}
+
+.update-warning p {
+    margin: 8px 0;
+    color: #856404;
+    font-weight: 600;
+}
+
+.update-warning ul {
+    margin: 12px 0;
+    padding-left: 20px;
+}
+
+.update-warning li {
+    margin: 6px 0;
+    color: #856404;
+    font-size: 0.9rem;
+}
+
+.update-buttons {
+    display: flex;
+    gap: 12px;
+    justify-content: flex-end;
+}
+
+.btn-primary {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+    border: none;
+    padding: 12px 24px;
+    border-radius: 6px;
+    font-size: 0.95rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+    box-shadow: 0 2px 8px rgba(102, 126, 234, 0.3);
+}
+
+.btn-primary:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+}
+
+.btn-primary:active {
+    transform: translateY(0);
+}
+
+.btn-secondary {
+    background: #6c757d;
+    color: white;
+    border: none;
+    padding: 12px 24px;
+    border-radius: 6px;
+    font-size: 0.95rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.btn-secondary:hover {
+    background: #5a6268;
+    transform: translateY(-1px);
+}
+
+.btn-warning {
+    background: linear-gradient(135deg, #ff9500 0%, #ff6b35 100%);
+    color: white;
+    border: none;
+    padding: 12px 24px;
+    border-radius: 6px;
+    font-size: 0.95rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+    box-shadow: 0 2px 8px rgba(255, 149, 0, 0.3);
+}
+
+.btn-warning:hover {
+    background: linear-gradient(135deg, #e68900 0%, #e55a2b 100%);
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(255, 149, 0, 0.4);
+}
+
+.btn-warning:active {
+    transform: translateY(0);
+}
+
+.update-progress {
+    text-align: center;
+    margin-bottom: 20px;
+}
+
+.progress-bar {
+    width: 100%;
+    height: 8px;
+    background-color: #e9ecef;
+    border-radius: 4px;
+    overflow: hidden;
+    margin-bottom: 16px;
+}
+
+.progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+    width: 0%;
+    transition: width 0.3s ease;
+    border-radius: 4px;
+}
+
+.update-output {
+    background: #f8f9fa;
+    border: 1px solid #dee2e6;
+    border-radius: 8px;
+    padding: 16px;
+    margin-top: 20px;
+}
+
+.update-output h4 {
+    margin: 0 0 12px 0;
+    color: #495057;
+    font-size: 1rem;
+}
+
+.update-output pre {
+    background: #fff;
+    border: 1px solid #e9ecef;
+    border-radius: 4px;
+    padding: 12px;
+    margin: 0;
+    font-size: 0.85rem;
+    line-height: 1.4;
+    color: #495057;
+    max-height: 200px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+}
+
+/* 響應式設計 */
+@media (max-width: 600px) {
+    .modal-content {
+        width: 95%;
+        margin: 5px auto;
+        max-height: 98vh;
+        overflow-y: auto;
+    }
+    
+    .modal-header {
+        padding: 16px 20px;
+    }
+    
+    .modal-body {
+        padding: 20px;
+    }
+    
+    .update-buttons {
+        flex-direction: column;
+    }
+    
+    .modal-footer {
+        flex-direction: column;
+        gap: 8px;
+        padding: 16px;
+    }
+    
+    .btn-primary,
+    .btn-secondary,
+    .btn-warning {
+        width: 100%;
+        padding: 12px 16px;
+        font-size: 14px;
+        margin-bottom: 0;
+    }
+}
+
+/* 帳戶狀態 checkbox 樣式 */
+.account-checkbox {
+    margin-right: 8px;
+    cursor: pointer;
+    width: 16px;
+    height: 16px;
+    accent-color: #007bff;
+    flex-shrink: 0;
+}
+
+.account-item {
+    display: flex;
+    align-items: center;
+    padding: 6px 0;
+    border-bottom: 1px solid #e9ecef;
+    width: 100%;
+}
+
+.account-item:last-child {
+    border-bottom: none;
+}
+
+/* 當帳戶狀態收起時，隱藏未勾選的項目 */
+.account-info-container.collapsed .account-item:not(.pinned) {
+    display: none !important;
+}
+
+/* 勾選的項目標記 - 移除特殊樣式，保持單純 */
+.account-item.pinned {
+    /* 移除特殊樣式，保持原本外觀 */
+}
+
+/* 收起狀態時，勾選的項目仍然顯示 */
+.account-info-container.collapsed .account-item.pinned {
+    display: flex !important;
+}
+
+/* 收起狀態時，顯示的勾選項目中的最後一個下面不要有線 */
+.account-info-container.collapsed .account-item.pinned:last-of-type {
+    border-bottom: none !important;
+}
+
+/* 當收起且沒有勾選項目時，完全隱藏帳戶狀態容器 */
+.account-info-container.collapsed:not(:has(.account-item.pinned)) {
+    display: none !important;
+}
+
+/* 備用方案：使用 JavaScript 來處理最後一個項目的樣式 */
+
+.contract-title {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.contract-title h4 {
+    margin: 0;
+}
+
+/* 測試功能樣式已移除 */
+
+/* ngrok設置模態窗口額外樣式 */
+#ngrok-setup-modal .modal-content {
+    max-width: 500px;
+}
+
+#ngrok-setup-modal .form-group {
+    margin-bottom: 16px;
+}
+
+#ngrok-setup-modal .form-group label {
+    display: block;
+    margin-bottom: 8px;
+    color: #ffffff;
+    font-weight: 500;
+}
+
+/* tunnel設置模態窗口額外樣式 - 新增支援 */
+#tunnel-setup-modal .modal-content {
+    max-width: 500px;
+}
+
+#tunnel-setup-modal .form-group {
+    margin-bottom: 16px;
+}
+
+#tunnel-setup-modal .form-group label {
+    display: block;
+    margin-bottom: 8px;
+    color: #ffffff;
+    font-weight: 500;
+}
+
+/* 密碼輸入容器 */
+.password-input-container {
+    position: relative;
+    display: block; /* 改為block避免flex影響 */
+    margin-bottom: 10px;
+    height: 44px; /* 固定容器高度 */
+}
+
+#ngrok-setup-modal input[type="text"],
+#ngrok-setup-modal input[type="password"] {
+    width: 100%;
+    height: 44px; /* 固定高度避免變化 */
+    padding: 0 50px 0 12px; /* 右邊增加空間給更大的按鈕 */
+    border: 1px solid #404040;
+    border-radius: 4px;
+    background-color: #2a2a2a;
+    color: #ffffff;
+    font-size: 14px;
+    font-family: inherit;
+    letter-spacing: normal;
+    line-height: 44px; /* 與高度相同，確保垂直置中 */
+    box-sizing: border-box;
+}
+
+/* 特別針對password模式調整 */
+#ngrok-setup-modal input[type="password"] {
+    font-size: 18px; /* 稍微調大但不要太大 */
+    line-height: 44px; /* 保持相同行高 */
+}
+
+#ngrok-setup-modal input[type="text"]:focus,
+#ngrok-setup-modal input[type="password"]:focus {
+    outline: none;
+    border-color: #007bff;
+    box-shadow: 0 0 0 2px rgba(0, 123, 255, 0.25);
+}
+
+#tunnel-setup-modal input[type="text"],
+#tunnel-setup-modal input[type="password"] {
+    width: 100%;
+    height: 44px; /* 固定高度避免變化 */
+    padding: 0 50px 0 12px; /* 右邊增加空間給更大的按鈕 */
+    border: 1px solid #404040;
+    border-radius: 4px;
+    background-color: #2a2a2a;
+    color: #ffffff;
+    font-size: 14px;
+    font-family: inherit;
+    letter-spacing: normal;
+    line-height: 44px; /* 與高度相同，確保垂直置中 */
+    box-sizing: border-box;
+}
+
+/* 統一text和password的字體大小，避免忽大忽小 */
+#tunnel-setup-modal input[type="password"] {
+    font-size: 14px !important; /* 與text模式相同 */
+    line-height: 44px; /* 保持相同行高 */
+}
+
+#tunnel-setup-modal input[type="text"]:focus,
+#tunnel-setup-modal input[type="password"]:focus {
+    outline: none;
+    border-color: #007bff;
+    box-shadow: 0 0 0 2px rgba(0, 123, 255, 0.25);
+}
+
+/* 顯示/隱藏按鈕 */
+.password-toggle-btn {
+    position: absolute;
+    right: 5px;
+    top: 5px;
+    width: 34px; /* 設定按鈕寬度 */
+    height: 34px; /* 設定按鈕高度 */
+    background: none;
+    border: none;
+    color: #999999;
+    cursor: pointer;
+    border-radius: 4px;
+    transition: none; /* 移除transition避免LAG */
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.password-toggle-btn:hover {
+    color: #ffffff;
+    background-color: rgba(255, 255, 255, 0.15);
+}
+
+.password-toggle-btn:active {
+    background-color: rgba(255, 255, 255, 0.25);
+    transform: scale(0.95);
+}
+
+/* SVG圖示樣式 */
+.password-toggle-btn svg {
+    width: 18px;
+    height: 18px;
+    flex-shrink: 0;
+}
+
+#ngrok-setup-modal small {
+    font-size: 14px;
+    color: #999;
+    margin-top: 8px;
+    display: block;
+}
+
+#ngrok-setup-modal small a {
+    color: #007bff;
+    text-decoration: none;
+}
+
+#ngrok-setup-modal small a:hover {
+    text-decoration: underline;
+}
+
+#tunnel-setup-modal small {
+    font-size: 14px;
+    color: #999;
+    margin-top: 8px;
+    display: block;
+}
+
+#tunnel-setup-modal small a {
+    color: #007bff;
+    text-decoration: none;
+}
+
+#tunnel-setup-modal small a:hover {
+    text-decoration: underline;
+}
+
+#setup-status {
+    margin: 12px 0;
+    padding: 8px 12px;
+    border-radius: 4px;
+    font-size: 14px;
+    min-height: 20px;
+}
+
+#setup-status div[style*="color: green"] {
+    background-color: rgba(40, 167, 69, 0.1);
+    border: 1px solid rgba(40, 167, 69, 0.3);
+    color: #28a745;
+}
+
+#setup-status div[style*="color: red"] {
+    background-color: rgba(220, 53, 69, 0.1);
+    border: 1px solid rgba(220, 53, 69, 0.3);
+    color: #dc3545;
+}
+
+#setup-status div[style*="color: blue"] {
+    background-color: rgba(0, 123, 255, 0.1);
+    border: 1px solid rgba(0, 123, 255, 0.3);
+    color: #007bff;
+}
+
+/* ngrok Token 管理區域樣式 */
+.ngrok-token-management {
+    background-color: #2a2a2a;
+    border: 1px solid #404040;
+    border-radius: 6px;
+    padding: 16px;
+    margin-top: 8px;
+}
+
+/* tunnel Token 管理區域樣式 - 新增支援 */
+.tunnel-token-management {
+    background-color: #2a2a2a;
+    border: 1px solid #404040;
+    border-radius: 6px;
+    padding: 16px;
+    margin-top: 8px;
+}
+
+.token-status {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 12px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid #404040;
+}
+
+.token-label {
+    color: #999999;
+    font-size: 14px;
+    font-weight: 500;
+}
+
+.token-value {
+    color: #ffffff;
+    font-size: 14px;
+    font-family: monospace;
+}
+
+.token-value.saved {
+    color: #28a745;
+}
+
+.token-value.not-saved {
+    color: #6c757d;
+}
+
+.token-actions {
+    display: flex;
+    gap: 12px;
+    justify-content: flex-start;
+}
+
+.token-btn {
+    padding: 8px 16px;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 500;
+    transition: all 0.2s ease;
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.token-btn:not(.secondary) {
+    background-color: #007bff;
+    color: white;
+}
+
+.token-btn:not(.secondary):hover {
+    background-color: #0056b3;
+    transform: translateY(-1px);
+}
+
+.token-btn.secondary {
+    background-color: transparent;
+    color: #dc3545;
+    border: 1px solid #dc3545;
+}
+
+.token-btn.secondary:hover {
+    background-color: #dc3545;
+    color: white;
+    transform: translateY(-1px);
+}
+
+/* 響應式設計 */
+@media (max-width: 600px) {
+    .token-actions {
+        flex-direction: column;
+    }
+    
+    .token-btn {
+        width: 100%;
+        justify-content: center;
+    }
+    
+    .token-status {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 8px;
+    }
+}
+
+/* 隧道設置樣式 */
+.service-config {
+    margin-top: 20px;
+}
+
+.service-info {
+    margin-top: 15px;
+    padding: 15px;
+    background: #f8f9fa;
+    border-radius: 8px;
+    border-left: 4px solid #3498db;
+}
+
+.service-features {
+    margin-bottom: 20px;
+}
+
+.service-features h5 {
+    margin: 0 0 10px 0;
+    color: #2c3e50;
+    font-size: 14px;
+}
+
+.service-features ul {
+    margin: 0;
+    padding-left: 20px;
+}
+
+.service-features li {
+    margin-bottom: 5px;
+    color: #34495e;
+    font-size: 13px;
+}
+
+.service-setup {
+    border-top: 1px solid #e9ecef;
+    padding-top: 15px;
+}
+
+.service-setup h5 {
+    margin: 0 0 10px 0;
+    color: #2c3e50;
+    font-size: 14px;
+}
+
+.service-setup ol {
+    margin: 0;
+    padding-left: 20px;
+}
+
+.service-setup li {
+    margin-bottom: 5px;
+    color: #34495e;
+    font-size: 13px;
+    line-height: 1.4;
+}
+
+.service-setup a {
+    color: #3498db;
+    text-decoration: none;
+}
+
+.service-setup a:hover {
+    text-decoration: underline;
+}
+
+.service-setup strong {
+    color: #2c3e50;
+}
+
+#tunnel-service-type {
+    width: 100%;
+    padding: 10px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    background: white;
+    font-size: 14px;
+    margin-bottom: 15px;
+}
+
+#tunnel-service-type:focus {
+    outline: none;
+    border-color: #3498db;
+    box-shadow: 0 0 0 2px rgba(52, 152, 219, 0.2);
+}
+
+/* 交易對容器布局 */
+.trading-pair-container-single {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 4px;
+    font-size: 0.9em;
+}
+
+.trading-pair-info {
+    display: flex;
+    gap: 3px;
+    font-size: 0.35em;
+    color: #333;
+}
+
+
+
+/* 持倉狀態樣式 */
+.position-direction-badge {
+    display: inline-block;
+    height: 20px;
+    border-radius: 3px;
+    font-size: 12px;
+    font-weight: bold;
+    color: white;
+    margin-right: 0px;
+    text-align: center;
+    line-height: 20px;
+    padding: 0 4px;
+    
+    /* 預設樣式（無持倉） */
+    background-color: #6c757d;
+}
+
+.position-direction-badge.long {
+    background-color: #28a745;
+}
+
+.position-direction-badge.short {
+    background-color: #dc3545;
+}
+
+.position-direction-long {
+    background-color: #27ae60;
+}
+
+.position-direction-short {
+    background-color: #e74c3c;
+}
+
+.position-direction-none {
+    background-color: #95a5a6;
+}
+
+.trading-pair-type, .trading-pair-margin {
+    display: inline-block;
+    padding: 0.5px 3px;
+    border-radius: 4px;
+    font-size: 12px;
+    margin-left: 4px;
+}
+
+.trading-pair-type {
+    background-color: #95a5a6;
+    color: white;
+}
+
+.trading-pair-margin {
+    background-color: #95a5a6;
+    color: white;
+}
+
+/* 域名選擇模式樣式 */
+.domain-options {
+    margin: 20px 0;
+}
+
+.domain-option {
+    position: relative;
+    border: 3px solid transparent;
+    border-radius: 12px;
+    padding: 20px;
+    margin: 15px 0;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    background: #fff;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.domain-option:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.15);
+}
+
+.domain-option.selected {
+    border-color: #2196f3;
+    background: #f3f8ff;
+    box-shadow: 0 0 0 2px rgba(33, 150, 243, 0.2);
+}
+
+.domain-option.selected::before {
+    content: "✓ 已選擇";
+    position: absolute;
+    top: 10px;
+    right: 15px;
+    background: #2196f3;
+    color: white;
+    padding: 4px 8px;
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: bold;
+}
+
+.domain-option h6 {
+    margin: 0 0 12px 0;
+    font-weight: bold;
+    font-size: 16px;
+}
+
+.domain-option p {
+    margin: 8px 0;
+    line-height: 1.5;
+}
+
+.domain-option button {
+    margin-top: 15px;
+    padding: 12px 24px;
+    border: none;
+    border-radius: 8px;
+    font-weight: bold;
+    font-size: 14px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    min-width: 120px;
+}
+
+.domain-option button:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+}
+
+.domain-option button:active {
+    transform: translateY(0);
+}
+
+/* 臨時域名樣式 */
+.domain-option:first-child {
+    border-color: #27ae60;
+    background: #f8fff8;
+}
+
+.domain-option:first-child.selected {
+    border-color: #27ae60;
+    background: #e8f5e8;
+    box-shadow: 0 0 0 2px rgba(39, 174, 96, 0.2);
+}
+
+.domain-option:first-child.selected::before {
+    background: #27ae60;
+}
+
+/* 自訂域名樣式 */
+.domain-option:last-child {
+    border-color: #ff9800;
+    background: #fff8e1;
+}
+
+.domain-option:last-child.selected {
+    border-color: #ff9800;
+    background: #fff3e0;
+    box-shadow: 0 0 0 2px rgba(255, 152, 0, 0.2);
+}
+
+.domain-option:last-child.selected::before {
+    background: #ff9800;
+}
+
+/* TX 帳戶資訊獨立容器樣式 */
+.tx-account-info-section {
+    background: #f8f9fa;
+    border-radius: 8px;
+    padding: 20px;
+    border: 1px solid #e9ecef;
+    margin-top: 20px;
+}
+
+ 
