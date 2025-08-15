@@ -1,0 +1,65 @@
+[
+  {
+    "timestamp": "2025-07-28T09:54:13.826351",
+    "old_url": "https://interference-tribes-specials-slovenia.trycloudflare.com",
+    "new_url": "https://neil-refined-sponsorship-theft.trycloudflare.com",
+    "reason": "進程終止",
+    "tunnel_type": "btc"
+  },
+  {
+    "timestamp": "2025-07-28T09:54:45.209689",
+    "old_url": "https://austin-colony-fighting-dsc.trycloudflare.com",
+    "new_url": "https://campaigns-remote-missed-publish.trycloudflare.com",
+    "reason": "進程終止",
+    "tunnel_type": "tx"
+  },
+  {
+    "timestamp": "2025-07-28T09:54:55.147417",
+    "old_url": "https://neil-refined-sponsorship-theft.trycloudflare.com",
+    "new_url": "https://tear-jun-conducted-beautiful.trycloudflare.com",
+    "reason": "進程終止",
+    "tunnel_type": "btc"
+  },
+  {
+    "timestamp": "2025-07-28T09:55:14.013773",
+    "old_url": "https://campaigns-remote-missed-publish.trycloudflare.com",
+    "new_url": "https://classifieds-wv-info-administered.trycloudflare.com",
+    "reason": "重連失敗後的延遲重試",
+    "tunnel_type": "tx"
+  },
+  {
+    "timestamp": "2025-07-28T09:55:40.126852",
+    "old_url": "https://tear-jun-conducted-beautiful.trycloudflare.com",
+    "new_url": "https://latter-distribute-circuit-lenders.trycloudflare.com",
+    "reason": "進程終止",
+    "tunnel_type": "btc"
+  },
+  {
+    "timestamp": "2025-07-28T09:55:58.095246",
+    "old_url": "https://classifieds-wv-info-administered.trycloudflare.com",
+    "new_url": "https://res-coleman-been-df.trycloudflare.com",
+    "reason": "進程終止",
+    "tunnel_type": "tx"
+  },
+  {
+    "timestamp": "2025-07-28T09:56:21.959831",
+    "old_url": "https://latter-distribute-circuit-lenders.trycloudflare.com",
+    "new_url": "https://tune-settings-gps-salvador.trycloudflare.com",
+    "reason": "進程終止",
+    "tunnel_type": "btc"
+  },
+  {
+    "timestamp": "2025-07-28T10:03:38.634206",
+    "old_url": "https://pressure-mysql-champions-mountain.trycloudflare.com",
+    "new_url": "https://inherited-lopez-wav-graphs.trycloudflare.com",
+    "reason": "連續健康檢查失敗",
+    "tunnel_type": "tx"
+  },
+  {
+    "timestamp": "2025-07-28T10:03:48.877680",
+    "old_url": "https://sells-don-overseas-subjects.trycloudflare.com",
+    "new_url": "https://publicly-followed-holders-findarticles.trycloudflare.com",
+    "reason": "進程終止",
+    "tunnel_type": "btc"
+  }
+]
