@@ -1,11 +1,13 @@
 {
-  "version": "1.0.2",
-  "build": "202508152200",
-  "release_date": "2025-08-15",
-  "description": "v1.0.2 - Auto91雙系統自動交易平台TX訂單處理緊急修復版本",
+  "version": "1.0.3",
+  "build": "202508202300",
+  "release_date": "2025-08-20",
+  "description": "v1.0.3 - TradingView重複訊號檢測優化版本",
   "github_repo": "LAON7877/Auto91",
   "update_url": "https://api.github.com/repos/LAON7877/Auto91/releases/latest",
   "changelog": [
+    "v1.0.3 TradingView重複訊號檢測優化：防止重複訊號觸發多次交易",
+    "v1.0.3 交易訊號處理邏輯優化：提升系統穩定性和準確性",
     "v1.0.2 TX訂單變數定義順序修復：解決重複失敗通知問題",
     "v1.0.2 修復place_futures_order_tx_style函數邏輯錯誤",
     "v1.0.2 消除webhook訊號處理時的運行時錯誤",
@@ -52,7 +54,7 @@
     "config/tx.env",
     "config/btc.env"
   ],
-  "updated_at": "2025-08-15T22:00:00.000000",
+  "updated_at": "2025-08-20T23:00:00.000000",
   "updated_files": [
     "index/main.py",
     "index/version.json", 
