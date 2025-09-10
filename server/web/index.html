@@ -1,0 +1,973 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8">
+    <title>Auto91－量化交易</title>
+    <link rel="stylesheet" href="style.css">
+    <link rel="icon" type="image/x-icon" href="favicon.ico">
+</head>
+<body>
+    <!-- 固定側邊欄（滾動時顯示） -->
+    <div class="sidebar-tabs" id="sidebar-tabs">
+        <button class="sidebar-btn active" onclick="showPanel('settings')" data-panel="settings">
+            <span>帳<br>戶<br>設<br>置</span>
+        </button>
+        <button class="sidebar-btn" onclick="showPanel('trade')" data-panel="trade">
+            <span>T<br>X<br>交<br>易</span>
+        </button>
+        <button class="sidebar-btn" onclick="showPanel('btc-trade')" data-panel="btc-trade">
+            <span>B<br>T<br>C<br>交<br>易</span>
+        </button>
+    </div>
+
+    <div class="tabs">
+        <div class="tab-buttons">
+            <button class="tab-btn active" onclick="showPanel('settings')">帳戶設置</button>
+            <button class="tab-btn" onclick="showPanel('trade')">TX交易</button>
+            <button class="tab-btn" onclick="showPanel('btc-trade')">BTC交易</button>
+        </div>
+        <div class="version-info">
+            <span id="app-version">載入中...</span>
+        </div>
+    </div>
+    <div id="settings-panel" class="panel">
+        <div class="accounts-container">
+            <!-- TX帳戶面板 -->
+            <div class="account-panel tx-panel">
+                <div class="panel-header">
+                    <h2>TX帳戶面板</h2>
+                    <div class="button-group">
+                        <button id="register-tunnel-btn" type="button" onclick="showTunnelSetupModal('tx')">設置隧道</button>
+                        <button id="save-btn" type="button" onclick="saveEnv(event)">儲存</button>
+                        <button id="login-btn" type="button" onclick="login()" disabled>啟動</button>
+                    </div>
+                </div>
+        <form id="envForm" onsubmit="return false;">
+            <div class="form-group">
+                <label>Telegram Bot</label>
+                <div class="input-copy-row">
+                    <input type="text" id="bot-username" value="@Auto91_TxBot" readonly>
+                    <button type="button" class="copy-btn" onclick="copyUsername()">複製</button>
+                    <button type="button" class="refresh-btn" onclick="refreshBotUsername()">刷新</button>
+                </div>
+            </div>
+            <div class="form-group">
+                <label for="chat_id">Telegram ID</label>
+                <div class="input-copy-row">
+                    <input type="text" id="chat_id" name="CHAT_ID" required placeholder="請輸入您的 Telegram 識別 ID">
+                    <button type="button" class="copy-btn" onclick="showTgIdHelp()">如何取得ID？</button>
+                </div>
+            </div>
+            <div class="form-group">
+                <label for="api_key">永豐 API Key</label>
+                <input type="text" id="api_key" name="API_KEY" required maxlength="44" placeholder="請輸入您的44碼API Key">
+            </div>
+            <div class="form-group">
+                <label for="secret_key">永豐 Secret Key</label>
+                <input type="text" id="secret_key" name="SECRET_KEY" required maxlength="44" placeholder="請輸入您的44碼Secret Key">
+            </div>
+            <div class="form-group">
+                <label for="person_id">身份證字號</label>
+                <input type="text" id="person_id" name="PERSON_ID" required maxlength="10" placeholder="請輸入您的身份證字號 例：A123456789">
+            </div>
+            <div class="form-group">
+                <label>台股日曆</label>
+                <div class="file-input-row">
+                    <input type="file" id="holiday_file" accept=".csv">
+                    <button type="button" class="download-btn" onclick="downloadHoliday()">下載日曆</button>
+                </div>
+                <span id="holiday-upload-status"></span>
+            </div>
+            <div class="form-group">
+                <label>憑證檔案</label>
+                <input type="file" id="ca_file" accept=".pfx">
+                <span id="ca-upload-status"></span>
+            </div>
+            <div class="form-group">
+                <label for="ca_passwd">憑證密碼</label>
+                <input type="text" id="ca_passwd" name="CA_PASSWD" required placeholder="請輸入您申請憑證時設定的密碼">
+                <div class="input-hint">
+                    ⚠️此密碼為您向永豐證券申請憑證時自行設定的密碼，預設初始密碼通常是身分證字號<br>
+                </div>
+            </div>
+            <div class="form-group">
+                <label for="cert_start">憑證起始日</label>
+                <input type="datetime-local" id="cert_start" name="CERT_START" required onchange="autoSetCertEnd()" step="1">
+            </div>
+            <div class="form-group">
+                <label for="cert_end">憑證到期日</label>
+                <input type="text" id="cert_end" name="CERT_END" readonly>
+            </div>
+            
+
+            
+            <span id="save-status"></span>
+        </form>
+            </div>
+
+            <!-- BTC帳戶面板 -->
+            <div class="account-panel btc-panel">
+                <div class="panel-header">
+                    <h2>BTC帳戶面板</h2>
+                    <div class="button-group">
+                        <button id="register-tunnel-btn-btc" type="button" onclick="showTunnelSetupModal('btc')">設置隧道</button>
+                        <button id="save-btn-btc" type="button" onclick="saveBtcEnv(event)">儲存</button>
+                        <button id="login-btn-btc" type="button" onclick="loginBtc()" disabled>啟動</button>
+                    </div>
+                </div>
+                <form id="btcEnvForm" onsubmit="return false;">
+                    <div class="form-group">
+                        <label>Telegram Bot</label>
+                        <div class="input-copy-row">
+                            <input type="text" id="bot-username-btc" value="載入中..." readonly>
+                            <button type="button" class="copy-btn" onclick="copyUsernameBtc()">複製</button>
+                            <button type="button" class="refresh-btn" onclick="refreshBotUsernameBtc()">刷新</button>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label for="chat_id_btc">Telegram ID</label>
+                        <div class="input-copy-row">
+                            <input type="text" id="chat_id_btc" name="CHAT_ID_BTC" required placeholder="請輸入您的 Telegram 識別 ID">
+                            <button type="button" class="copy-btn" onclick="showTgIdHelp()">如何取得ID？</button>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label for="binance_api_key">幣安 API Key</label>
+                        <input type="text" id="binance_api_key" name="BINANCE_API_KEY" required placeholder="請輸入您的幣安API Key">
+                    </div>
+                    <div class="form-group">
+                        <label for="binance_secret_key">幣安 Secret Key</label>
+                        <input type="text" id="binance_secret_key" name="BINANCE_SECRET_KEY" required placeholder="請輸入您的幣安Secret Key">
+                    </div>
+                    <div class="form-group">
+                        <label for="binance_user_id">幣安 UID</label>
+                        <input type="text" id="binance_user_id" name="BINANCE_USER_ID" required placeholder="請輸入您的幣安用戶ID">
+                    </div>
+                    <div class="form-group">
+                        <label for="trading_pair">交易對</label>
+                        <select id="trading_pair" name="TRADING_PAIR" required>
+                            <option value="BTCUSDT" selected>BTCUSDT</option>
+                        </select>
+                        <div class="input-hint">
+                            ⚠️目前僅支援BTCUSDT交易對，後續將新增更多選項<br>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label for="contract_type">合約類型</label>
+                        <select id="contract_type" name="CONTRACT_TYPE" required>
+                            <option value="PERPETUAL">PERPETUAL 永續合約</option>
+                        </select>
+                        <div class="input-hint">
+                            ⚠️目前僅支援永續合約，後續將新增更多合約類型<br>
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="margin_type">保證金模式</label>
+                        <select id="margin_type" name="MARGIN_TYPE" required>
+                            <option value="CROSS" selected>全倉</option>
+                            <option value="ISOLATED">逐倉</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="leverage">槓桿倍數</label>
+                        <select id="leverage" name="LEVERAGE" required>
+                            <option value="1">1倍</option>
+                            <option value="2">2倍</option>
+                            <option value="3">3倍</option>
+                            <option value="4">4倍</option>
+                            <option value="5">5倍</option>
+                            <option value="6">6倍</option>
+                            <option value="7">7倍</option>
+                            <option value="8">8倍</option>
+                            <option value="9">9倍</option>
+                            <option value="10">10倍</option>
+                            <option value="11">11倍</option>
+                            <option value="12">12倍</option>
+                            <option value="13">13倍</option>
+                            <option value="14">14倍</option>
+                            <option value="15">15倍</option>
+                            <option value="16">16倍</option>
+                            <option value="17">17倍</option>
+                            <option value="18">18倍</option>
+                            <option value="19">19倍</option>
+                            <option value="20" selected>20倍</option>
+                            <option value="25">25倍</option>
+                            <option value="30">30倍</option>
+                            <option value="40">40倍</option>
+                            <option value="50">50倍</option>
+                            <option value="75">75倍</option>
+                            <option value="100">100倍</option>
+                            <option value="125">125倍</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="position_size">風險比例</label>
+                        <select id="position_size" name="POSITION_SIZE" required>
+                            <option value="1">1%</option>
+                            <option value="2">2%</option>
+                            <option value="3">3%</option>
+                            <option value="4">4%</option>
+                            <option value="5">5%</option>
+                            <option value="6">6%</option>
+                            <option value="7">7%</option>
+                            <option value="8">8%</option>
+                            <option value="9">9%</option>
+                            <option value="10">10%</option>
+                            <option value="11">11%</option>
+                            <option value="12">12%</option>
+                            <option value="13">13%</option>
+                            <option value="14">14%</option>
+                            <option value="15">15%</option>
+                            <option value="16">16%</option>
+                            <option value="17">17%</option>
+                            <option value="18">18%</option>
+                            <option value="19">19%</option>
+                            <option value="20">20%</option>
+                            <option value="25">25%</option>
+                            <option value="30">30%</option>
+                            <option value="35">35%</option>
+                            <option value="40">40%</option>
+                            <option value="45">45%</option>
+                            <option value="50">50%</option>
+                            <option value="55">55%</option>
+                            <option value="60">60%</option>
+                            <option value="65">65%</option>
+                            <option value="70">70%</option>
+                            <option value="75">75%</option>
+                            <option value="80" selected>80%</option>
+                            <option value="85">85%</option>
+                            <option value="90">90%</option>
+                            <option value="95">95%</option>
+                            <option value="100">100%</option>
+                        </select>
+                    </div>
+
+                    <span id="save-status-btc"></span>
+                </form>
+            </div>
+        </div>
+    </div>
+    <div id="trade-panel" class="panel" style="display:none">
+        <div class="panel-header">
+            <h2>TX交易面板</h2>
+            <button id="logout-btn" type="button" onclick="logout()" class="logout-btn">登出</button>
+        </div>
+        
+        <div class="trade-content">
+            <!-- 左側容器 -->
+            <div class="left-info-section">
+                <!-- 隧道狀態區域 -->
+                <div class="tunnel-status-section">
+                    <div class="tunnel-header">
+                        <h3>Cloudflare Tunnel</h3>
+                        <span id="tunnel-status" class="status-value">加載中...</span>
+                    </div>
+                    <div class="tunnel-info">
+                        <div id="tunnel-urls-container" class="urls-container">
+                            <!-- 動態生成的URL列表 -->
+                        </div>
+                    </div>
+                </div>
+
+                <!-- TX 帳戶資訊區域 -->
+                <div class="tx-account-info-section">
+                    <div class="account-header">
+                        <div class="account-title">
+                            <h4>帳戶狀態</h4>
+                            <button id="refresh-account-btn" class="refresh-account-btn" onclick="refreshAccountStatus()" title="重新整理">
+                                <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                                    <path d="M11.534 7h3.932a.25.25 0 0 1 .192.41l-1.966 2.36a.25.25 0 0 1-.384 0l-1.966-2.36a.25.25 0 0 1 .192-.41zm-11 2h3.932a.25.25 0 0 0 .192-.41L2.692 6.23a.25.25 0 0 0-.384 0L.342 8.59A.25.25 0 0 0 .534 9z"/>
+                                    <path fill-rule="evenodd" d="M8 3c-1.552 0-2.94.707-3.857 1.818a.5.5 0 1 1-.771-.636A6.002 6.002 0 0 1 13.917 7H12.9A5.002 5.002 0 0 0 8 3zM3.1 9a5.002 5.002 0 0 0 8.757 2.182.5.5 0 1 1 .771.636A6.002 6.002 0 0 1 2.083 9H3.1z"/>
+                                </svg>
+                            </button>
+                            <button id="hide-account-btn" class="hide-amount-btn" onclick="toggleAccountAmountVisibility()" title="隱藏/顯示金額">
+                                <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" class="eye-open">
+                                    <path d="M16 8s-3-5.5-8-5.5S0 8 0 8s3 5.5 8 5.5S16 8 16 8zM1.173 8a13.133 13.133 0 0 1 1.66-2.043C4.12 4.668 5.88 3.5 8 3.5c2.12 0 3.879 1.168 5.168 2.457A13.133 13.133 0 0 1 14.828 8c-.058.087-.122.183-.195.288-.335.48-.83 1.12-1.465 1.755C11.879 11.332 10.119 12.5 8 12.5c-2.12 0-3.879-1.168-5.168-2.457A13.134 13.134 0 0 1 1.172 8z"/>
+                                    <path d="M8 5.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5zM4.5 8a3.5 3.5 0 1 1 7 0 3.5 3.5 0 0 1-7 0z"/>
+                                </svg>
+                                <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" class="eye-closed" style="display: none;">
+                                    <path d="m10.79 12.912-1.614-1.615a3.5 3.5 0 0 1-4.474-4.474l-2.06-2.06C.938 6.278 0 8 0 8s3 5.5 8 5.5a7.029 7.029 0 0 0 2.79-.588zM5.21 3.088A7.028 7.028 0 0 1 8 2.5c5 0 8 5.5 8 5.5s-.939 1.721-2.641 3.238l-2.062-2.062a3.5 3.5 0 0 0-4.474-4.474L5.21 3.089z"/>
+                                    <path d="M5.525 7.646a2.5 2.5 0 0 0 2.829 2.829l-2.83-2.829zm4.95.708-2.829-2.83a2.5 2.5 0 0 1 2.829 2.829zm3.171 6-12-12 .708-.708 12 12-.708.708z"/>
+                                </svg>
+                            </button>
+                        </div>
+                        <span id="toggle-account" class="toggle-icon" onclick="toggleAccountStatus()">
+                            <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                                <path d="M1.646 4.646a.5.5 0 0 1 .708 0L8 10.293l5.646-5.647a.5.5 0 0 1 .708.708l-6 6a.5.5 0 0 1-.708 0l-6-6a.5.5 0 0 1 0-.708z"/>
+                            </svg>
+                        </span>
+                    </div>
+                    <div id="account-info-container" class="account-info-container">
+                        <div class="account-item">
+                            <input type="checkbox" class="account-checkbox" data-field="equity" onchange="toggleAccountItemVisibility(this)">
+                            <span class="account-label">權益總值</span>
+                            <span class="account-value" id="account-equity">-</span>
+                        </div>
+                        <div class="account-item">
+                            <input type="checkbox" class="account-checkbox" data-field="equity-amount" onchange="toggleAccountItemVisibility(this)">
+                            <span class="account-label">權益總額</span>
+                            <span class="account-value" id="account-equity-amount">-</span>
+                        </div>
+                        <div class="account-item">
+                            <input type="checkbox" class="account-checkbox" data-field="today-balance" onchange="toggleAccountItemVisibility(this)">
+                            <span class="account-label">今日餘額</span>
+                            <span class="account-value" id="account-today-balance">-</span>
+                        </div>
+                        <div class="account-item">
+                            <input type="checkbox" class="account-checkbox" data-field="yesterday-balance" onchange="toggleAccountItemVisibility(this)">
+                            <span class="account-label">昨日餘額</span>
+                            <span class="account-value" id="account-yesterday-balance">-</span>
+                        </div>
+                        <div class="account-item">
+                            <input type="checkbox" class="account-checkbox" data-field="available-margin" onchange="toggleAccountItemVisibility(this)">
+                            <span class="account-label">可用保證金</span>
+                            <span class="account-value" id="account-available-margin">-</span>
+                        </div>
+                        <div class="account-item">
+                            <input type="checkbox" class="account-checkbox" data-field="initial-margin" onchange="toggleAccountItemVisibility(this)">
+                            <span class="account-label">原始保證金</span>
+                            <span class="account-value" id="account-initial-margin">-</span>
+                        </div>
+                        <div class="account-item">
+                            <input type="checkbox" class="account-checkbox" data-field="maintenance-margin" onchange="toggleAccountItemVisibility(this)">
+                            <span class="account-label">維持保證金</span>
+                            <span class="account-value" id="account-maintenance-margin">-</span>
+                        </div>
+                        <div class="account-item">
+                            <input type="checkbox" class="account-checkbox" data-field="risk-indicator" onchange="toggleAccountItemVisibility(this)">
+                            <span class="account-label">風險指標</span>
+                            <span class="account-value" id="account-risk-indicator">-</span>
+                        </div>
+                        <div class="account-item">
+                            <input type="checkbox" class="account-checkbox" data-field="fee" onchange="toggleAccountItemVisibility(this)">
+                            <span class="account-label">手續費</span>
+                            <span class="account-value" id="account-fee">-</span>
+                        </div>
+                        <div class="account-item">
+                            <input type="checkbox" class="account-checkbox" data-field="tax" onchange="toggleAccountItemVisibility(this)">
+                            <span class="account-label">期交稅</span>
+                            <span class="account-value" id="account-tax">-</span>
+                        </div>
+                        <div class="account-item">
+                            <input type="checkbox" class="account-checkbox" data-field="settle-profit" onchange="toggleAccountItemVisibility(this)">
+                            <span class="account-label">本日平倉損益</span>
+                            <span class="account-value" id="account-settle-profit">-</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 測試功能已移除 -->
+            </div>
+
+            <!-- 新增的右側容器 -->
+            <div class="right-info-section">
+                <div class="right-header">
+                    <h3>系統資訊</h3>
+                    <span id="sinopac-api-status" class="status-value">API未連線</span>
+                    <span id="sinopac-account-id" class="ngrok-latency">無期貨帳戶</span>
+                    <div class="sinopac-version-info">
+                        <span id="sinopac-version" class="ngrok-version">sj-</span>
+                        <button id="sinopac-update-check-btn" class="update-check-btn" onclick="checkSinopacUpdate()" title="檢查更新">
+                            <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
+                                <path d="M11.534 7h3.932a.25.25 0 0 1 .192.41l-1.966 2.36a.25.25 0 0 1-.384 0l-1.966-2.36a.25.25 0 0 1 .192-.41zm-11 2h3.932a.25.25 0 0 0 .192-.41L2.692 6.23a.25.25 0 0 0-.384 0L.342 8.59A.25.25 0 0 0 .534 9z"/>
+                                <path fill-rule="evenodd" d="M8 3c-1.552 0-2.94.707-3.857 1.818a.5.5 0 1 1-.771-.636A6.002 6.002 0 0 1 13.917 7H12.9A5.002 5.002 0 0 0 8 3zM3.1 9a5.002 5.002 0 0 0 8.757 2.182.5.5 0 1 1 .771.636A6.002 6.002 0 0 1 2.083 9H3.1z"/>
+                            </svg>
+                        </button>
+                        <button id="sinopac-update-available-btn" class="update-available-btn" onclick="updateSinopac()" title="有更新可用，點擊更新" style="display: none;">
+                            <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
+                                <path d="M8 15A7 7 0 1 1 8 1a7 7 0 0 1 0 14zm0 1A8 8 0 1 0 8 0a8 8 0 0 0 0 16z"/>
+                                <path d="m10.97 4.97-.02.022-3.473 4.425-2.093-2.094a.75.75 0 0 0-1.06 1.06L6.97 11.03a.75.75 0 0 0 1.079-.02l3.992-4.99a.75.75 0 0 0-1.071-1.05z"/>
+                            </svg>
+                        </button>
+                    </div>
+                </div>
+                <!-- 日期狀態區域 -->
+                <div class="system-info-section">
+                    <div class="info-header">
+                        <h4>現在時間</h4>
+                        <div style="display: flex;">
+                            <span id="current-datetime">加載中...</span>
+                            <span id="weekday-status" class="ngrok-latency">-</span>
+                            <span id="delivery-status" class="ngrok-latency">-</span>
+                            <span id="trading-status" class="ngrok-latency">-</span>
+                            <span id="market-status" class="ngrok-latency">-</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="tx-right-info">
+                    <!-- 可用合約區域 -->
+                    <div class="system-info-section">
+                        <div class="info-header">
+                            <h4>可用合約</h4>
+                            <span id="toggle-available" class="toggle-icon collapsed" onclick="toggleAvailableContracts()">
+                                <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                                    <path d="M1.646 4.646a.5.5 0 0 1 .708 0L8 10.293l5.646-5.647a.5.5 0 0 1 .708.708l-6 6a.5.5 0 0 1-.708 0l-6-6a.5.5 0 0 1 0-.708z"/>
+                                </svg>
+                            </span>
+                        </div>
+                        <!-- 可用合約列表 (預設隱藏) -->
+                        <div id="available-contracts" class="available-contracts" style="display: none;">
+                            <div class="contract-section">
+                                <h5>大台指</h5>
+                                <div id="txf-available" class="contract-list"></div>
+                            </div>
+                            <div class="contract-section">
+                                <h5>小台指</h5>
+                                <div id="mxf-available" class="contract-list"></div>
+                            </div>
+                            <div class="contract-section">
+                                <h5>微台指</h5>
+                                <div id="tmf-available" class="contract-list"></div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- 選用合約區域 -->
+                    <div class="system-info-section">
+                        <div class="info-header">
+                            <div class="contract-title">
+                                <h4>選用合約</h4>
+                                <button id="refresh-contract-btn" class="refresh-account-btn" onclick="refreshContractInfo()" title="重新整理">
+                                    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                                        <path d="M11.534 7h3.932a.25.25 0 0 1 .192.41l-1.966 2.36a.25.25 0 0 1-.384 0l-1.966-2.36a.25.25 0 0 1 .192-.41zm-11 2h3.932a.25.25 0 0 0 .192-.41L2.692 6.23a.25.25 0 0 0-.384 0L.342 8.59A.25.25 0 0 0 .534 9z"/>
+                                        <path fill-rule="evenodd" d="M8 3c-1.552 0-2.94.707-3.857 1.818a.5.5 0 1 1-.771-.636A6.002 6.002 0 0 1 13.917 7H12.9A5.002 5.002 0 0 0 8 3zM3.1 9a5.002 5.002 0 0 0 8.757 2.182.5.5 0 1 1 .771.636A6.002 6.002 0 0 1 2.083 9H3.1z"/>
+                                    </svg>
+                                </button>
+                            </div>
+                            <span id="toggle-selected" class="toggle-icon" onclick="toggleSelectedContracts()">
+                                <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                                    <path d="M1.646 4.646a.5.5 0 0 1 .708 0L8 10.293l5.646-5.647a.5.5 0 0 1 .708.708l-6 6a.5.5 0 0 1-.708 0l-6-6a.5.5 0 0 1 0-.708z"/>
+                                </svg>
+                            </span>
+                        </div>
+                        <div id="system-info-container" class="info-container">
+                            <div class="info-item">
+                                <span class="info-label">大台指</span>
+                                <span class="info-value" id="txf-contract">-</span>
+                            </div>
+                            <div class="info-item">
+                                <span class="info-label">小台指</span>
+                                <span class="info-value" id="mxf-contract">-</span>
+                            </div>
+                            <div class="info-item">
+                                <span class="info-label">微台指</span>
+                                <span class="info-value" id="tmf-contract">-</span>
+                            </div>
+                        </div>
+                    </div>
+
+
+                    <!-- 持倉狀態區域 -->
+                    <div class="system-info-section">
+                        <div class="position-header">
+                            <div class="position-title">
+                                <h4>持倉狀態</h4>
+                                <button id="refresh-position-btn" class="refresh-account-btn" onclick="refreshPositionStatus()" title="重新整理">
+                                    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                                        <path d="M11.534 7h3.932a.25.25 0 0 1 .192.41l-1.966 2.36a.25.25 0 0 1-.384 0l-1.966-2.36a.25.25 0 0 1 .192-.41zm-11 2h3.932a.25.25 0 0 0 .192-.41L2.692 6.23a.25.25 0 0 0-.384 0L.342 8.59A.25.25 0 0 0 .534 9z"/>
+                                        <path fill-rule="evenodd" d="M8 3c-1.552 0-2.94.707-3.857 1.818a.5.5 0 1 1-.771-.636A6.002 6.002 0 0 1 13.917 7H12.9A5.002 5.002 0 0 0 8 3zM3.1 9a5.002 5.002 0 0 0 8.757 2.182.5.5 0 1 1 .771.636A6.002 6.002 0 0 1 2.083 9H3.1z"/>
+                                    </svg>
+                                </button>
+                                <button id="hide-position-btn" class="hide-amount-btn" onclick="togglePositionAmountVisibility()" title="隱藏/顯示金額">
+                                    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" class="eye-open">
+                                        <path d="M16 8s-3-5.5-8-5.5S0 8 0 8s3 5.5 8 5.5S16 8 16 8zM1.173 8a13.133 13.133 0 0 1 1.66-2.043C4.12 4.668 5.88 3.5 8 3.5c2.12 0 3.879 1.168 5.168 2.457A13.133 13.133 0 0 1 14.828 8c-.058.087-.122.183-.195.288-.335.48-.83 1.12-1.465 1.755C11.879 11.332 10.119 12.5 8 12.5c-2.12 0-3.879-1.168-5.168-2.457A13.134 13.134 0 0 1 1.172 8z"/>
+                                        <path d="M8 5.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5zM4.5 8a3.5 3.5 0 1 1 7 0 3.5 3.5 0 0 1-7 0z"/>
+                                    </svg>
+                                    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" class="eye-closed" style="display: none;">
+                                        <path d="m10.79 12.912-1.614-1.615a3.5 3.5 0 0 1-4.474-4.474l-2.06-2.06C.938 6.278 0 8 0 8s3 5.5 8 5.5a7.029 7.029 0 0 0 2.79-.588zM5.21 3.088A7.028 7.028 0 0 1 8 2.5c5 0 8 5.5 8 5.5s-.939 1.721-2.641 3.238l-2.062-2.062a3.5 3.5 0 0 0-4.474-4.474L5.21 3.089z"/>
+                                        <path d="M5.525 7.646a2.5 2.5 0 0 0 2.829 2.829l-2.83-2.829zm4.95.708-2.829-2.83a2.5 2.5 0 0 1 2.829 2.829zm3.171 6-12-12 .708-.708 12 12-.708.708z"/>
+                                    </svg>
+                                </button>
+                            </div>
+                            <span id="toggle-position" class="toggle-icon" onclick="togglePositionStatus()">
+                                <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                                    <path d="M1.646 4.646a.5.5 0 0 1 .708 0L8 10.293l5.646-5.647a.5.5 0 0 1 .708.708l-6 6a.5.5 0 0 1-.708 0l-6-6a.5.5 0 0 1 0-.708z"/>
+                                </svg>
+                            </span>
+                        </div>
+                        <div id="position-info-container" class="position-info-container">
+                            <div class="position-table">
+                                <table class="position-table-content">
+                                    <thead>
+                                        <tr>
+                                            <th class="position-table-header">部位</th>
+                                            <th class="position-table-header">大台</th>
+                                            <th class="position-table-header">小台</th>
+                                            <th class="position-table-header">微台</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr>
+                                            <td class="position-table-label">動作</td>
+                                            <td class="position-table-value" id="position-txf-action">-</td>
+                                            <td class="position-table-value" id="position-mxf-action">-</td>
+                                            <td class="position-table-value" id="position-tmf-action">-</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="position-table-label">數量</td>
+                                            <td class="position-table-value" id="position-txf-quantity">-</td>
+                                            <td class="position-table-value" id="position-mxf-quantity">-</td>
+                                            <td class="position-table-value" id="position-tmf-quantity">-</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="position-table-label">均價</td>
+                                            <td class="position-table-value" id="position-txf-avg-price">-</td>
+                                            <td class="position-table-value" id="position-mxf-avg-price">-</td>
+                                            <td class="position-table-value" id="position-tmf-avg-price">-</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="position-table-label">市價</td>
+                                            <td class="position-table-value" id="position-txf-last-price">-</td>
+                                            <td class="position-table-value" id="position-mxf-last-price">-</td>
+                                            <td class="position-table-value" id="position-tmf-last-price">-</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="position-table-label">損益</td>
+                                            <td class="position-table-value" id="position-txf-unrealized-pnl">-</td>
+                                            <td class="position-table-value" id="position-mxf-unrealized-pnl">-</td>
+                                            <td class="position-table-value" id="position-tmf-unrealized-pnl">-</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                        <!-- 未實現總損益 - 在收起區域外，始終顯示 -->
+                        <div class="position-total-pnl">
+                            <span class="position-total-label">未實現總損益</span>
+                            <span class="position-total-value" id="position-total-pnl">-</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+
+
+    <!-- shioaji 更新模態框 -->
+    <div id="sinopac-update-modal" class="modal" style="display: none;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>shioaji 更新</h3>
+                <span class="close" onclick="closeSinopacUpdateModal()">&times;</span>
+            </div>
+            <div class="modal-body">
+                <div id="sinopac-update-info">
+                    <p>檢查更新中...</p>
+                </div>
+                <div id="sinopac-update-actions" style="display: none;">
+                    <div class="update-version-info">
+                        <p><strong>當前版本：</strong><span id="sinopac-current-version">-</span></p>
+                        <p><strong>最新版本：</strong><span id="sinopac-latest-version">-</span></p>
+                    </div>
+                    <div class="update-warning">
+                        <p><strong>風險警告：</strong></p>
+                        <ul>
+                            <li>更新過程中系統將暫時無法使用</li>
+                            <li>更新完成後需要重新啟動應用程序</li>
+                            <li>請確保沒有正在進行的交易操作</li>
+                        </ul>
+                    </div>
+                    <div class="update-buttons">
+                        <button id="sinopac-auto-update-btn" class="btn-primary" onclick="startSinopacUpdate()">一鍵自動更新</button>
+                        <button class="btn-secondary" onclick="closeSinopacUpdateModal()">取消</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- shioaji 更新進度模態框 -->
+    <div id="sinopac-update-progress-modal" class="modal" style="display: none;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>shioaji 更新中</h3>
+            </div>
+            <div class="modal-body">
+                <div class="update-progress">
+                    <div class="progress-bar">
+                        <div id="sinopac-progress-fill" class="progress-fill"></div>
+                    </div>
+                    <p id="sinopac-update-status">正在更新...</p>
+                </div>
+                <div id="sinopac-update-output" class="update-output" style="display: none;">
+                    <h4>更新日誌：</h4>
+                    <pre id="sinopac-update-log"></pre>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="btc-trade-panel" class="panel" style="display:none">
+        <div class="panel-header">
+            <h2>BTC交易面板</h2>
+            <button id="logout-btn-btc" type="button" onclick="logoutBtc()" class="logout-btn">登出</button>
+        </div>
+        
+        <div class="trade-content">
+            <!-- 左側容器 -->
+            <div class="left-info-section">
+                <!-- BTC隧道狀態區域 -->
+                <div class="tunnel-status-section">
+                    <div class="tunnel-header">
+                        <h3>Cloudflare Tunnel</h3>
+                        <span id="tunnel-status-btc" class="status-value">加載中...</span>
+                    </div>
+                    <div class="tunnel-info">
+                        <div id="tunnel-urls-container-btc" class="urls-container">
+                            <!-- 動態生成的URL列表 -->
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 帳戶資訊區域 -->
+                <div class="btc-account-info-section">
+                    <div class="account-header">
+                        <div class="account-title">
+                            <h4>帳戶狀態</h4>
+                            <button id="refresh-account-btn-btc" class="refresh-account-btn" onclick="refreshBtcAccountInfo()" title="重新整理">
+                                <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                                    <path d="M11.534 7h3.932a.25.25 0 0 1 .192.41l-1.966 2.36a.25.25 0 0 1-.384 0l-1.966-2.36a.25.25 0 0 1 .192-.41zm-11 2h3.932a.25.25 0 0 0 .192-.41L2.692 6.23a.25.25 0 0 0-.384 0L.342 8.59A.25.25 0 0 0 .534 9z"/>
+                                    <path fill-rule="evenodd" d="M8 3c-1.552 0-2.94.707-3.857 1.818a.5.5 0 1 1-.771-.636A6.002 6.002 0 0 1 13.917 7H12.9A5.002 5.002 0 0 0 8 3zM3.1 9a5.002 5.002 0 0 0 8.757 2.182.5.5 0 1 1 .771.636A6.002 6.002 0 0 1 2.083 9H3.1z"/>
+                                </svg>
+                            </button>
+                            <button id="hide-account-btn-btc" class="hide-amount-btn" onclick="toggleBtcAccountAmountVisibility()" title="隱藏/顯示金額">
+                                <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" class="eye-open">
+                                    <path d="M16 8s-3-5.5-8-5.5S0 8 0 8s3 5.5 8 5.5S16 8 16 8zM1.173 8a13.133 13.133 0 0 1 1.66-2.043C4.12 4.668 5.88 3.5 8 3.5c2.12 0 3.879 1.168 5.168 2.457A13.133 13.133 0 0 1 14.828 8c-.058.087-.122.183-.195.288-.335.48-.83 1.12-1.465 1.755C11.879 11.332 10.119 12.5 8 12.5c-2.12 0-3.879-1.168-5.168-2.457A13.134 13.134 0 0 1 1.172 8z"/>
+                                    <path d="M8 5.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5zM4.5 8a3.5 3.5 0 1 1 7 0 3.5 3.5 0 0 1-7 0z"/>
+                                </svg>
+                                <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" class="eye-closed" style="display: none;">
+                                    <path d="m10.79 12.912-1.614-1.615a3.5 3.5 0 0 1-4.474-4.474l-2.06-2.06C.938 6.278 0 8 0 8s3 5.5 8 5.5a7.029 7.029 0 0 0 2.79-.588zM5.21 3.088A7.028 7.028 0 0 1 8 2.5c5 0 8 5.5 8 5.5s-.939 1.721-2.641 3.238l-2.062-2.062a3.5 3.5 0 0 0-4.474-4.474L5.21 3.089z"/>
+                                    <path d="M5.525 7.646a2.5 2.5 0 0 0 2.829 2.829l-2.83-2.829zm4.95.708-2.829-2.83a2.5 2.5 0 0 1 2.829 2.829zm3.171 6-12-12 .708-.708 12 12-.708.708z"/>
+                                </svg>
+                            </button>
+                        </div>
+                        <span id="toggle-account-btc" class="toggle-icon" onclick="toggleBtcAccountInfo()">
+                            <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                                <path d="M1.646 4.646a.5.5 0 0 1 .708 0L8 10.293l5.646-5.647a.5.5 0 0 1 .708.708l-6 6a.5.5 0 0 1-.708 0l-6-6a.5.5 0 0 1 0-.708z"/>
+                            </svg>
+                        </span>
+                    </div>
+                    <div id="btc-account-info-container" class="account-info-container">
+                        <div class="account-item">
+                            <input type="checkbox" class="account-checkbox" data-field="wallet-balance" onchange="toggleBtcAccountItemVisibility(this)">
+                            <span class="account-label">錢包餘額</span>
+                            <span class="account-value" id="btc-wallet-balance">-</span>
+                        </div>
+                        <div class="account-item">
+                            <input type="checkbox" class="account-checkbox" data-field="available-balance" onchange="toggleBtcAccountItemVisibility(this)">
+                            <span class="account-label">可供轉帳</span>
+                            <span class="account-value" id="btc-available-balance">-</span>
+                        </div>
+                        <div class="account-item">
+                            <input type="checkbox" class="account-checkbox" data-field="margin-balance" onchange="toggleBtcAccountItemVisibility(this)">
+                            <span class="account-label">保證金餘額</span>
+                            <span class="account-value" id="btc-margin-balance">-</span>
+                        </div>
+                        <div class="account-item">
+                            <input type="checkbox" class="account-checkbox" data-field="unrealized-pnl" onchange="toggleBtcAccountItemVisibility(this)">
+                            <span class="account-label">未實現盈虧</span>
+                            <span class="account-value" id="btc-unrealized-pnl">-</span>
+                        </div>
+                        <div class="account-item">
+                            <input type="checkbox" class="account-checkbox" data-field="today-commission" onchange="toggleBtcAccountItemVisibility(this)">
+                            <span class="account-label">交易手續費</span>
+                            <span class="account-value" id="btc-today-commission">-</span>
+                        </div>
+                        <div class="account-item">
+                            <input type="checkbox" class="account-checkbox" data-field="margin-ratio" onchange="toggleBtcAccountItemVisibility(this)">
+                            <span class="account-label">保證金比率</span>
+                            <span class="account-value" id="btc-margin-ratio">-</span>
+                        </div>
+                        <div class="account-item">
+                            <input type="checkbox" class="account-checkbox" data-field="leverage-usage" onchange="toggleBtcAccountItemVisibility(this)">
+                            <span class="account-label">槓桿使用率</span>
+                            <span class="account-value" id="btc-leverage-usage">-</span>
+                        </div>
+                        <div class="account-item">
+                            <input type="checkbox" class="account-checkbox" data-field="today-pnl" onchange="toggleBtcAccountItemVisibility(this)">
+                            <span class="account-label">本日盈虧</span>
+                            <span class="account-value" id="btc-today-pnl">-</span>
+                        </div>
+                        <div class="account-item">
+                            <input type="checkbox" class="account-checkbox" data-field="week-pnl" onchange="toggleBtcAccountItemVisibility(this)">
+                            <span class="account-label">7天盈虧</span>
+                            <span class="account-value" id="btc-week-pnl">-</span>
+                        </div>
+                        <div class="account-item">
+                            <input type="checkbox" class="account-checkbox" data-field="month-pnl" onchange="toggleBtcAccountItemVisibility(this)">
+                            <span class="account-label">30天盈虧</span>
+                            <span class="account-value" id="btc-month-pnl">-</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- 右側容器 -->
+            <div class="right-info-section">
+                <div class="right-header">
+                    <h3>系統資訊</h3>
+                    <span id="binance-api-status" class="status-value">API未連線</span>
+                    <span id="binance-account-id" class="ngrok-latency">無幣安帳戶</span>
+                    <div class="binance-version-info">
+                        <span id="binance-version" class="ngrok-version">binance-</span>
+                    </div>
+                </div>
+                <!-- 日期狀態區域 -->
+                <div class="system-info-section">
+                    <div class="info-header">
+                        <h4>現在時間</h4>
+                        <div style="display: flex;">
+                            <span id="current-datetime-btc">加載中...</span>
+                            <span id="weekday-status-btc" class="ngrok-latency">-</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="btc-right-info">
+                    <!-- 選用交易對區域 -->
+                    <div class="system-info-section">
+                        <div class="info-header">
+                            <h4>選用合約</h4>
+                            <span id="toggle-available-btc" class="toggle-icon" onclick="toggleAvailablePairs()">
+                                <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                                    <path d="M1.646 4.646a.5.5 0 0 1 .708 0L8 10.293l5.646-5.647a.5.5 0 0 1 .708.708l-6 6a.5.5 0 0 1-.708 0l-6-6a.5.5 0 0 1 0-.708z"/>
+                                </svg>
+                            </span>
+                        </div>
+                        <div id="available-contracts-btc" class="info-container" style="display: block;">
+                            <div class="info-item">
+                                <span class="info-label">交易對</span>
+                                <span class="info-value" id="btc-trading-pair">-</span>
+                            </div>
+                            <div class="info-item">
+                                <span class="info-label">合約類型</span>
+                                <span class="info-value" id="btc-contract-type">-</span>
+                            </div>
+                            <div class="info-item">
+                                <span class="info-label">保證金模式</span>
+                                <span class="info-value" id="btc-margin-type">-</span>
+                            </div>
+                            <div class="info-item">
+                                <span class="info-label">槓桿倍數</span>
+                                <span class="info-value" id="btc-leverage">-</span>
+                            </div>
+                            <div class="info-item">
+                                <span class="info-label">風險比例</span>
+                                <span class="info-value" id="btc-position-size">-</span>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- 持倉狀態區域 -->
+                    <div class="system-info-section">
+                        <div class="position-header">
+                            <div class="position-title">
+                                <h4>持倉狀態</h4>
+                                <button id="refresh-position-btn-btc" class="refresh-account-btn" onclick="refreshBtcPositionInfo()" title="重新整理">
+                                    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                                        <path d="M11.534 7h3.932a.25.25 0 0 1 .192.41l-1.966 2.36a.25.25 0 0 1-.384 0l-1.966-2.36a.25.25 0 0 1 .192-.41zm-11 2h3.932a.25.25 0 0 0 .192-.41L2.692 6.23a.25.25 0 0 0-.384 0L.342 8.59A.25.25 0 0 0 .534 9z"/>
+                                        <path fill-rule="evenodd" d="M8 3c-1.552 0-2.94.707-3.857 1.818a.5.5 0 1 1-.771-.636A6.002 6.002 0 0 1 13.917 7H12.9A5.002 5.002 0 0 0 8 3zM3.1 9a5.002 5.002 0 0 0 8.757 2.182.5.5 0 1 1 .771.636A6.002 6.002 0 0 1 2.083 9H3.1z"/>
+                                    </svg>
+                                </button>
+                                <button id="hide-position-btn-btc" class="hide-amount-btn" onclick="toggleBtcPositionAmountVisibility()" title="隱藏/顯示金額">
+                                    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" class="eye-open">
+                                        <path d="M16 8s-3-5.5-8-5.5S0 8 0 8s3 5.5 8 5.5S16 8 16 8zM1.173 8a13.133 13.133 0 0 1 1.66-2.043C4.12 4.668 5.88 3.5 8 3.5c2.12 0 3.879 1.168 5.168 2.457A13.133 13.133 0 0 1 14.828 8c-.058.087-.122.183-.195.288-.335.48-.83 1.12-1.465 1.755C11.879 11.332 10.119 12.5 8 12.5c-2.12 0-3.879-1.168-5.168-2.457A13.134 13.134 0 0 1 1.172 8z"/>
+                                        <path d="M8 5.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5zM4.5 8a3.5 3.5 0 1 1 7 0 3.5 3.5 0 0 1-7 0z"/>
+                                    </svg>
+                                    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" class="eye-closed" style="display: none;">
+                                        <path d="m10.79 12.912-1.614-1.615a3.5 3.5 0 0 1-4.474-4.474l-2.06-2.06C.938 6.278 0 8 0 8s3 5.5 8 5.5a7.029 7.029 0 0 0 2.79-.588zM5.21 3.088A7.028 7.028 0 0 1 8 2.5c5 0 8 5.5 8 5.5s-.939 1.721-2.641 3.238l-2.062-2.062a3.5 3.5 0 0 0-4.474-4.474L5.21 3.089z"/>
+                                        <path d="M5.525 7.646a2.5 2.5 0 0 0 2.829 2.829l-2.83-2.829zm4.95.708-2.829-2.83a2.5 2.5 0 0 1 2.829 2.829zm3.171 6-12-12 .708-.708 12 12-.708.708z"/>
+                                    </svg>
+                                </button>
+                            </div>
+                            <span id="toggle-position-btc" class="toggle-icon" onclick="toggleBtcPositionInfo()">
+                                <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                                    <path d="M1.646 4.646a.5.5 0 0 1 .708 0L8 10.293l5.646-5.647a.5.5 0 0 1 .708.708l-6 6a.5.5 0 0 1-.708 0l-6-6a.5.5 0 0 1 0-.708z"/>
+                                </svg>
+                            </span>
+                        </div>
+                        <div id="position-info-container-btc" class="position-info-container">
+                            <div class="position-table">
+                                <table class="position-table-content">
+                                    <thead>
+                                        <tr>
+                                            <th class="position-table-header">交易對</th>
+                                            <th class="position-table-header" id="btc-trading-pair-header" style="text-align: right;">
+                                                <div class="trading-pair-container-single">
+                                                    <span id="position-direction-badge" class="position-direction-badge">無</span>
+                                                    <span class="trading-pair-main" id="trading-pair-main">-</span>
+                                                    <div class="trading-pair-info" id="trading-pair-info" style="display: none;">
+                                                        <span class="trading-pair-type" id="trading-pair-type">-</span>
+                                                        <span class="trading-pair-margin" id="trading-pair-margin">-</span>
+                                                    </div>
+                                                </div>
+                                            </th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr>
+                                            <td class="position-table-label">持倉數量</td>
+                                            <td class="position-table-value" id="position-btc-size" style="text-align: right;">-</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="position-table-label">保證金比例</td>
+                                            <td class="position-table-value" id="position-btc-margin-ratio" style="text-align: right;">-</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="position-table-label">未實現盈虧</td>
+                                            <td class="position-table-value" id="position-total-pnl-btc" style="text-align: right;">-</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="position-table-label">開倉價格</td>
+                                            <td class="position-table-value" id="position-btc-entry-price" style="text-align: right;">-</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="position-table-label">標記價格</td>
+                                            <td class="position-table-value" id="position-btc-mark-price" style="text-align: right;">-</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="position-table-label">強平價格</td>
+                                            <td class="position-table-value" id="position-btc-liquidation-price" style="text-align: right;">-</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 隧道設置模態窗口 -->
+    <div id="tunnel-setup-modal" class="modal" style="display: none;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>設置隧道</h3>
+                <span class="close" onclick="closeTunnelSetupModal()">&times;</span>
+            </div>
+            <div class="modal-body">
+                <!-- Cloudflare Tunnel 設定 -->
+                <div id="cloudflare-config" class="service-config">
+                    <div class="service-features">
+                        <h5 style="color: #1976d2; margin-bottom: 15px; font-weight: bold;">Cloudflare Tunnel 優勢</h5>
+                        <ul style="background: #f3f8ff; padding: 15px; border-radius: 8px; margin-bottom: 20px;">
+                            <li style="color: #2e7d32; margin: 8px 0; font-weight: 500;">完全免費・無流量限制</li>
+                            <li style="color: #2e7d32; margin: 8px 0; font-weight: 500;">自訂域名・客製化配置</li>
+                            <li style="color: #2e7d32; margin: 8px 0; font-weight: 500;">全球CDN優化加速</li>
+                            <li style="color: #2e7d32; margin: 8px 0; font-weight: 500;">擁有企業級安全性</li>
+                        </ul>
+                    </div>
+                    
+                    <div class="service-setup">
+                        <h5 style="color: #333; margin-bottom: 15px;">選擇您的域名模式：</h5>
+                        
+                        <div class="domain-options" style="margin: 15px 0;">
+                            <div class="domain-option" onclick="setDomainMode('temporary', event)">
+                                <h6 style="color: #1b5e20; margin: 0 0 10px 0; font-weight: bold;">臨時域名（推薦使用）</h6>
+                                <p style="margin: 5px 0; color: #333;">無需註冊，立即獲得可用域名</p>
+                                <p style="margin: 5px 0; font-weight: bold; background: #e8f5e8; padding: 5px; border-radius: 4px;">域名格式：<code style="color: #d32f2f;">random.trycloudflare.com</code></p>
+                                <p style="margin: 5px 0; color: #2e7d32; font-size: 0.9rem;">完全免費 | 立即可用 | 無需設定</p>
+                                <button onclick="setDomainMode('temporary', event)" style="background: #27ae60; color: white; border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer; font-weight: bold;">選擇此模式</button>
+                            </div>
+                            
+                            <div class="domain-option" onclick="setDomainMode('custom', event)">
+                                <h6 style="color: #e65100; margin: 0 0 10px 0; font-weight: bold;">自訂域名（高級用戶）</h6>
+                                <p style="margin: 5px 0; color: #333;">使用您擁有的域名，完全自主控制</p>
+                                <p style="margin: 5px 0; font-weight: bold; background: #fff3e0; padding: 5px; border-radius: 4px;">域名格式：<code style="color: #d32f2f;">app.yourdomain.com</code></p>
+                                <p style="margin: 5px 0; color: #f57c00; font-size: 0.9rem;">需要：域名 + Cloudflare 帳戶 + Origin Certificate</p>
+                                <button onclick="setDomainMode('custom', event)" style="background: #ff9800; color: white; border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer; font-weight: bold;">選擇此模式</button>
+                            </div>
+                        </div>
+                        
+                        <div id="setup-instructions" style="display: block; background: #e3f2fd; padding: 20px; border-radius: 8px; margin: 15px 0; border-left: 4px solid #2196f3;">
+                            <h6 style="color: #1565c0; margin-bottom: 15px; font-weight: bold;">臨時域名設置步驟：</h6>
+                            <ol style="color: #333; line-height: 1.6;">
+                                <li>無需任何準備工作</li>
+                                <li>無需註冊帳戶</li>
+                                <li>直接點選「儲存並啟動」</li>
+                                <li>立即獲得可用域名</li>
+                            </ol>
+                            <div style="background: #1976d2; color: white; padding: 10px; border-radius: 4px; margin-top: 10px; text-align: center; font-weight: bold;">
+                                完全免費，立即可用！
+                            </div>
+                        </div>
+                        
+                        <!-- 自訂域名憑證設置區域 -->
+                        <div id="custom-domain-config" style="display: none; background: #e3f2fd; padding: 20px; border-radius: 8px; margin: 15px 0; border-left: 4px solid #2196f3;">
+                            <h6 style="color: #1565c0; margin-bottom: 15px; font-weight: bold;">自訂域名憑證設置：</h6>
+                            
+                            <ol style="color: #333; line-height: 1.6; margin-bottom: 20px;">
+                                <li>輸入 Cloudflare Tunnel Token</li>
+                                <li>貼上 Origin Certificate 憑證內容</li>
+                                <li>貼上對應的 Private Key 私鑰</li>
+                                <li>選擇域名使用模式</li>
+                                <li>點擊「儲存並啟動」完成設置</li>
+                            </ol>
+                            
+                            <!-- 純共用域名模式說明 -->
+                            <div style="background: #e8f5e8; border: 2px solid #4caf50; border-radius: 8px; padding: 18px; margin-bottom: 20px;">
+                                <div style="display: flex; align-items: center; margin-bottom: 12px;">
+                                    <h6 style="color: #2e7d32; margin: 0; font-size: 14px; font-weight: bold;">自訂域名模式</h6>
+                                    <span style="background: #4caf50; color: white; font-size: 10px; padding: 2px 6px; border-radius: 3px; margin-left: 10px;">推薦</span>
+                                </div>
+                                
+                                <div style="font-size: 12px; color: #2e7d32; line-height: 1.5; margin-bottom: 12px;">
+                                    • TX和BTC系統共用同一個域名和憑證<br>
+                                    • 透過不同路徑分流：<br>
+                                    • 只需一組 Token、Certificate、Private Key<br>
+                                </div>
+
+                            
+                            <div class="form-group" style="margin-bottom: 15px;">
+                                <label for="cloudflare-token-custom" style="display: block; margin-bottom: 8px; font-weight: bold; color: #333; font-size: 14px;">
+                                    Cloudflare Tunnel Token:
+                                </label>
+                                <textarea id="cloudflare-token-custom" rows="3" 
+                                    placeholder="請貼上從 Cloudflare Dashboard 複製的 Tunnel Token..." 
+                                    style="width: calc(100% - 24px); padding: 10px; border: 1px solid #ddd; border-radius: 4px; font-family: 'Courier New', monospace; font-size: 12px; background: #ffffff; color: #333; resize: vertical; box-sizing: border-box;"></textarea>
+                            </div>
+                            
+                            <div class="form-group" style="margin-bottom: 15px;">
+                                <label for="origin-certificate" style="display: block; margin-bottom: 8px; font-weight: bold; color: #333; font-size: 14px;">
+                                    Origin Certificate:
+                                </label>
+                                <textarea id="origin-certificate" rows="6" 
+                                    placeholder="請貼上 Origin Certificate 內容...&#10;格式：&#10;-----BEGIN CERTIFICATE-----&#10;...&#10;-----END CERTIFICATE-----" 
+                                    style="width: calc(100% - 24px); padding: 10px; border: 1px solid #ddd; border-radius: 4px; font-family: 'Courier New', monospace; font-size: 12px; background: #ffffff; color: #333; resize: vertical; box-sizing: border-box;"></textarea>
+                            </div>
+                            
+                            <div class="form-group" style="margin-bottom: 15px;">
+                                <label for="private-key" style="display: block; margin-bottom: 8px; font-weight: bold; color: #333; font-size: 14px;">
+                                    Private Key:
+                                </label>
+                                <textarea id="private-key" rows="6" 
+                                    placeholder="請貼上 Private Key 內容...&#10;格式：&#10;-----BEGIN PRIVATE KEY-----&#10;...&#10;-----END PRIVATE KEY-----" 
+                                    style="width: calc(100% - 24px); padding: 10px; border: 1px solid #ddd; border-radius: 4px; font-family: 'Courier New', monospace; font-size: 12px; background: #ffffff; color: #333; resize: vertical; box-sizing: border-box;"></textarea>
+                            </div>
+                            
+                            <div style="background: #1976d2; color: white; padding: 10px; border-radius: 4px; margin-top: 10px; text-align: center; font-weight: bold;">
+                                憑證將安全儲存並自動區分 TX/BTC 系統
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+
+                <div id="setup-status" style="margin: 10px 0;"></div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" onclick="setupTunnel()" class="btn-primary" id="setup-tunnel-btn">儲存並啟動</button>
+                <button type="button" onclick="clearTunnelToken()" class="btn-warning" id="clear-token-btn">清除 Token</button>
+                <button type="button" onclick="closeTunnelSetupModal()" class="btn-secondary">取消</button>
+            </div>
+        </div>
+    </div>
+
+
+    <script src="main.js?v=20250723_1245"></script>
+</body>
+</html> 
