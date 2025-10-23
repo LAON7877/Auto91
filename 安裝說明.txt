@@ -1,0 +1,17 @@
+PowerShell 安裝 MongoDB（建議用系統管理員權限）
+winget source update
+winget search MongoDB
+winget install -e --id MongoDB.Server --silent --accept-package-agreements --accept-source-agreements
+
+
+1) 先雙擊 start.bat 跑一次（會自動安裝套件並產生 backend/.env，內含佔位字串 REPLACE_WITH_SECURE_BASE64_32_BYTES）。
+
+2) 用 PowerShell 產生金鑰字串：
+   node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
+
+3) 打開 backend/.env，把
+ENCRYPTION_KEY=REPLACE_WITH_SECURE_BASE64_32_BYTES
+改成你剛產生的 base64 字串，存檔。
+
+4) 若後端視窗已在跑，先關閉後端的命令視窗，然後再雙擊 start.bat 重啟。
+若你想一次到位，也可以先手動建立/編輯 backend/.env 放入正確 ENCRYPTION_KEY，再執行 start.bat。

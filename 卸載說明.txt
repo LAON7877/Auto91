@@ -1,0 +1,9 @@
+1. 將backend --> .env 刪除
+2. 將frontend --> .env 刪除
+3. 將backend -> backend -> runtime -> tunnels 裡的資料夾 刪除
+
+4. 將數據庫刪除
+若已安裝 MongoDB 服務：資料在該服務設定的資料夾（常見）
+C:\data\db
+或 
+C:\Program Files\MongoDB\Server\<版本>\data

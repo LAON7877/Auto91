@@ -1,0 +1,29 @@
+{
+  "name": "auto91-tradebot-frontend",
+  "version": "1.0.0",
+  "private": true,
+  "description": "模組化多使用者加密貨幣永續合約交易機器人前端 (React/Vite)",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "start": "vite",
+    "build": "vite build",
+    "preview": "vite preview --port 5174"
+  },
+  "dependencies": {
+    "axios": "^1.7.7",
+    "clipboard-copy": "^4.0.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^6.26.2",
+    "react-select": "^5.8.0",
+    "react-datepicker": "^7.5.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.3",
+    "vite": "^5.4.10",
+    "dotenv": "^16.4.5"
+  }
+}
+
+

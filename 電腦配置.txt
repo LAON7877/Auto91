@@ -1,0 +1,53 @@
+建議環境（OS/軟體）
+OS: Windows 10/11 64-bit
+Node.js 18+（建議 20 LTS）、MongoDB 6+、Chrome/Edge 最新
+可選: Cloudflared（內網穿透）、Redis 6+（REDIS_LOCK_URL 啟用分散式鎖）
+網路: 穩定外網（Cloudflared、交易所 WS/REST）
+
+相依服務
+MongoDB: 本機或雲服務皆可
+Redis: 可選；啟用 REDIS_LOCK_URL 後提供跨程序/多機鎖（redlock）
+Cloudflared: 可選；若需對外提供 WS/HTTP 服務或固定外網入口
+
+最低配（開發/小量用戶 ≤20）
+CPU: 2 vCPU
+RAM: 4 GB
+Disk: 20 GB（SSD）
+備註: Mongo 與後端同機可用，但注意 I/O
+
+建議配（生產 ~100 用戶）
+CPU: 4 vCPU
+RAM: 8 GB
+Disk: 50 GB SSD（含 Mongo 資料與日誌）
+網路: 穩定、低抖動；頻寬要求不高（WS 為主）
+若 Mongo 與後端同機，RAM 建議再+2 GB
+
+連接埠（預設）
+HTTP: 5257（backend PORT）
+WebSocket: 7877（backend WS_PORT）
+前端開發: 5173（Vite dev）
+前端預覽: 5174（Vite preview）
+若跨機存取，請放行上述埠口或配置反向代理
+
+成本觀察（100 用戶）
+連線數: 私有 WS 約 100 條 + 公有行情每交易對 ~1 條
+CPU: 主要花在 JSON/WS/加解密，整體偏 I/O；4 vCPU 足夠
+RAM: WS 緩衝 + Node + Mongo 緩存，8 GB 夠用
+Disk: 交易/快照/日誌成長，50 GB 起步，建議開啟日誌輪替
+
+參數建議（起跑值）
+SIGNAL_DISPATCH_CONCURRENCY=20（與當前預設一致）
+429 退避已內建（尊重 Retry-After）；若 p95 上升或 429 增多，可把每交易所/每用戶限流的 minTime 稍微加大
+METRICS_WINDOW_MS=86400000（24h）、IDEM_TTL_MS=300000（5m）
+可選管理金鑰: ADMIN_KEY（前端 VITE_ADMIN_KEY 應一致）
+訊號金鑰: SIGNAL_API_KEYS（TradingView URL 加 ?apiKey=...）
+
+運維建議
+Mongo 獨立機/雲服務（可減少應用機 RAM/磁碟壓力）
+PM2（Windows 亦可）常駐與自動重啟、日誌分檔輪替
+定期清理交易/快照、Mongo 輸出檔（LOG_TRIM_*）
+
+簡單結論
+開發/測試：2 vCPU / 4GB / 20GB
+生產（100 用戶）：4 vCPU / 8GB / 50GB SSD（Mongo 同機+2GB 更好）
+網路重點是穩定與低抖動，不需大頻寬。

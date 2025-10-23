@@ -1,0 +1,129 @@
+@import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@400;600&display=swap');
+
+:root {
+  --bg: #121212;
+  --panel: #1b1b1b;
+  --text: #d9fdd3;
+  --accent: #00ffa3;
+  --accent2: #3ae5ff;
+  --danger: #ff4d4f;
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font-family: 'Montserrat', sans-serif; }
+
+.app-layout { display: flex; height: 100vh; }
+.dashboard { display: flex; width: 100%; }
+.sidebar { width: 150px; background: var(--panel); padding: 16px; overflow-y: auto; border-right: 1px solid #222; transition: width 0.2s ease; }
+/* 中階：滑過展開到 265 */
+.sidebar:hover { width: 320px; }
+/* 完整展開：點擊展開控制後固定 450 */
+.sidebar.full { width: 450px; }
+.content { flex: 1; padding: 16px; overflow: auto; }
+
+.section { margin-bottom: 24px; }
+.section-header { display: flex; align-items: center; justify-content: space-between; }
+button { background: var(--accent); color: #000; border: none; padding: 2px 6px; cursor: pointer; border-radius: 6px; font-weight: 600; }
+button:hover { filter: brightness(0.9); }
+
+ul { list-style: none; padding: 0; margin: 0; }
+li { padding: 10px 0 10px 10px; border-bottom: 1px solid #222; }
+.title { color: var(--accent2); font-weight: 600; }
+.sub { color: #9ad5c9; font-size: 12px; }
+.row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+
+.modal { position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: flex; align-items: center; justify-content: center; z-index: 1000; }
+.modal-body { width: 560px; max-width: 95vw; background: var(--panel); border: 1px solid #333; padding: 16px; border-radius: 8px; max-height: 90vh; display: flex; flex-direction: column; overflow: hidden; }
+.modal .actions { margin-top: 12px; display: flex; gap: 12px; }
+input, select, textarea { width: 100%; background: #101010; border: 1px solid #2a2a2a; color: var(--text); padding: 8px; border-radius: 6px; margin: 6px 0; }
+textarea { min-height: 100px; }
+.error { color: var(--danger); margin-bottom: 8px; }
+.grid { display: grid; grid-template-columns: 120px 1fr; gap: 8px 12px; align-items: center; }
+/* 讓彈窗內容可滾動，避免超出視窗 */
+.modal-body .grid { flex: 1; overflow: auto; padding-right: 4px; }
+
+table { width: 100%; border-collapse: collapse; background: var(--panel); }
+th, td { border: 1px solid #222; padding: 8px; text-align: left; }
+th { background: #0f0f0f; }
+
+.panel-title { display: flex; align-items: center; gap: 8px; }
+.panel-title-right { color: #9ad5c9; font-size: 12px; font-weight: 400; }
+.unit { font-size: 11px; opacity: 0.85; margin-left: 2px; }
+
+/* 美化開關 */
+.toggle-switch { position: relative; display: inline-block; width: 44px; height: 24px; }
+.toggle-switch input { opacity: 0; width: 0; height: 0; }
+.toggle-slider { position: absolute; cursor: pointer; inset: 0; background: #555; border-radius: 999px; transition: background 0.2s; }
+.toggle-slider:before { position: absolute; content: ""; height: 18px; width: 18px; left: 3px; top: 3px; background: #fff; border-radius: 50%; transition: transform 0.2s; }
+.toggle-switch input:checked + .toggle-slider { background: #00ffa3; }
+.toggle-switch input:checked + .toggle-slider:before { transform: translateX(20px); }
+
+/* 多空徽章 */
+.badge { display: inline-block; padding: 2px 6px; border-radius: 4px; margin-right: 6px; font-weight: 600; color: #ffffff; }
+.badge-long { background: #00c853; }
+.badge-short { background: #ff4d4f; }
+
+/* 總覽用多空徽章（獨立尺寸控制） */
+.badge-ov { display: inline-block; border-radius: 4px; margin-right: 6px; font-weight: 600; color: #ffffff; padding: 1px 3px; font-size: clamp(10px, 1.1vw, 12px); line-height: 1.1; }
+.badge-ov.badge-ov-long { background: #00c853; }
+.badge-ov.badge-ov-short { background: #ff4d4f; }
+
+/* Toggle button */
+.toggle-btn { background: transparent; color: #ffffff; border: none; padding: 2px 6px; border-radius: 0; }
+.toggle-btn:hover { background: transparent; color: #ffffff; filter: none; }
+
+/* Secondary and danger buttons */
+.btn-secondary { background: transparent; color: var(--accent2); border: 1px solid var(--accent2); }
+.btn-secondary:hover { filter: none; background: rgba(58,229,255,0.08); }
+.btn-danger { background: transparent; color: var(--danger); border: 1px solid var(--danger); }
+.btn-danger:hover { filter: none; background: rgba(255,77,79,0.08); }
+
+/* Collapsed summary */
+.collapsed-names { color: #3ae5ff; font-size: 16px; }
+.collapsed-item { padding: 6px 0; border-bottom: 1px solid #222; display: flex; align-items: center; justify-content: space-between; }
+.midOnly { display: none; }
+.fullOnly { display: none; }
+/* 滑過且未完整展開 → 顯示中階內容 */
+.sidebar:hover:not(.full) .midOnly { display: block; }
+/* 全展開時，仍需顯示未展開區塊的中階內容 */
+.sidebar.full .midOnly { display: block; }
+/* 只顯示一組切換按鈕：預覽時顯示展開；展開時顯示收起 */
+.sidebar.full .midOnly.chev { display: none; }
+/* 完整展開 → 顯示完整內容 */
+.sidebar.full .fullOnly { display: block; }
+/* 僅展開對應區塊的 fullOnly，另一區維持預覽 midOnly */
+.sidebar.full-user .section-user .fullOnly { display: block; }
+.sidebar.full-user .section-tunnel .midOnly { display: block; }
+.sidebar.full-user .section-user .midOnly { display: none; }
+.sidebar.full-tunnel .section-tunnel .fullOnly { display: block; }
+.sidebar.full-tunnel .section-user .midOnly { display: block; }
+.sidebar.full-tunnel .section-tunnel .midOnly { display: none; }
+/* 展開/收起按鈕控制：優先級從高到低 */
+/* 1. 兩者同時展開：各自顯示收起按鈕 */
+.sidebar.full-tunnel.full-user .section-user .midOnly.chev,
+.sidebar.full-tunnel.full-user .section-tunnel .midOnly.chev { display: none !important; }
+.sidebar.full-tunnel.full-user .section-user .fullOnly.chev,
+.sidebar.full-tunnel.full-user .section-tunnel .fullOnly.chev { display: inline-flex !important; }
+
+/* 2. 僅用戶展開：用戶顯示收起，通道顯示展開 */
+.sidebar.full-user:not(.full-tunnel) .section-user .midOnly.chev { display: none; }
+.sidebar.full-user:not(.full-tunnel) .section-user .fullOnly.chev { display: inline-flex; }
+.sidebar.full-user:not(.full-tunnel) .section-tunnel .midOnly.chev { display: inline-flex; }
+.sidebar.full-user:not(.full-tunnel) .section-tunnel .fullOnly.chev { display: none; }
+
+/* 3. 僅通道展開：通道顯示收起，用戶顯示展開 */
+.sidebar.full-tunnel:not(.full-user) .section-tunnel .midOnly.chev { display: none; }
+.sidebar.full-tunnel:not(.full-user) .section-tunnel .fullOnly.chev { display: inline-flex; }
+.sidebar.full-tunnel:not(.full-user) .section-user .midOnly.chev { display: inline-flex; }
+.sidebar.full-tunnel:not(.full-user) .section-user .fullOnly.chev { display: none; }
+
+/* 兩者同時展開時：隱藏雙方的預覽(midOnly)，只保留雙方 fullOnly */
+.sidebar.full-tunnel.full-user .section-user .midOnly,
+.sidebar.full-tunnel.full-user .section-tunnel .midOnly { display: none; }
+.sidebar.full-tunnel.full-user .section-user .fullOnly,
+.sidebar.full-tunnel.full-user .section-tunnel .fullOnly { display: block; }
+/* 展開時隱藏同區預覽列的複製按鈕，避免重複 */
+.sidebar.full-tunnel .section-tunnel .copy-inline { display: none; }
+.sidebar.full-user .section-user .copy-inline { display: none; }
+
+

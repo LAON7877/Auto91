@@ -1,0 +1,29 @@
+{
+  "name": "auto91-tradebot-backend",
+  "version": "1.0.0",
+  "private": true,
+  "type": "commonjs",
+  "description": "模組化多使用者加密貨幣永續合約交易機器人後端 (Express/MongoDB/WS/CCXT)",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "dependencies": {
+    "axios": "^1.7.7",
+    "bcrypt": "^5.1.1",
+    "bottleneck": "^2.19.5",
+    "ccxt": "^4.4.30",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "helmet": "^7.1.0",
+    "jsonwebtoken": "^9.0.2",
+    "mongoose": "^8.6.2",
+    "morgan": "^1.10.0",
+    "ws": "^8.18.0",
+    "winston": "^3.13.0",
+    "redis": "^4.6.13",
+    "redlock": "^6.1.0"
+  }
+}
