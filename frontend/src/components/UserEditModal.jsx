@@ -130,6 +130,24 @@ export default function UserEditModal({ tunnels, user, onClose }) {
           <label>頭寸比例(%)</label>
           <input type="number" value={riskPercent} onChange={e => setRiskPercent(e.target.value)} />
 
+          <label>訂閱期限</label>
+          <DatePicker selected={subscriptionEnd} onChange={setSubscriptionEnd} dateFormat="yyyy/MM/dd" isClearable placeholderText="選擇日期（留空則為永久期限）" />
+
+          <label>訊號通道</label>
+          <Select styles={selectStyles} options={tunnelOptions} value={selectedTunnel} onChange={setSelectedTunnel} />
+
+          <label>保留資金</label>
+          <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+            <input type="number" value={reservedFunds} onChange={e => setReservedFunds(e.target.value)} min={0} />
+            <span style={{ color:'#666' }}>USDT</span>
+          </div>
+
+          <label>固定資金</label>
+          <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+            <input type="number" value={fixedFunds} onChange={e => setFixedFunds(e.target.value)} min={0} />
+            <span style={{ color:'#666' }}>USDT</span>
+          </div>
+
           <div style={{ gridColumn: '1 / span 2', border: '1px solid #333', borderRadius: 8, padding: 12, background: '#0f0f0f', marginTop: 8 }}>
             <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom: 8 }}>
               <div style={{ fontWeight: 'bold' }}>編輯 API 金鑰（選用）</div>
@@ -153,24 +171,6 @@ export default function UserEditModal({ tunnels, user, onClose }) {
                 </div>
               </div>
             )}
-          </div>
-
-          <label>訂閱到期</label>
-          <DatePicker selected={subscriptionEnd} onChange={setSubscriptionEnd} dateFormat="yyyy/MM/dd" isClearable placeholderText="選擇日期（留空則為永久期限）" />
-
-          <label>訊號通道</label>
-          <Select styles={selectStyles} options={tunnelOptions} value={selectedTunnel} onChange={setSelectedTunnel} />
-
-          <label>保留資金</label>
-          <div style={{ display:'flex', alignItems:'center', gap:8 }}>
-            <input type="number" value={reservedFunds} onChange={e => setReservedFunds(e.target.value)} min={0} />
-            <span style={{ color:'#666' }}>USDT</span>
-          </div>
-
-          <label>固定資金</label>
-          <div style={{ display:'flex', alignItems:'center', gap:8 }}>
-            <input type="number" value={fixedFunds} onChange={e => setFixedFunds(e.target.value)} min={0} />
-            <span style={{ color:'#666' }}>USDT</span>
           </div>
 
           <div style={{ gridColumn: '1 / span 2', border: '1px solid #333', borderRadius: 8, padding: 12, background: '#111', marginTop: 8 }}>
